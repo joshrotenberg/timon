@@ -14,6 +14,7 @@ timon eval -f job.lua              # run a Lua file; read data with fs.read
 timon job.lua 12 14                # a script; arguments in `arg` and `...`
 timon tasks                        # the tasks in reach: tasks.lua and scripts/
 timon check                        # run a task, after its dependencies
+timon serve                        # the tasks as MCP tools over stdio, for hosts without a shell
 timon eval --fnl '(+ 1 2)'         # Fennel
 echo 'return 6 * 7' | timon eval - # stdin
 git log --oneline | timon eval -i 'return #input'              # input: the lines of stdin

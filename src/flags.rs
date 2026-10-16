@@ -587,6 +587,41 @@ impl Spec {
         out
     }
 
+    /// The options as a JSON Schema object, for an MCP tool's input. `extra` adds properties,
+    /// such as `args`, and `required_extra` names ones that must be given.
+    pub fn json_schema(&self, extra: &[(&str, Json)], required_extra: &[&str]) -> Json {
+        let mut properties = Map::new();
+        let mut required: Vec<Json> = Vec::new();
+        for o in &self.options {
+            let mut schema = match &o.shape.node {
+                Node::Optional(inner) => inner.json_schema(),
+                _ => o.shape.json_schema(),
+            };
+            if !o.doc.is_empty() {
+                schema["description"] = Json::String(o.doc.clone());
+            }
+            if let Some(d) = &o.default {
+                schema["default"] = d.clone();
+            }
+            properties.insert(o.name.clone(), schema);
+            if o.required() {
+                required.push(Json::String(o.name.clone()));
+            }
+        }
+        for (name, schema) in extra {
+            properties.insert((*name).to_owned(), schema.clone());
+        }
+        for name in required_extra {
+            required.push(Json::String((*name).to_owned()));
+        }
+        serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        })
+    }
+
     /// The options as JSON, for listings.
     pub fn to_json(&self) -> Json {
         Json::Array(

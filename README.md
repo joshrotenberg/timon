@@ -17,11 +17,12 @@ Design: [docs/design.md](docs/design.md).
 | 2 | `agent`: runs, contracts, records, budgets, worktrees, events; script runs as records, resume | done |
 | 3 | `sessions`: list, read, search and summarize every session | done |
 | 4 | Toolbox: `sh` and `proc` | done |
-| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
+| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done |
 | 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite`, data formats, `eval -i`/`-I`; release tasks | done |
 | 8 | Workflow patterns: `flow` with gates, verify, vote, best_of, refine, pipeline, retry, plan | done |
-| 9 | MCP: the client (`mcp.connect`, `timon mcp`) done; `timon serve` | in progress |
+| 9 | MCP: the client (`mcp.connect`, `timon mcp`) and `timon serve` with tasks as tools | done |
+| 10 | Hooks, memory, queues, schedules | to discuss |
 
 ## Install
 
@@ -61,6 +62,7 @@ timon eval 'toml.edit("Cargo.toml", "package.version", "0.2.0")'   # keeps comme
 timon eval 'return git.status().files'     # git's output as data: status, log, diff, tags
 timon eval 'return gh.prs{ state = "open" }'                          # GitHub, with GH_TOKEN or gh's login
 timon mcp call crates get_crate_info name=mlua   # an MCP server's tool; mcp.connect in Lua
+timon serve                                # this project's tasks as MCP tools, over stdio
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated

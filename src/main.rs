@@ -160,6 +160,8 @@ enum Command {
     /// Use MCP servers: the named ones in mcp/, a server's tools, a tool call
     #[command(subcommand)]
     Mcp(McpCommand),
+    /// Serve this project's tasks as MCP tools over stdio, with eval and the skills
+    Serve,
     #[command(external_subcommand)]
     Script(Vec<OsString>),
 }
@@ -457,6 +459,12 @@ async fn run(cli: Cli) -> ExitCode {
             return runs(&layers, command, since, limit, json);
         }
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
+        Command::Serve => {
+            return match timon::serve::serve(layers, builtins()).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(failure) => fail(&failure),
+            };
+        }
         Command::Completions { shell } => {
             print!("{}", timon::complete::script(&shell).unwrap_or_default());
             return ExitCode::SUCCESS;
@@ -531,6 +539,7 @@ async fn run(cli: Cli) -> ExitCode {
         | Command::Tasks { .. }
         | Command::Completions { .. }
         | Command::Complete { .. }
+        | Command::Serve
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)

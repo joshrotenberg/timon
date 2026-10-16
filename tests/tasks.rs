@@ -751,15 +751,15 @@ fn command_tasks_take_words_not_shell_text() {
 fn scripts_parse_their_words_with_cli_parse() {
     let s = Sandbox::new();
     s.write(
-        s.project().join(".timon/scripts/serve.lua"),
-        "-- Serve\nlocal opts, rest = cli.parse(arg, { port = 'integer?', verbose = { type = 'boolean', short = 'v' } })\nreturn json.encode({ port = opts.port, verbose = opts.verbose, rest = rest })",
+        s.project().join(".timon/scripts/listen.lua"),
+        "-- Listen\nlocal opts, rest = cli.parse(arg, { port = 'integer?', verbose = { type = 'boolean', short = 'v' } })\nreturn json.encode({ port = opts.port, verbose = opts.verbose, rest = rest })",
     );
     s.trust();
     assert_eq!(
-        s.ok(&["serve", "--port", "9000", "-v", "x"]),
+        s.ok(&["listen", "--port", "9000", "-v", "x"]),
         "{\"port\":9000,\"rest\":[\"x\"],\"verbose\":true}\n"
     );
-    let o = s.timon(&["serve", "--prot", "1"]);
+    let o = s.timon(&["listen", "--prot", "1"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("did you mean --port?"), "{}", err(&o));
 }
