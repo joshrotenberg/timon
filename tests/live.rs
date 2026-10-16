@@ -718,15 +718,17 @@ fn live_1_a_killed_timon_is_settled_as_interrupted() {
     std::thread::sleep(std::time::Duration::from_secs(3));
     child.kill().unwrap();
     child.wait().unwrap();
-    // timon gets no chance to stop its provider; nothing is signalled on its behalf.
-    let orphans = survivors(&providers, 2);
-    eprintln!("provider processes still running after timon was killed: {orphans:?}");
+    // timon had no chance to stop its provider. The next command settles the run and stops
+    // the provider the record names (#63).
+    let run = live.runs()[0].clone();
+    let orphans = survivors(&providers, 3);
     for (pid, _) in &orphans {
         signal(*pid, libc::SIGKILL);
     }
-    let run = &live.runs()[0];
+    assert_eq!(orphans, Vec::new(), "the provider was not stopped: {run}");
     assert_eq!(run["status"], "interrupted", "{run}");
     assert_eq!(run["effects_uncertain"], true, "{run}");
+    assert_eq!(run["provider_stopped"], true, "{run}");
     live.costs("killed");
 }
 

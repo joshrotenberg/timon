@@ -611,10 +611,20 @@ fn every_run_is_recorded_with_secrets_redacted() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(states.len(), 2, "a running line, then the result");
     assert_eq!(
-        (states[0]["status"].as_str(), states[1]["status"].as_str()),
-        (Some("running"), Some("ok"))
+        states.len(),
+        3,
+        "a running line, the provider's pid, then the result"
+    );
+    let statuses: Vec<&str> = states
+        .iter()
+        .map(|l| l["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["running", "running", "ok"]);
+    assert!(
+        states[1]["provider_pid"].as_u64().is_some(),
+        "{}",
+        states[1]
     );
     assert!(index.contains("[redacted:anthropic]"));
     assert!(!index.contains(secret));
@@ -958,10 +968,32 @@ fn a_killed_timon_leaves_an_interrupted_run() {
     );
     child.kill().unwrap();
     child.wait().unwrap();
-    kill(&std::fs::read_to_string(&pid_file).unwrap(), "-9");
+    let provider = std::fs::read_to_string(&pid_file).unwrap();
+    let alive = |pid: &str| {
+        Command::new("kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(
+        alive(&provider),
+        "the provider outlives a killed timon until the next command"
+    );
+    // The next command settles the run and stops the provider the record names (#63).
     let run = &runs_json(&s)[0];
+    let gone = (0..50).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        !alive(&provider)
+    });
+    if !gone {
+        kill(&provider, "-9");
+    }
+    assert!(gone, "the orphaned provider was not stopped");
     assert_eq!(run["status"], "interrupted");
     assert_eq!(run["effects_uncertain"], true);
+    assert_eq!(run["provider_stopped"], true, "{run}");
     let shown = s.cli(&["runs", "show", run["id"].as_str().unwrap()], &[]);
     let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(shown["result"]["status"], "interrupted");
@@ -1233,4 +1265,37 @@ fn progress_lines_go_to_stderr_when_asked_for() {
         "quiet by default when stderr is not a terminal: {}",
         String::from_utf8_lossy(&o.stderr)
     );
+}
+
+#[test]
+fn an_unrelated_process_under_a_recorded_pid_is_left_alone() {
+    use std::os::unix::process::CommandExt;
+    let s = Sandbox::new();
+    // A dead timon, and a pid that now belongs to something that is not a provider.
+    let mut gone = Command::new("true").spawn().unwrap();
+    let dead = gone.id();
+    gone.wait().unwrap();
+    let mut other = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let runs = s.root().join("timon/state/runs");
+    std::fs::create_dir_all(runs.join("r_1")).unwrap();
+    std::fs::write(
+        runs.join("index.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({ "id": "r_1", "status": "running", "access": "write", "pid": dead,
+                "started_at": "2026-10-16T00:00:00Z", "provider_pid": other.id(), "provider_pgid": other.id() })
+        ),
+    )
+    .unwrap();
+    let run = &runs_json(&s)[0];
+    let still = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(still, "an unrelated process was signalled");
+    assert_eq!(run["status"], "interrupted");
+    assert_eq!(run["provider_may_be_running"], true, "{run}");
 }

@@ -37,6 +37,7 @@ fn sandbox(access: Access) -> (SandboxMode, &'static str) {
 pub(super) async fn run(
     request: &Request,
     binary: Option<&Path>,
+    on_spawn: Option<super::SpawnHook>,
     events: &mut Vec<Json>,
 ) -> Outcome {
     if request.fork.is_some() {
@@ -61,10 +62,16 @@ pub(super) async fn run(
 
     let mut builder = Codex::builder()
         .env("TIMON_CHILD", "1")
+        // Linux only: the kernel stops the provider if timon dies. Elsewhere the run record
+        // names the process, and the next timon command stops it.
+        .die_with_parent(true)
         .termination_grace(Duration::from_millis(250))
         .output_limit(16 * 1024 * 1024);
     if let Some(binary) = binary {
         builder = builder.binary(binary);
+    }
+    if let Some(hook) = on_spawn {
+        builder = builder.on_spawn(std::sync::Arc::new(move |info| hook(info.pid, info.pgid)));
     }
     if let Some(cwd) = &request.cwd {
         builder = builder.working_dir(cwd);

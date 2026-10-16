@@ -47,6 +47,10 @@ Fennel comes with it, stock. All the effort goes into the APIs.
 8. **Historical text is untrusted.** Transcripts and excerpts can contain instructions. They are
    returned as data and the skills say so.
 9. **One piece at a time.** Each phase is in daily use before the next starts.
+10. **Sized for small teams of agents.** The target is a workflow of a handful of agents over a
+    few stages: a review with a verifier, a vote of three, an author and a critic. Fleets of
+    dozens of agents over many stages are not the aim. Nothing is hard-limited, but defaults
+    (`limits.concurrency = 4`), features and their cost are chosen for the small case.
 
 ## Shape
 

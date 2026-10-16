@@ -579,16 +579,27 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     let store = state
         .as_ref()
         .map(|s| agent::records::Store::new(std::path::Path::new(s)));
-    if let Some(store) = &store
-        && let Err(err) = store.begin(
+    let mut on_spawn: Option<agent::SpawnHook> = None;
+    if let Some(store) = &store {
+        match store.begin(
             &request,
             &id,
             &started_at,
             agent_name.as_deref(),
             worktree.as_ref().map(|w| w.to_json(true)).as_ref(),
-        )
-    {
-        eprintln!("timon: the run record was not started: {err}");
+        ) {
+            Ok(line) => {
+                // Name the provider process in the record, so it can be stopped if timon dies.
+                let records =
+                    agent::records::Store::new(store.dir().parent().unwrap_or(store.dir()));
+                on_spawn = Some(std::sync::Arc::new(move |pid, pgid| {
+                    if let Err(err) = records.spawned(&line, pid, pgid) {
+                        eprintln!("timon: the provider's pid was not recorded: {err}");
+                    }
+                }));
+            }
+            Err(err) => eprintln!("timon: the run record was not started: {err}"),
+        }
     }
     let mut settle = Settle {
         store,
@@ -602,7 +613,7 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
         progress: progress(&lua),
     };
     report_start(settle.progress, &id, &request);
-    let mut record = agent::run_as(&request, id).await;
+    let mut record = agent::run_as(&request, id, on_spawn).await;
     settle.finish(&mut record);
     spent(&lua, record.usage.usd);
     let table = record_table(&lua, &record)?;
