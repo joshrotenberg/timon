@@ -1,6 +1,5 @@
 //! `agent`: Claude Code and Codex runs from Lua.
 
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -87,14 +86,6 @@ pub(crate) const AGENT_DIRS: &str = "timon.agent_dirs";
 /// Registry key of the state directory, where run records go.
 pub(crate) const STATE_DIR: &str = "timon.state_dir";
 
-/// Limits for one invocation, and what it has used.
-struct Spending {
-    max_runs: Option<u64>,
-    max_usd: Option<f64>,
-    runs: Cell<u64>,
-    usd: Cell<f64>,
-}
-
 /// How agent runs report progress on stderr, from `--progress`: a line when each run starts
 /// and when it ends.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -176,62 +167,6 @@ pub struct Overrides {
     pub max_usd: Option<f64>,
 }
 
-fn spending(lua: &Lua) -> mlua::Result<()> {
-    if lua.app_data_ref::<Spending>().is_some() {
-        return Ok(());
-    }
-    let (cli_runs, cli_usd) = match lua.app_data_ref::<Overrides>() {
-        Some(o) => (o.max_runs, o.max_usd),
-        None => (None, None),
-    };
-    let spending = Spending {
-        max_runs: cli_runs.or(setting::<i64>(lua, "limits", "max_runs")?.map(|n| n.max(0) as u64)),
-        max_usd: cli_usd.or(setting::<f64>(lua, "limits", "max_usd")?),
-        runs: Cell::new(0),
-        usd: Cell::new(0.0),
-    };
-    lua.set_app_data(spending);
-    Ok(())
-}
-
-/// Raises `budget_exceeded` if starting another run would pass a limit, else counts it.
-fn start_run(lua: &Lua) -> mlua::Result<()> {
-    spending(lua)?;
-    let Some(s) = lua.app_data_ref::<Spending>() else {
-        return Ok(());
-    };
-    if let Some(max) = s.max_runs
-        && s.runs.get() >= max
-    {
-        return Err(Error::new(
-            "budget_exceeded",
-            format!(
-                "this invocation has started {} runs; the limit is {max}",
-                s.runs.get()
-            ),
-        )
-        .with_hint("raise --max-runs or limits.max_runs")
-        .into());
-    }
-    if let Some(max) = s.max_usd
-        && s.usd.get() >= max
-    {
-        return Err(Error::new(
-            "budget_exceeded",
-            format!(
-                "this invocation has spent ${:.4}; the limit is ${max}",
-                s.usd.get()
-            ),
-        )
-        .with_hint(
-            "raise --max-usd or limits.max_usd; Codex runs report no cost and are not counted",
-        )
-        .into());
-    }
-    s.runs.set(s.runs.get() + 1);
-    Ok(())
-}
-
 /// Registry key of a table from each record `agent.run` returned to the spec it was called
 /// with, weak in its keys, so `agent.continue` can start from the same request.
 const RUN_SPECS: &str = "timon.run_specs";
@@ -258,15 +193,9 @@ fn remember_spec(lua: &Lua, record: &Table, spec: &Table) -> mlua::Result<()> {
     run_specs(lua)?.raw_set(record, copy)
 }
 
-fn spent(lua: &Lua, usd: Option<f64>) {
-    if let (Some(s), Some(usd)) = (lua.app_data_ref::<Spending>(), usd) {
-        s.usd.set(s.usd.get() + usd);
-    }
-}
-
 const GLUE: &str = r#"
 local run_rust, ask_rust, spawn, fail, spec_of, phase_of = ...
-local type, error, pairs = type, error, pairs
+local type, error, pairs, running = type, error, pairs, coroutine.running
 local agent = {}
 
 -- A run without a phase takes the calling task's.
@@ -280,15 +209,16 @@ local function with_phase(spec)
   return s
 end
 
+-- The caller's coroutine names its task, whose budgets the run counts against.
 local function run(spec)
-  return run_rust(with_phase(spec))
+  return run_rust(with_phase(spec), (running()))
 end
 
 agent.run = run
 
 function agent.ask(arg)
   if type(arg) == "string" then arg = { prompt = arg } end
-  return ask_rust(with_phase(arg))
+  return ask_rust(with_phase(arg), (running()))
 end
 
 -- Fields of the earlier call that do not carry over to a continuation.
@@ -543,7 +473,8 @@ impl Drop for Settle {
     }
 }
 
-async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
+/// Runs one agent turn for the task on `thread`, charging that task's budgets.
+async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
     let request = request(&lua, &fields)?;
@@ -554,10 +485,17 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
         .acquire()
         .await
         .map_err(|_| Error::new("internal", "the run queue closed"))?;
-    start_run(&lua)?;
+    let budget = concurrency::budget_of(&lua, thread.as_ref())?;
+    budget.start_run()?;
     let id = agent::new_id();
     let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
     let mut request = request;
+    // No single Claude run may spend more than any enclosing budget has left.
+    if request.provider == Provider::Claude
+        && let Some(left) = budget.usd_left()
+    {
+        request.budget.usd = Some(request.budget.usd.map_or(left, |usd| usd.min(left)));
+    }
     let worktree = if wants_worktree {
         let cwd = match &request.cwd {
             Some(cwd) => cwd.clone(),
@@ -615,7 +553,7 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     report_start(settle.progress, &id, &request);
     let mut record = agent::run_as(&request, id, on_spawn).await;
     settle.finish(&mut record);
-    spent(&lua, record.usage.usd);
+    budget.spent(record.usage.usd.unwrap_or(0.0));
     let table = record_table(&lua, &record)?;
     remember_spec(&lua, &table, &spec)?;
     Ok(table)
@@ -624,52 +562,56 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     let lua = installer.lua();
     let module = installer.module(&DOC)?;
-    let run_fn = installer.wrap(lua.create_async_function(|lua, spec: Table| run(lua, spec))?)?;
-    let ask_fn = installer.wrap(lua.create_async_function(|lua, arg: Value| async move {
-        let spec = match arg {
-            Value::String(prompt) => {
-                let t = lua.create_table()?;
-                t.raw_set("prompt", prompt)?;
-                t
+    let run_fn = installer.wrap(lua.create_async_function(
+        |lua, (spec, thread): (Table, Option<mlua::Thread>)| run(lua, spec, thread),
+    )?)?;
+    let ask_fn = installer.wrap(lua.create_async_function(
+        |lua, (arg, thread): (Value, Option<mlua::Thread>)| async move {
+            let spec = match arg {
+                Value::String(prompt) => {
+                    let t = lua.create_table()?;
+                    t.raw_set("prompt", prompt)?;
+                    t
+                }
+                Value::Table(t) => t,
+                other => {
+                    return Err(Error::new(
+                        "bad_argument",
+                        format!(
+                            "agent.ask takes a prompt or a spec, not a {}",
+                            other.type_name()
+                        ),
+                    )
+                    .into());
+                }
+            };
+            let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
+            let record = run(lua.clone(), spec, thread).await?;
+            let status: String = record.raw_get("status")?;
+            if status == Status::Ok.name() {
+                return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });
             }
-            Value::Table(t) => t,
-            other => {
-                return Err(Error::new(
-                    "bad_argument",
-                    format!(
-                        "agent.ask takes a prompt or a spec, not a {}",
-                        other.type_name()
-                    ),
-                )
-                .into());
+            let cause: Option<Table> = record.raw_get("error")?;
+            let message = cause
+                .as_ref()
+                .and_then(|e| e.raw_get::<String>("message").ok())
+                .unwrap_or_default();
+            let hint = cause
+                .as_ref()
+                .and_then(|e| e.raw_get::<Option<String>>("hint").ok().flatten());
+            let provider: String = record.raw_get("provider")?;
+            let mut err = Error::new(
+                "agent_failed",
+                format!("{provider} run {status}: {message}"),
+            );
+            if let Some(hint) = hint {
+                err = err.with_hint(hint);
             }
-        };
-        let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
-        let record = run(lua.clone(), spec).await?;
-        let status: String = record.raw_get("status")?;
-        if status == Status::Ok.name() {
-            return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });
-        }
-        let cause: Option<Table> = record.raw_get("error")?;
-        let message = cause
-            .as_ref()
-            .and_then(|e| e.raw_get::<String>("message").ok())
-            .unwrap_or_default();
-        let hint = cause
-            .as_ref()
-            .and_then(|e| e.raw_get::<Option<String>>("hint").ok().flatten());
-        let provider: String = record.raw_get("provider")?;
-        let mut err = Error::new(
-            "agent_failed",
-            format!("{provider} run {status}: {message}"),
-        );
-        if let Some(hint) = hint {
-            err = err.with_hint(hint);
-        }
-        let table = error::to_table(&lua, &err)?;
-        table.raw_set("data", record)?;
-        Err(error::raise(&lua, Value::Table(table)))
-    })?)?;
+            let table = error::to_table(&lua, &err)?;
+            table.raw_set("data", record)?;
+            Err(error::raise(&lua, Value::Table(table)))
+        },
+    )?)?;
     installer.function(
         &DOC,
         Some(&module),

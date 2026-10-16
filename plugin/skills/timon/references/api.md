@@ -33,9 +33,14 @@ Pretty-prints each value to stderr and returns them unchanged, so it can wrap an
 local prs = pp(json.decode(text))
 ```
 
-### `scope(fn) -> ...`
+### `scope(fn, { budget, reserve }) -> ...`
 
 Runs fn(s) and returns its results once every task spawned on s has finished. If fn or any task raises, the others are cancelled and the first error is raised. s:spawn(f, ...) starts a task; s:cancel() cancels the running ones. scope() with no function returns a scope for local s <close> = scope(), which waits when the block ends.
+
+| Option | Type | |
+|---|---|---|
+| `budget` | `{ runs: integer?, usd: number? }` | limits for agent runs inside the scope, on top of every enclosing budget |
+| `reserve` | `boolean` | take budget.runs from the enclosing budget now, so the scope cannot run short; unused runs go back when it ends |
 
 ```lua
 local review, history = scope(function(s)

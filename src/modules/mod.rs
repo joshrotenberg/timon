@@ -12,7 +12,7 @@ pub mod text;
 
 use mlua::{Function, Lua, Table, Value};
 
-use crate::docs::{self, Func, Module};
+use crate::docs::{self, Func, Module, Opt};
 use crate::error::{self, Error};
 use crate::runtime::Runtime;
 use crate::suggest;
@@ -45,10 +45,14 @@ pub const GLOBALS_DOC: Module = Module {
         ),
         Func::new(
             "scope",
-            "scope(fn) -> ...",
+            "scope(fn, { budget, reserve }) -> ...",
             "Runs fn(s) and returns its results once every task spawned on s has finished. If fn or any task raises, the others are cancelled and the first error is raised. s:spawn(f, ...) starts a task; s:cancel() cancels the running ones. scope() with no function returns a scope for local s <close> = scope(), which waits when the block ends.",
             "local review, history = scope(function(s)\n  local r = s:spawn(agent.run, { agent = \"reviewer\", prompt = \"Review PR 12\" })\n  local h = s:spawn(sessions.search, { query = \"PR 12\" })\n  return r:await(), h:await()\nend)",
-        ),
+        )
+        .with_options(&[
+            Opt::new("budget", "{ runs: integer?, usd: number? }", "limits for agent runs inside the scope, on top of every enclosing budget"),
+            Opt::new("reserve", "boolean", "take budget.runs from the enclosing budget now, so the scope cannot run short; unused runs go back when it ends"),
+        ]),
         Func::new(
             "spawn",
             "spawn(f, ...) -> task",

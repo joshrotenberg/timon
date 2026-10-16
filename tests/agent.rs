@@ -1299,3 +1299,113 @@ fn an_unrelated_process_under_a_recorded_pid_is_left_alone() {
     assert_eq!(run["status"], "interrupted");
     assert_eq!(run["provider_may_be_running"], true, "{run}");
 }
+
+// Nested budgets (#56)
+
+#[test]
+fn a_scope_budget_limits_the_runs_inside_it_and_its_tasks() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "10",
+            "eval",
+            "local ok, err = try(scope, function()
+               agent.run{ prompt = '1' }
+               scope(function() agent.run{ prompt = '2' } end)
+               agent.run{ prompt = '3' }
+             end, { budget = { runs = 2 } })
+             local spawned = try(scope, function(sc)
+               for i = 1, 3 do sc:spawn(agent.run, { prompt = 'task ' .. i }) end
+             end, { budget = { runs = 2 } })
+             return { kind = err.kind, message = err.message, hint = err.hint,
+                      spawned = spawned, after = agent.run{ prompt = 'after' }.status }",
+        ],
+        &[],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["kind"], "budget_exceeded", "{r}");
+    assert_eq!(
+        r["message"],
+        "the scope's budget has started 2 runs; the limit is 2"
+    );
+    assert_eq!(r["hint"], "raise budget.runs on the scope");
+    assert_eq!(r["spawned"], false, "a third spawned run fails its scope");
+    assert_eq!(
+        r["after"], "ok",
+        "outside the scope only the invocation's limit applies"
+    );
+    let started = runs_json(&s).as_array().unwrap().len();
+    assert_eq!(started, 5, "2 in the first scope, 2 spawned, 1 after");
+}
+
+#[test]
+fn a_claude_run_may_spend_only_what_every_budget_has_left() {
+    let s = Sandbox::new();
+    let o = s.timon(
+        "local ok, err = try(scope, function()
+           for i = 1, 3 do agent.run{ prompt = 'x' } end
+         end, { budget = { usd = 0.02 } })
+         return err.message",
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout).trim(),
+        "the scope's budget has spent $0.0250; the limit is $0.02"
+    );
+    assert!(has_pair(&s.args("claude", 0), "--max-budget-usd", "0.02"));
+    assert!(
+        has_pair(&s.args("claude", 1), "--max-budget-usd", "0.0075"),
+        "{:?}",
+        s.args("claude", 1)
+    );
+}
+
+#[test]
+fn reserve_fails_before_the_first_run_and_gives_back_what_it_did_not_use() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "3",
+            "eval",
+            "local started = false
+             local ok, err = try(scope, function() started = true end,
+               { budget = { runs = 5 }, reserve = true })
+             return { message = err.message, started = started }",
+        ],
+        &[],
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(
+        r["message"],
+        "the scope reserves 5 runs, and this invocation has 3 left"
+    );
+    assert_eq!(r["started"], false);
+
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "3",
+            "eval",
+            "scope(function() agent.run{ prompt = 'in' } end, { budget = { runs = 2 }, reserve = true })
+             agent.run{ prompt = 'out 1' }
+             agent.run{ prompt = 'out 2' }
+             local ok, err = try(agent.run, { prompt = 'out 3' })
+             return err.message",
+        ],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout).trim(),
+        "this invocation has started 3 runs; the limit is 3",
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+
+    let o = s.timon("scope(function() end, { reserve = true })", &[]);
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("bad_option: reserve = true needs budget.runs")
+    );
+}

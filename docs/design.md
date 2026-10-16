@@ -383,9 +383,17 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
 
 - **Admission.** At most `limits.concurrency` agent runs at once per invocation (default 4);
   further runs queue in order.
-- **Budgets.** `--max-runs` and `--max-usd` per invocation, and `budget` per run. A run that
-  would exceed an invocation budget raises `budget_exceeded` before it starts. Codex reports
-  tokens only, so a USD budget counts Claude runs and says so.
+- **Budgets.** `--max-runs` and `--max-usd` per invocation, `scope(fn, { budget = { runs,
+  usd } })` per part of a script, and `budget` per run. A run counts against every budget it
+  is inside, and one that would exceed any of them raises `budget_exceeded` before it starts.
+  A Claude run's `--max-budget-usd` is capped at the least any enclosing budget has left.
+  `reserve = true` takes a scope's runs from the enclosing budget up front and gives back the
+  unused ones when it ends. Codex reports tokens only, so a USD budget counts Claude runs and
+  says so.
+- **Orphans.** Each run's record names its provider's pid and process group. If timon dies,
+  the next timon command settles the run as `interrupted` and stops the provider, after
+  checking that the pid still runs claude or codex and leads its group. On Linux the kernel
+  stops it at once (`die_with_parent`).
 - **Cancellation.** Ctrl-C, a cancelled handle or an ended script stops the run's process group
   with a grace period, then kills it. Every outcome is recorded, including `cancelled`.
 - **Run records.** Each run writes `request.json` and a `running` result under
