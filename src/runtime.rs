@@ -17,6 +17,9 @@ pub(crate) const RUN: &str = "timon.run";
 /// Registry key of the strict environment user chunks run in.
 pub(crate) const ENV: &str = "timon.env";
 
+/// Registry key of the merged `init.lua` settings.
+pub(crate) const SETTINGS: &str = "timon.settings";
+
 /// Lua glue: the host-function wrapper, `try`, and the top-level runner.
 ///
 /// `wrap` calls a host function under `pcall` and re-raises its error as an error table at the
@@ -84,6 +87,29 @@ impl Runtime {
         lua.set_named_registry_value(ENV, &env)?;
         crate::fennel::install_searcher(&lua)?;
         Ok(Self { lua, env, wrap })
+    }
+
+    /// Applies the definition layers: their `lib/` directories go first on the module path,
+    /// and their `init.lua` settings are loaded and merged.
+    pub fn configure(&self, layers: &crate::layers::Layers) -> Result<(), Error> {
+        let package: Table = self.lua.globals().get("package")?;
+        let path: String = package.get("path")?;
+        let mut prefix = String::new();
+        for dir in layers.lib_dirs() {
+            prefix.push_str(&format!("{0}/?.lua;{0}/?/init.lua;", dir.display()));
+        }
+        package.set("path", format!("{prefix}{path}"))?;
+        let settings = crate::settings::load(&self.lua, &layers.init_files())?;
+        self.lua.set_named_registry_value(SETTINGS, settings)?;
+        Ok(())
+    }
+
+    /// The merged settings, as JSON.
+    pub fn settings(&self) -> Result<serde_json::Value, Error> {
+        match self.lua.named_registry_value::<Option<Table>>(SETTINGS)? {
+            Some(t) => crate::value::to_json(&Value::Table(t), crate::value::Mode::Display),
+            None => Ok(serde_json::json!({})),
+        }
     }
 
     /// The Lua state, for installing modules.

@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use mlua::MultiValue;
+use timon::dirs::Dirs;
+use timon::layers::{self, Layers};
 use timon::{Error, Failure, Runtime};
 
 #[derive(Parser)]
@@ -34,6 +36,31 @@ enum Command {
         #[arg(long)]
         fnl: bool,
     },
+    /// Run a named script from a scripts/ directory
+    Run {
+        name: String,
+        /// Arguments for the script, available as `arg` and `...`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// List the scripts in reach
+    Scripts {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Trust a project's .timon directory so its scripts, lib and settings load
+    Trust {
+        /// The project root; defaults to the nearest one with a .timon directory
+        dir: Option<PathBuf>,
+        /// Stop trusting it
+        #[arg(long)]
+        revoke: bool,
+    },
+    /// Show the layers, settings, scripts and lib directories in effect
+    Defs {
+        #[arg(long)]
+        json: bool,
+    },
     #[command(external_subcommand)]
     Script(Vec<OsString>),
 }
@@ -62,18 +89,48 @@ fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> ExitCode {
-    let runtime = match Runtime::new() {
-        Ok(runtime) => runtime,
+    let layers = match discover() {
+        Ok(layers) => layers,
         Err(err) => return fail(&err.into()),
     };
+    match cli.command {
+        Command::Scripts { json } => return scripts(&layers, json),
+        Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
+        Command::Defs { json } => return defs(&layers, json),
+        Command::Eval { .. } | Command::Run { .. } | Command::Script(_) => {}
+    }
+    // The runtime must outlive the values it returns, which refer into its Lua state.
+    let rt = match runtime(&layers) {
+        Ok(rt) => rt,
+        Err(failure) => return fail(&failure),
+    };
     let result = match cli.command {
-        Command::Eval { code, file, fnl } => eval(&runtime, code, file, fnl).await,
-        Command::Script(argv) => script(&runtime, argv).await,
+        Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
+        Command::Run { name, args } => match layers.script(&name) {
+            Ok(script) => rt.run_script(&script.path, &args).await,
+            Err(err) => Err(err.into()),
+        },
+        Command::Script(argv) => script(&rt, argv).await,
+        Command::Scripts { .. } | Command::Trust { .. } | Command::Defs { .. } => {
+            Ok(MultiValue::new())
+        }
     };
     match result {
         Ok(values) => print(&values),
         Err(failure) => fail(&failure),
     }
+}
+
+fn discover() -> Result<Layers, Error> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| Error::new("io", format!("cannot read the working directory: {e}")))?;
+    Ok(Layers::discover(Dirs::from_env()?, &cwd))
+}
+
+fn runtime(layers: &Layers) -> Result<Runtime, Failure> {
+    let runtime = Runtime::new()?;
+    runtime.configure(layers)?;
+    Ok(runtime)
 }
 
 async fn eval(
@@ -124,6 +181,95 @@ fn looks_like_script(path: &Path) -> bool {
         .is_some_and(|ext| ext == "lua" || ext == "fnl")
         || path.components().count() > 1
         || path.is_file()
+}
+
+fn scripts(layers: &Layers, json: bool) -> ExitCode {
+    let scripts = layers.scripts();
+    if json {
+        let list: Vec<serde_json::Value> = scripts
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "layer": s.layer.name(),
+                    "path": s.path,
+                    "description": s.description,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(list));
+        return ExitCode::SUCCESS;
+    }
+    let width = scripts.iter().map(|s| s.name.len()).max().unwrap_or(0);
+    for s in &scripts {
+        println!("{:width$}  {:7}  {}", s.name, s.layer.name(), s.description);
+    }
+    if let Some(project) = layers.project.as_ref().filter(|p| !p.trusted) {
+        eprintln!(
+            "timon: {} is not trusted, so its scripts are not listed",
+            project.root.display()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn trust(layers: &Layers, dir: Option<PathBuf>, revoke: bool) -> ExitCode {
+    let root = match dir.or_else(|| layers.project_root.clone()) {
+        Some(root) => root,
+        None => {
+            return fail(
+                &Error::new("not_found", "no .timon directory here or above")
+                    .with_hint("give the project root: timon trust DIR")
+                    .into(),
+            );
+        }
+    };
+    match layers::set_trust(&layers.dirs, &root, revoke) {
+        Ok(root) => {
+            let verb = if revoke {
+                "no longer trusted"
+            } else {
+                "trusted"
+            };
+            println!("{verb}: {}", root.display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(&err.into()),
+    }
+}
+
+fn defs(layers: &Layers, json: bool) -> ExitCode {
+    let settings = match runtime(layers).and_then(|rt| rt.settings().map_err(Failure::from)) {
+        Ok(settings) => settings,
+        Err(f) => return fail(&f),
+    };
+    let layer_json = |l: &layers::Layer| {
+        serde_json::json!({
+            "layer": l.kind.name(),
+            "root": l.root,
+            "exists": l.root.is_dir(),
+            "trusted": l.trusted,
+        })
+    };
+    let report = serde_json::json!({
+        "layers": layers.project.iter().chain(std::iter::once(&layers.user)).map(layer_json).collect::<Vec<_>>(),
+        "settings": settings,
+        "scripts": layers.scripts().iter().map(|s| serde_json::json!({
+            "name": s.name, "layer": s.layer.name(), "path": s.path,
+        })).collect::<Vec<_>>(),
+        "lib": layers.lib_dirs(),
+        "state": layers.dirs.state,
+        "cache": layers.dirs.cache,
+    });
+    if json || !std::io::stdout().is_terminal() {
+        println!("{report}");
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 fn print(values: &MultiValue) -> ExitCode {
