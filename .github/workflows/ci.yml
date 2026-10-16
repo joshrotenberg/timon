@@ -32,6 +32,9 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: Plugin skills match the binary
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo run --quiet -- plugin build --check plugin
 
   msrv:
     name: MSRV check

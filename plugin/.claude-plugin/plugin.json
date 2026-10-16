@@ -1,0 +1,15 @@
+{
+  "name": "timon",
+  "description": "Lua and Fennel over agent, session and tool APIs: eval or scripts, with bundled skills",
+  "author": {
+    "name": "Josh Rotenberg"
+  },
+  "keywords": [
+    "lua",
+    "fennel",
+    "scripting",
+    "agents",
+    "json"
+  ],
+  "repository": "https://github.com/joshrotenberg/timon"
+}

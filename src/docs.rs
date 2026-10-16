@@ -204,6 +204,34 @@ pub fn describe_function(func: &Func) -> String {
     out.trim_end().to_owned()
 }
 
+/// The full API reference, in Markdown: every module and function with its example. Shipped as
+/// the `api` reference of the `timon` skill.
+pub fn reference() -> String {
+    let mut out =
+        String::from("# timon API\n\nGenerated from the same declarations as `help()`.\n");
+    for m in modules() {
+        let title = if m.name == GLOBALS { "Globals" } else { m.name };
+        out.push_str(&format!("\n## {title}\n\n{}\n", m.summary));
+        for f in m.functions {
+            out.push_str(&format!("\n### `{}`\n\n{}\n", f.signature, f.summary));
+            if !f.options.is_empty() {
+                out.push_str("\n| Option | Type | |\n|---|---|---|\n");
+                for o in f.options {
+                    let required = if o.required { " (required)" } else { "" };
+                    out.push_str(&format!(
+                        "| `{}` | {} | {}{required} |\n",
+                        o.name,
+                        o.ty.name(),
+                        o.doc
+                    ));
+                }
+            }
+            out.push_str(&format!("\n```lua\n{}\n```\n", f.example));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

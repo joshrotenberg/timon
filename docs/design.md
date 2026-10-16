@@ -500,7 +500,9 @@ Directory names are plural nouns, file names are definition names, and `.fnl` wo
 
 - A name resolves project first, then user, then built in. A project `reviewer` replaces the user
   one; `extends = "reviewer"` in the file merges onto the next layer down instead.
-- `lib/` directories are searched in the same order, before Lua's own path.
+- `lib/` directories are searched in the same order, before Lua's own path. Lua modules there
+  load as ordinary Lua, so third-party libraries work unchanged; Fennel modules load under strict
+  globals, like scripts.
 - The project layer is the nearest ancestor of the working directory with a `.timon/`
   directory, stopping at the home directory.
 - `timon defs` lists every agent, contract, skill, script and MCP server with the layer it came
@@ -544,14 +546,15 @@ return {
 ```
 
 - **Definitions load with no effects.** `init.lua` and the files in `agents/`, `contracts/`,
-  `mcp/` and `skill.lua` run in an environment with `schema`, `str`, `tbl` and `require` from
-  `lib/`, and no I/O. Each must return a table, which is validated; an error names the file and
+  `mcp/` and `skill.lua` run in an environment with the pure standard library, `str`, `tbl` and
+  `json` (and `schema` once contracts exist), and no I/O. Each must return a table, which is validated; an error names the file and
   the field. Settings in `init.lua` merge key by key, project over user over built in.
 - **Scripts are programs.** A script runs with every module available. Its description for
   `timon scripts` is its leading `--` comment, read without running it. A script that returns
   `{ params = schema, run = function(p) ... end }` gets typed parameters, parsed from flags on
   the command line and from arguments over MCP; any other script gets `arg`.
-- **Trust.** Project files load only after `timon trust` records the directory. The user layer
+- **Trust.** Project files load only after `timon trust` records the directory (in
+  `state/trusted`, one project root per line; `timon trust --revoke` removes it). The user layer
   is trusted. Code a person runs directly (`timon eval`, `timon ./file.lua`) needs no trust:
   running it is the person's own act.
 
@@ -563,7 +566,8 @@ beside one.
 
 ```
 ~/.local/state/timon/        $XDG_STATE_HOME/timon
-├── timon.db                 run records, trust, summaries (WAL mode)
+├── timon.db                 run records, summaries (WAL mode)
+├── trusted                  trusted project roots, one per line
 ├── runs/<id>/               request.json, events.jsonl, result.json per agent run
 └── worktrees/<id>/          worktrees for `worktree = true` runs
 ~/.cache/timon/              $XDG_CACHE_HOME/timon

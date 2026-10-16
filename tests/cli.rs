@@ -1,9 +1,15 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+/// Runs timon in an empty sandbox: its own TIMON_HOME, HOME and working directory, so no test
+/// reads the real configuration.
 fn timon(args: &[&str], stdin: Option<&str>) -> Output {
+    let sandbox = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))
         .args(args)
+        .current_dir(sandbox.path())
+        .env("TIMON_HOME", sandbox.path().join("timon"))
+        .env("HOME", sandbox.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

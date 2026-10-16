@@ -11,18 +11,34 @@ Design: [docs/design.md](docs/design.md).
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Design, crate | done |
-| 1 | Runtime, directories, skills, REPL, plugin | in progress |
+| 1 | Runtime, directories, skills, REPL, plugin | in progress (REPL left) |
 | 2 | `agent`: Claude and Codex runs, contracts, supervisor | planned |
 | 3 | `sessions`: list, read and search every session | planned |
 | 4 | Toolbox, MCP client and server | to discuss |
 
-## Build
+## Install
 
-Rust 1.90 or later. Lua is compiled in.
+Rust 1.90 or later; Lua and Fennel are compiled in.
 
 ```sh
-cargo install --path . --locked
+cargo install --locked --git https://github.com/joshrotenberg/timon
 ```
+
+As a plugin, so agents get the skills and `timon` on the Bash tool's PATH:
+
+```sh
+claude plugin marketplace add joshrotenberg/timon
+claude plugin install timon@timon
+```
+
+In Claude Code: `/plugin install timon --marketplace joshrotenberg/timon`. For Codex:
+
+```sh
+codex plugin marketplace add joshrotenberg/timon
+codex plugin add timon@timon
+```
+
+The plugin runs the installed binary; `TIMON_BIN` points it at another one.
 
 ## Use
 
@@ -33,6 +49,8 @@ echo 'return ("a,b"):upper()' | timon eval -
 timon review.lua 12 14                     # script; args in `arg` and `...`
 timon eval --fnl '(+ 1 2)'                 # Fennel
 timon eval 'json.query({ a = { 1, 2 } }, "a[-1]")'    # JMESPath, with jpx's functions
+timon run triage                           # a named script from ~/.config/timon or .timon
+timon skill show timon                     # the bundled skills
 ```
 
 Errors are tables with a kind, a message and a hint; `try(f, ...)` returns `true, ...` or

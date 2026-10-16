@@ -83,10 +83,36 @@ impl<'a> Installer<'a> {
         self.runtime.host_function(f)
     }
 
-    /// Creates the global table for a module.
+    /// Creates the global table for a module. Reading a field it does not have raises
+    /// `undefined_field` with the closest name; `rawget` still tests without raising.
     pub(crate) fn module(&self, doc: &Module) -> mlua::Result<Table> {
-        let table = self.lua().create_table()?;
-        self.lua().globals().raw_set(doc.name, &table)?;
+        let lua = self.lua();
+        let table = lua.create_table()?;
+        let name = doc.name;
+        let missing =
+            lua.create_function(move |_, (t, key): (Table, Value)| -> mlua::Result<Value> {
+                let Value::String(key) = key else {
+                    return Ok(Value::Nil);
+                };
+                let key = key.to_string_lossy();
+                let fields: Vec<String> = t
+                    .pairs::<String, Value>()
+                    .filter_map(|pair| pair.ok().map(|(k, _)| k))
+                    .collect();
+                let err = Error::new("undefined_field", format!("{name} has no field \"{key}\""));
+                Err(
+                    match suggest::closest(&key, fields.iter().map(String::as_str)) {
+                        Some(close) => err.with_hint(format!("did you mean \"{close}\"?")),
+                        None => err.with_hint(format!("help({name}) lists what it has")),
+                    }
+                    .into(),
+                )
+            })?;
+        let mt = lua.create_table()?;
+        mt.raw_set("__index", self.wrap(missing)?)?;
+        mt.raw_set("__name", format!("timon.module.{name}"))?;
+        table.set_metatable(Some(mt))?;
+        lua.globals().raw_set(doc.name, &table)?;
         self.index.raw_set(&table, doc.name)?;
         Ok(table)
     }
