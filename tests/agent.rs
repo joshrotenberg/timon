@@ -995,3 +995,70 @@ fn events_are_redacted_in_the_run_record_and_flagged_on_the_cli() {
     let request = std::fs::read_to_string(dir.join("request.json")).unwrap();
     assert!(request.contains("\"events\": true"), "{request}");
 }
+
+#[test]
+fn events_from_recorded_real_output_normalize() {
+    let s = Sandbox::new();
+    let recorded = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recorded");
+    let replay = |file: &str| recorded.join(file).display().to_string();
+
+    let claude = replay("claude-read.stream.jsonl");
+    let r = s.json(
+        "agent.run{ prompt = 'x', events = true }",
+        &[("FAKE_REPLAY", &claude)],
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    assert_eq!(kinds(&r), ["tool_call", "tool_result", "text"]);
+    assert_eq!(r["events"][0]["name"], "Read");
+    assert_eq!(r["events"][0]["id"], r["events"][1]["id"]);
+    assert!(
+        r["events"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("# scratch"),
+        "{r}"
+    );
+    assert_eq!(r["text"], "# scratch");
+    assert!(r["usage"]["usd"].as_f64().unwrap() > 0.0);
+
+    let codex = replay("codex-read.jsonl");
+    let r = s.json(
+        "agent.run{ provider = 'codex', prompt = 'x', events = true }",
+        &[("FAKE_REPLAY", &codex)],
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    assert_eq!(kinds(&r), ["text", "tool_call", "tool_result", "text"]);
+    assert_eq!(r["events"][1]["name"], "shell");
+    assert!(
+        r["events"][2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("# scratch"),
+        "{r}"
+    );
+    assert_eq!(r["events"][2]["error"], false);
+    assert!(r["usage"]["output_tokens"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn an_unknown_model_is_named_on_both_providers() {
+    let s = Sandbox::new();
+    let r = s.json(
+        "agent.run{ prompt = 'x', model = 'no-such-model-xyz' }",
+        &[("FAKE_MODE", "unknown_model")],
+    );
+    assert_eq!(r["error"]["kind"], "unknown_model", "{r}");
+    assert_eq!(
+        r["error"]["message"],
+        "claude does not know the model \"no-such-model-xyz\""
+    );
+    let r = s.json(
+        "agent.run{ provider = 'codex', prompt = 'x', model = 'no-such-model-xyz' }",
+        &[("FAKE_MODE", "unknown_model")],
+    );
+    assert_eq!(r["error"]["kind"], "unknown_model", "{r}");
+    assert_eq!(
+        r["error"]["message"],
+        "The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account."
+    );
+}

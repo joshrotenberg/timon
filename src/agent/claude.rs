@@ -229,13 +229,23 @@ fn failure(err: &claude_wrapper::Error) -> (Status, Error) {
         ),
         E::CommandFailed {
             exit_code, stderr, ..
-        } => (
-            Status::Failed,
-            Error::new(
-                "provider_failed",
-                format!("claude exited {exit_code}: {}", last_lines(stderr)),
+        } => match unknown_model(stderr) {
+            Some(model) => (
+                Status::Failed,
+                Error::new(
+                    "unknown_model",
+                    format!("claude does not know the model \"{model}\""),
+                )
+                .with_hint("use a model Claude Code knows, such as haiku, sonnet or opus"),
             ),
-        ),
+            None => (
+                Status::Failed,
+                Error::new(
+                    "provider_failed",
+                    format!("claude exited {exit_code}: {}", last_lines(stderr)),
+                ),
+            ),
+        },
         other => (
             Status::Failed,
             Error::new("provider_failed", other.to_string()),
@@ -251,6 +261,19 @@ fn auth(kind: AuthErrorKind, message: String) -> (Status, Error) {
         _ => ("auth", "check claude's login with: claude auth status"),
     };
     (Status::Failed, Error::new(kind, message).with_hint(hint))
+}
+
+/// The model Claude rejected, from `[claude-code:unrecognized_model] {"model":"..."}` on stderr
+/// (Claude Code 2.1.301).
+fn unknown_model(stderr: &str) -> Option<String> {
+    let rest = stderr.split("[claude-code:unrecognized_model]").nth(1)?;
+    let detail = rest.lines().next().unwrap_or("").trim();
+    Some(
+        serde_json::from_str::<Json>(detail)
+            .ok()
+            .and_then(|j| j["model"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "?".to_owned()),
+    )
 }
 
 /// The human part of a CLI message: the `result` text when the message is Claude's result
