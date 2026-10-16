@@ -155,8 +155,18 @@ fn opening_is_refused_while_tasks_load() {
         "sqlite.open('x.db')\nreturn {}",
     )
     .unwrap();
-    assert!(timon(&project, &["trust"]).status.success());
-    let o = timon(&project, &["tasks"]);
+    // HOME is above the project: a project's .timon is found below HOME, not at it.
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_timon"))
+            .args(args)
+            .current_dir(&project)
+            .env("HOME", tmp.path())
+            .env("TIMON_HOME", tmp.path().join("timon"))
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["trust"]).status.success());
+    let o = run(&["tasks"]);
     assert!(
         String::from_utf8_lossy(&o.stderr).contains("sqlite.open cannot run while tasks load"),
         "{}",
