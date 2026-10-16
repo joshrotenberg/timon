@@ -102,7 +102,7 @@ fn the_project_layer_loads_agents_tasks_scripts_and_skills() {
     let scripts = p.names(&["scripts", "--json"]);
     assert_eq!(
         scripts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-        ["em-dash", "naming-audit", "recent"]
+        ["em-dash", "naming-audit", "parity", "recent"]
     );
     let tasks = p.timon(&["tasks", "--json"], &[]);
     assert!(tasks.status.success(), "{}", err(&tasks));

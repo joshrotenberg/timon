@@ -685,6 +685,83 @@ fn the_index_follows_appends_removals_and_rebuilds() {
     assert_eq!(report["pending"], 0);
 }
 
+/// #49: an index built in pieces (a file cut mid-line, then appended to twice) finds what an
+/// index of the whole file finds, with the same match counts, across record kinds.
+#[test]
+fn an_index_built_in_pieces_counts_what_a_fresh_one_does() {
+    let mut text = String::new();
+    for i in 0..40 {
+        for line in [
+            claude_user(&format!("step {i}: look at the walrus module"), "/work/w"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": format!("walrus check {i}") },
+                { "type": "tool_use", "id": format!("t{i}"), "name": "Bash",
+                  "input": { "command": format!("grep walrus src/m{i}.rs") } } ] } }),
+            serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": format!("t{i}"),
+                  "content": format!("src/m{i}.rs: a walrus here") } ] } }),
+        ] {
+            text.push_str(&format!("{line}\n"));
+        }
+    }
+    let file = |a: &Archive| {
+        let dir = a.home().join(".claude/projects/-work-w");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(format!("{ID_A}.jsonl"))
+    };
+    let search = |a: &Archive| {
+        a.json(
+            "sessions.search{ query = 'walrus', per_session = 1, active = true }",
+            &[],
+        )
+    };
+    let counts = |r: &serde_json::Value| -> Vec<(String, i64)> {
+        r["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["id"].as_str().unwrap().to_owned(),
+                    h["match_count"].as_i64().unwrap(),
+                )
+            })
+            .collect()
+    };
+
+    let whole = Archive::new();
+    std::fs::write(file(&whole), &text).unwrap();
+    let expected = counts(&search(&whole));
+    assert_eq!(
+        expected,
+        [(ID_A.to_owned(), 160)],
+        "four kinds of record, 40 times"
+    );
+
+    let pieces = Archive::new();
+    let path = file(&pieces);
+    let cuts = [0, text.len() / 3 + 7, 2 * text.len() / 3 + 11, text.len()];
+    assert_ne!(
+        text.as_bytes()[cuts[1] - 1],
+        b'\n',
+        "the first cut is mid-line"
+    );
+    for w in cuts.windows(2) {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(&text.as_bytes()[w[0]..w[1]]).unwrap();
+        drop(f);
+        let r = search(&pieces);
+        if w[1] == text.len() {
+            assert_eq!(counts(&r), expected);
+            assert_eq!(r["coverage"]["refresh"]["appended"], 1, "{r}");
+        }
+    }
+}
+
 // Summaries (#43)
 
 fn fake_claude() -> String {
