@@ -22,6 +22,8 @@ pub struct Error {
     pub hint: Option<String>,
     /// Structured detail, such as validation errors. Boxed to keep the error small.
     pub data: Option<Box<serde_json::Value>>,
+    /// The process exit status, 1 to 125, when this error ends a run.
+    pub exit: Option<u8>,
 }
 
 impl Error {
@@ -32,7 +34,15 @@ impl Error {
             message: message.into(),
             hint: None,
             data: None,
+            exit: None,
         }
+    }
+
+    /// Sets the exit status the CLI ends with if this error ends a run; outside 1 to 125 it
+    /// is ignored.
+    pub fn with_exit(mut self, code: i64) -> Self {
+        self.exit = u8::try_from(code).ok().filter(|c| (1..=125).contains(c));
+        self
     }
 
     /// Adds what the reader should do about it.
@@ -165,6 +175,9 @@ pub(crate) fn to_table(lua: &Lua, err: &Error) -> mlua::Result<Table> {
     if let Some(data) = &err.data {
         t.raw_set("data", crate::value::from_json(lua, data)?)?;
     }
+    if let Some(exit) = err.exit {
+        t.raw_set("exit", exit)?;
+    }
     t.set_metatable(Some(lua.named_registry_value(ERROR_MT)?))?;
     Ok(t)
 }
@@ -284,6 +297,9 @@ pub(crate) fn from_table(t: &Table) -> Error {
         err.data = crate::value::to_json(&data, crate::value::Mode::Display)
             .ok()
             .map(Box::new);
+    }
+    if let Ok(Some(exit)) = t.raw_get::<Option<i64>>("exit") {
+        err = err.with_exit(exit);
     }
     err
 }

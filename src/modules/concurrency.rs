@@ -223,9 +223,20 @@ struct ScopeInner {
     budget: RefCell<Option<Rc<Budget>>>,
     /// Whether `budget` is the scope's own, to give back unused reserved runs when it ends.
     own_budget: Cell<bool>,
+    /// Run when the scope ends, however it ends: stopping processes it started, and the like.
+    cleanups: RefCell<Vec<Box<dyn FnOnce()>>>,
 }
 
 impl ScopeInner {
+    /// Runs the scope's cleanups, newest first, then gives back its reserved runs.
+    fn end(&self) {
+        let cleanups = std::mem::take(&mut *self.cleanups.borrow_mut());
+        for cleanup in cleanups.into_iter().rev() {
+            cleanup();
+        }
+        self.release_budget();
+    }
+
     fn release_budget(&self) {
         if self.own_budget.get()
             && let Some(b) = self.budget.borrow().as_ref()
@@ -235,12 +246,28 @@ impl ScopeInner {
     }
 }
 
-/// Gives back a scope's unused reserved runs when it ends, however it ends.
-struct ReleaseBudget(Rc<ScopeInner>);
+/// Ends a scope when its run ends, however it ends: cleanups, then reserved runs.
+struct EndScope(Rc<ScopeInner>);
 
-impl Drop for ReleaseBudget {
+impl Drop for EndScope {
     fn drop(&mut self) {
-        self.0.release_budget();
+        self.0.end();
+    }
+}
+
+/// Registers `cleanup` to run when the scope of the task on `thread` ends. Returns false, and
+/// drops nothing, when the thread belongs to no scope.
+pub(crate) fn on_scope_end(lua: &Lua, thread: &mlua::Thread, cleanup: Box<dyn FnOnce()>) -> bool {
+    let key = thread_key(thread);
+    let scope = lua
+        .app_data_ref::<State>()
+        .and_then(|state| state.threads.borrow().get(&key).and_then(Weak::upgrade));
+    match scope {
+        Some(scope) => {
+            scope.cleanups.borrow_mut().push(cleanup);
+            true
+        }
+        None => false,
     }
 }
 
@@ -459,7 +486,7 @@ async fn scope_run(
     args: MultiValue,
 ) -> Result<MultiValue, Value> {
     let notify = changed(lua);
-    let _release = ReleaseBudget(scope.clone());
+    let _end = EndScope(scope.clone());
     let mut guard = ScopeGuard {
         scope: scope.clone(),
         body: None,
@@ -546,7 +573,7 @@ impl UserData for ScopeHandle {
                     Ok(())
                 };
                 scope.ended.set(true);
-                scope.release_budget();
+                scope.end();
                 result.map_err(|e| error::raise(&lua, e))
             }
         });
