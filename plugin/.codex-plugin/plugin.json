@@ -1,6 +1,6 @@
 {
   "name": "timon",
-  "description": "Lua and Fennel over agent, session and tool APIs: eval or scripts, with bundled skills",
+  "description": "A task runner with Lua and Fennel and agents built in: tasks, scripts, skills and hooks",
   "author": {
     "name": "Josh Rotenberg"
   },
@@ -15,8 +15,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Timon",
-    "shortDescription": "Lua and Fennel for agent work",
-    "longDescription": "One binary with Lua 5.4 and Fennel over modules for JSON, files, concurrency and, later, Claude and Codex runs and past sessions.",
+    "shortDescription": "Lua and Fennel tasks, agents built in",
+    "longDescription": "One binary with Lua 5.4 and Fennel: tasks and scripts over a toolbox (files, JSON, processes, git, GitHub, HTTP, SQLite), Claude and Codex runs with contracts and budgets, every past session, and hooks that brief an agent and guard its edits.",
     "developerName": "Josh Rotenberg",
     "category": "Developer Tools",
     "capabilities": [

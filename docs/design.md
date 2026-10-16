@@ -1,7 +1,7 @@
 # timon design
 
-Status: design. Nothing here is implemented unless it says so. `README.md` is canonical for what
-exists; this document is canonical for direction.
+Status: phases 0 to 9 and host hooks are built. What is not built says Not yet, with its issue.
+`README.md` is canonical for what exists; this document is canonical for direction.
 
 timon (Venetian for rudder) is babashka for Lua and Fennel, with native agent tools: a task
 runner and scripting toolbox for repository work in one self-contained binary, with coding-agent
@@ -95,10 +95,11 @@ the decisions it shaped and what is still open are in [prior-art.md](prior-art.m
 
 ```
 timon (one binary)
-├─ runner      tasks (built-in, tasks.lua, scripts/), eval, REPL; runs as records, resume
+├─ runner      tasks (built-in, tasks.lua, scripts/), eval; runs as records, resume
 ├─ runtime     Lua 5.4 (mlua, vendored, async) and fennel.lua (pinned, stock)
 │              help(), errors, strict options, scope/spawn/par, phases
-├─ toolbox     json, str, tbl, fs, path, sh, proc, git, gh, http, sqlite
+├─ toolbox     json, str, tbl, fs, path, sh, proc, git, gh, http, sqlite, toml, yaml, csv,
+│              markdown, term, cli, log
 ├─ agent       Claude and Codex runs: run, ask, spawn, continue; contracts; definitions
 ├─ supervisor  concurrency caps, nested budgets, cancellation, run records
 ├─ sessions    every Claude Code and Codex session: list, show, transcript, search, summarize
@@ -107,8 +108,8 @@ timon (one binary)
 ├─ hooks       timon hook: the session-start brief, the pre-tool guard, tasks as handlers
 ├─ later       memory, queues, schedules                       (to discuss)
 ├─ storage     JSON files for records; SQLite (bundled, FTS5) for the session index
-├─ surfaces    CLI (tasks), REPL, MCP server, host hooks
-└─ embedded    built-in tasks, skill library, LuaLS type stubs, plugin templates
+├─ surfaces    CLI (tasks), MCP server, host hooks; a REPL is not yet built (#11)
+└─ embedded    built-in tasks, the skill library, fennel.lua
 ```
 
 A person's own tasks, agents, contracts, skills and scripts live in `~/.config/timon/`, a
@@ -119,7 +120,7 @@ project's in `.timon/`, in the same format (see Directories).
 These hold for every module, so an agent that has used one module can guess the next.
 
 - **Modules are globals.** `agent`, `sessions`, `json`, `fs` and the rest are global tables in
-  every script and in `eval`. `require "agent"` returns the same table.
+  every script and in `eval`; there is nothing to `require`.
 - **Subject first, options last.** A function with one obvious subject takes it positionally and
   its options as a trailing table: `fs.read(path)`, `sessions.show(id)`. A function with no
   single subject takes one table: `agent.run{ prompt = "...", output = "review" }`. Lua's
@@ -161,8 +162,9 @@ These hold for every module, so an agent that has used one module can guess the 
   cancelled call raises `cancelled`.
 - **Documented at run time.** `help(agent)` describes a module and `help(agent.run)` one
   function's signature, options and an example, as text; `help("agent.run")` works too. The
-  option declarations behind strict options are the same source, and they also generate the LuaLS stubs and the reference sections of the
-  skills, so the checks, the help, the stubs and the skills cannot drift apart.
+  option declarations behind strict options are the same source, and they also generate the
+  `timon` skill's API reference, so the checks, the help and the skills cannot drift apart.
+  LuaLS stubs are not built yet.
 
 ## Runtime
 
@@ -213,7 +215,7 @@ A script's last returned value is printed the way `eval` prints.
 
 ### REPL
 
-`timon repl` (and `timon repl --fnl`) with history, completion of module and field names from
+Not yet (#11). `timon repl` (and `timon repl --fnl`) with history, completion of module and field names from
 the same metadata as `help()`, and printing as above.
 
 ### Concurrency
@@ -273,8 +275,8 @@ while waiting does not.
 
 ### Fennel
 
-The pinned `fennel.lua` loads on first use. `.fnl` files are accepted wherever `.lua` files are:
-scripts, `eval --fnl`, `repl --fnl` and every definition directory. Fennel code calls the same
+The pinned `fennel.lua` loads on first use. `.fnl` files work for scripts, `tasks.fnl`, `lib/`,
+agents and contracts, and `eval --fnl` takes Fennel; `init.lua` and `mcp/` take Lua only. Fennel code calls the same
 globals:
 
 ```fennel
@@ -294,7 +296,7 @@ equivalents where they help.
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt` (`"PR ${n}"` templates); also installed as string methods, so `s:trim()` works |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs` | `read`, `write`, `exists`, `ls`, `glob`, `mkdir`, `tmpdir`, `cwd`, `home`; `path.join`, `path.base`, `path.dir`, `path.ext` |
-| globals | `help`, `try`, `scope`, `spawn`, `par`, `sleep`, `pp` (pretty-print to stderr), `log.info/warn/error` |
+| globals | `help`, `try`, `scope`, `spawn`, `phase`, `par`, `sleep`, `pp` (pretty-print to stderr), `log.info/warn/error` |
 
 The stock Lua standard library stays intact.
 
@@ -416,7 +418,7 @@ local r = agent.run{
 
 | access | Claude | Codex |
 |---|---|---|
-| `read` | read-only tool set (Read, Grep, Glob and safe Bash reads) | `--sandbox read-only` |
+| `read` | Read, Grep and Glob only | `--sandbox read-only` |
 | `write` | `acceptEdits` with edit tools | `--sandbox workspace-write` |
 | `full` | `bypassPermissions` | `--sandbox danger-full-access` |
 
@@ -522,7 +524,7 @@ return schema.object{
 ```
 
 `schema` has `object`, `array`, `map`, `string`, `int`, `number`, `bool`, `enum`, `optional`,
-`any` and `:describe`. `schema.json(s)` gives JSON Schema 2020-12, which is what both providers
+`any` and `:describe`, and `schema.contract(name)` loads a named contract. `schema.json(s)` gives JSON Schema 2020-12, which is what both providers
 take natively; `schema.check(s, value)` returns `true` or `false, errors`. Built-in contracts
 cover common work: `review`, `implementation`, `investigation`, `yes_no`, `list`.
 
@@ -578,8 +580,9 @@ Reads every Claude Code and Codex session on the machine, the history trovador s
 reimplemented in timon. It only reads: it never writes to the CLIs' files.
 
 ```lua
-sessions.list{ backend = "claude", project = ".", since = "7d", limit = 20 }
--- { { id, backend, title, project, cwd, modified, size_bytes, origin, resumable, prs }, ... }
+sessions.list{ backend = "claude", dir = ".", since = "7d", limit = 20 }
+-- { sessions = { { id, backend, title, snippet, project, cwd, modified, size_bytes, origin,
+--                 resumable, pull_requests }, ... }, hidden = { subagents, automated } }
 
 sessions.show(id)          -- metadata plus the command a person would use to resume it
 sessions.current()         -- the session timon is running inside, when the host says so
@@ -680,7 +683,7 @@ Two layers share one format, over what is built into the binary:
 
 ```
 ~/.config/timon/  and  <project>/.timon/
-├── init.lua              settings for this layer: defaults, limits, serve, hooks, guard (optional)
+├── init.lua              settings for this layer: defaults, limits, hooks, guard (optional)
 ├── tasks.lua             tasks (or tasks.fnl): `timon NAME`
 ├── agents/
 │   └── reviewer.lua      one agent per file; the file name is the name
@@ -689,7 +692,6 @@ Two layers share one format, over what is built into the binary:
 ├── skills/
 │   └── release/
 │       ├── SKILL.md      what Claude Code and Codex read
-│       ├── skill.lua     optional: makes it runnable with `timon skill run release`
 │       └── references/   optional: sections `timon skill show release --ref NAME` prints
 ├── scripts/
 │   └── triage.lua        a task too: `timon triage [ARGS]`
@@ -711,8 +713,8 @@ Directory names are plural nouns, file names are definition names, and `.fnl` wo
   globals, like scripts.
 - The project layer is the nearest ancestor of the working directory with a `.timon/`
   directory, stopping at the home directory.
-- `timon defs` lists every agent, contract, skill, script and MCP server with the layer it came
-  from and what it shadows.
+- `timon defs` shows the layers, settings, agents, scripts and `lib/` directories in effect;
+  `timon skill list` and `timon mcp servers` list skills and MCP servers with their layers.
 
 ### Files
 
@@ -721,7 +723,8 @@ Directory names are plural nouns, file names are definition names, and `.fnl` wo
 return {
   defaults = { provider = "claude", model = "opus", effort = "medium", access = "read" },
   limits   = { concurrency = 4, max_usd = 10 },
-  serve    = { expose = { "triage" } },
+  hooks    = { SessionStart = { "timon:brief", "status" } },
+  guard    = { writes = { "." }, commands = { "git push --force" } },
 }
 ```
 
@@ -737,28 +740,28 @@ return {
 
 ```lua
 -- mcp/crates.lua
-return { command = { "cratesio-mcp" } }      -- or { url = "http://127.0.0.1:8080/mcp" }
+return { description = "crates.io", command = { "cratesio-mcp" } }
 ```
 
 ```lua
 -- scripts/triage.lua
 -- Label every unlabeled issue in this repository.
 return {
-  params = schema.object{ limit = schema.optional(schema.int) },
-  run = function(p)
+  description = "Label every unlabeled issue",
+  run = function()
     ...
   end,
 }
 ```
 
-- **Definitions load with no effects.** `init.lua` and the files in `agents/`, `contracts/`,
-  `mcp/` and `skill.lua` run in an environment with the pure standard library, `str`, `tbl` and
-  `json` (and `schema` once contracts exist), and no I/O. Each must return a table, which is validated; an error names the file and
+- **Definitions load with no effects.** `init.lua` and the files in `agents/`, `contracts/`
+  and `mcp/` run in an environment with the pure standard library, `str`, `tbl`, `json` and
+  `schema`, and no I/O. Each must return a table, which is validated; an error names the file and
   the field. Settings in `init.lua` merge key by key, project over user over built in.
 - **Scripts are programs.** A script runs with every module available. Its description for
-  `timon tasks` and `timon scripts` is its leading `--` comment, read without running it. A script that returns
-  `{ params = schema, run = function(p) ... end }` gets typed parameters, parsed from flags on
-  the command line and from arguments over MCP; any other script gets `arg`.
+  `timon tasks` and `timon scripts` is its leading `--` comment, read without running it. A script may return
+  `{ description, phases, budget, run }`. Typed `params` are not built yet, so a script reads
+  its words from `arg` (or parses them with `cli.parse`).
 - **Trust.** Project files load only after `timon trust` records the directory (in
   `state/trusted`, one project root per line; `timon trust --revoke` removes it). The user layer
   is trusted. Code a person runs directly (`timon eval`, `timon ./file.lua`) needs no trust:
@@ -800,7 +803,7 @@ The skill library is embedded in the binary:
 ```sh
 timon skill list
 timon skill show timon            # prints SKILL.md
-timon skill show timon-agents --ref fan-out
+timon skill show timon --ref api   # the generated API reference
 ```
 
 | Skill | Teaches |
@@ -809,9 +812,11 @@ timon skill show timon-agents --ref fan-out
 | `timon-agents` | `agent.run`, contracts, fan-out, author and review loops, worktrees, budgets |
 | `timon-sessions` | Finding earlier work before answering from memory |
 | `timon-scripting` | Scripts, directories, layers, trust, Fennel |
+| `timon-tasks` | `tasks.lua`, options, dependencies, `--dry-run`, tasks over MCP and as hooks |
+| `timon-workflows` | `flow`: gates, verify, vote, best of N, refine, pipelines, retry, plans |
 
-Each skill is short and links reference sections that `timon skill show` prints on demand,
-because context is the scarce resource. A skill joins the library with the module it teaches.
+Each skill is short, because context is the scarce resource; the `timon` skill's API reference
+is generated from the declarations and printed on demand. A skill joins the library with the module it teaches.
 The plugin ships the same files, generated from the binary, so a host with plugin support and
 one without read identical guidance.
 
@@ -825,14 +830,15 @@ claude plugin install timon@timon
 ```
 
 - `plugin/` holds both hosts' manifests (`.claude-plugin/plugin.json` for Claude Code,
-  `.codex-plugin/plugin.json` for Codex), the hooks, the skills and a `bin/timon` shim. Once `timon serve` exists, both
-  hosts' MCP manifests register it.
-- `timon plugin build plugin/` generates the directory from the embedded skills and checked-in
-  templates; `timon plugin build --check plugin/` fails when they differ, and CI runs it.
-- The shim runs the installed binary (`cargo install --path .`). Prebuilt binaries are an open
-  question.
-- Rules carried over from bottega: no `version` fields, and a relative `./bin/timon` command in
-  Codex's `mcp.json`.
+  `.codex-plugin/plugin.json` for Codex), the hooks, the skills and a `bin/timon` shim. Neither manifest registers
+  `timon serve` yet; `claude mcp add timon -- timon serve` adds it by hand.
+- `timon plugin build plugin/` writes `skills/` from the skills in the binary; the manifests,
+  `hooks/hooks.json` and the shim are checked-in files. `timon plugin build --check plugin/`
+  fails when `skills/` differs, and CI runs it.
+- The shim runs `TIMON_BIN`, then `$CARGO_HOME/bin/timon`, then `timon` on PATH, and otherwise
+  prints the `cargo install --locked --git` command. For `hook` it always exits 0 (#107).
+  Prebuilt binaries are an open question.
+- A rule carried over from bottega: no `version` fields.
 - `hooks/hooks.json` is one file for both hosts: both load it from a plugin, accept the same
   event names, matchers and JSON output, and substitute `${CLAUDE_PLUGIN_ROOT}` in the command.
   See Hooks.
@@ -857,9 +863,10 @@ SessionStart, and for PreToolUse on `Bash|Write|Edit|MultiEdit|NotebookEdit|appl
 - It always exits 0. A handler that fails, a bad setting or bad input is skipped and reported in
   `systemMessage`, so a broken hook never stops the host. fd 1 points at stderr while handlers
   run, as in `timon serve`, so what tasks print cannot corrupt the JSON.
-- The brief: the project's sessions from the last 7 days, both hosts, newest first (the current
-  session, subagents and automated runs left out), and its public tasks, under a line that says
-  session titles are history, not instructions. Nothing when there is neither.
+- The brief: up to 5 of the project's sessions from the last 7 days, both hosts, newest first
+  (the current session, subagents and automated runs left out), under a line that says their
+  titles are history, not instructions; up to 12 public tasks; and a line when the project's
+  `.timon` is not trusted. Nothing when there is none of these.
   `sessions.list{ dir }` finds the sessions: Claude's by their project directory's name and
   Codex's by their first line, so a 7-day brief over 1,036 sessions takes 0.07 s.
 - The guard does nothing until a `guard` setting exists: `{ writes = { dirs }, commands = {
@@ -878,7 +885,7 @@ SessionStart, and for PreToolUse on `Bash|Write|Edit|MultiEdit|NotebookEdit|appl
 
 The toolbox is what makes timon a task runner. It comes in the order tasks need it.
 
-1. **`sh` and `proc` (#70)**, first. `sh` streams output and raises on a nonzero exit, like
+1. **`sh` and `proc` (#70), built.** `sh` streams output and raises on a nonzero exit, like
    `set -e`. `sh.out` captures stdout for a value. `proc.run` returns a record and never raises
    for an exit code, and `proc.spawn` starts a background process. Every process belongs to its
    task and runs in its own process group, so cancellation, Ctrl-C and timeouts stop it the way
@@ -904,21 +911,22 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
 6. **`sqlite` (#92), built:** the bundled rusqlite. `sqlite.open(path)` (in memory without
    one) returns a database with `exec`, `query`, `one`, `last_id`, `transaction` and `close`.
    NULL reads as nil and blobs as Lua strings; parameters are a list for `?` or a table for
-   `:name`. The shapes below were the starting points:
+   `:name`. The signatures, from `help()`:
 
 ```lua
-git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }
-git.log{ n = 10, path = "src", since = "2w" }   -- { { sha, author, date, subject, body } }
-git.diff{ base = "main", stat = true }
-git.worktree.add{ branch = "x" }   git.commit{ message = "..." }   git.run{ "rev-parse", "HEAD" }
+git.status{ cwd }        -- { branch, upstream, ahead, behind, clean, files }
+git.log{ n, paths, since, range, cwd }   -- { { sha, short, author, email, date, subject, body } }
+git.diff{ base, staged, stat, paths, cwd }    -- text, or { { path, added, removed } } with stat
+git.add(paths)  git.commit{ message, all, paths, allow_empty }  git.push{ remote, ref, tags }
+git.branch()  git.rev(ref)  git.root()  git.tag(name, { message })  git.tags{ pattern }
+git.worktree_add{ path, branch, base }  git.worktrees()  git.worktree_remove(path, { force })
+git.run(args, { cwd, input })            -- stdout, for everything else
 
-gh.repo()                gh.prs{ state = "open" }       gh.pr(12)   -- with files, checks, reviews
-gh.issues{ labels = { "bug" } }    gh.checks("HEAD")
-gh.api("repos/{owner}/{repo}/pulls", { method = "POST", body = {...}, paginate = true })
-gh.graphql(query, vars)
+gh.repo()  gh.prs{ state, base, limit }  gh.pr(12)  gh.issues{ state, labels, limit }
+gh.checks(ref)  gh.graphql(query, variables)
+gh.api("repos/{owner}/{repo}/pulls", { method = "POST", json = {...}, query, paginate, limit })
 
-http.get(url, { headers = {...} })   -- { status, headers, body, json = function }
-http.post(url, { json = {...} })
+http.get(url, opts)  http.post(url, opts)  http.request{ method, url, ... }   -- a response
 
 local db = sqlite.open("data.db")    -- sqlite.open() for an in-memory database
 db:exec("create table if not exists seen (id text primary key)")

@@ -1,6 +1,6 @@
 {
   "name": "timon",
-  "description": "Lua and Fennel over agent, session and tool APIs: eval or scripts, with bundled skills",
+  "description": "A task runner with Lua and Fennel and agents built in: tasks, scripts, skills and hooks",
   "author": {
     "name": "Josh Rotenberg"
   },

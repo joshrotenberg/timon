@@ -75,7 +75,7 @@ timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Cl
 timon sessions search "flaky parser" --since 30d                      # every session's text
 ```
 
-Tasks live in `tasks.lua` in `~/.config/timon` or a project's `.timon`, and every script in
+Tasks live in `tasks.lua` (or `tasks.fnl`) in `~/.config/timon` or a project's `.timon`, and every script in
 `scripts/` is a task too:
 
 ```lua
@@ -104,8 +104,9 @@ timon: undefined_global: undefined global "prnt"
 
 ## Working on timon
 
-The repository has its own project layer in `.timon/`: a reviewer agent, a naming-audit agent
-and contract, the gates as tasks, and scripts. Read it, then trust it once:
+The repository has its own project layer in `.timon/`: a reviewer and a naming agent with its
+contract, the gates and release tasks, scripts (em-dash, naming-audit, parity, recent) and a
+timon-dev skill. Read it, then trust it once:
 
 ```sh
 timon trust && timon tasks

@@ -115,7 +115,7 @@ source and its totals. Its agent runs point to it with `parent`:
 timon review src/a.rs src/b.rs
 timon runs --scripts                 # script runs: status, runs, cached, cost
 timon runs show s_1a2b               # one script run: request, result, agent runs
-timon --resume s_1a2b run review src/a.rs src/b.rs
+timon --resume s_1a2b review src/a.rs src/b.rs
 ```
 
 `--resume` runs the script again. An agent run with the same request as one that succeeded in

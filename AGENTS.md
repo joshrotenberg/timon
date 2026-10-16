@@ -51,7 +51,7 @@ While bootstrapping:
 - Nothing essential may depend on a Lua 5.4-only feature. `<close>` stays shorthand for
   `scope(fn)`, so the Lua version remains a cargo feature choice.
 - Every options table is declared, and the declaration drives strict checking, `help()`, the
-  LuaLS stubs and the skill references. Never add an option without declaring it.
+  skill references (and LuaLS stubs, once they exist). Never add an option without declaring it.
 
 ## Dogfood
 

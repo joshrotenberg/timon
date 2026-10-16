@@ -1471,7 +1471,7 @@ local b = agent.spawn{ prompt = "Summarize CHANGELOG.md", provider = "codex" }
 local ra, rb = a:await(), b:await()
 ```
 
-### `agent.runs{ since, limit } -> array`
+### `agent.runs{ since, limit, parent } -> array`
 
 Recorded runs, newest first: id, started_at, provider, model, agent, status, ms, usd, output_tokens and the start of the prompt. timon runs show ID has the full request and result.
 
