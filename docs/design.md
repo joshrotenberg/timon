@@ -286,8 +286,7 @@ The stock Lua standard library stays intact.
 
 ## Tasks
 
-Built in phases 5 (#68) and 6, except built-in commands as tasks and completion (see the last
-item).
+Built in phases 5 (#68) and 6 (#79, #80).
 
 ```lua
 -- .timon/tasks.lua (and ~/.config/timon/tasks.lua, or tasks.fnl)
@@ -359,8 +358,16 @@ timon --yes drop-db                  # answers confirm
   flags. It does not ask `confirm`.
 - **`--dry-run`** prints the plan as JSON: each task, its level, what it runs and its options.
   It cannot see `task.run` calls inside a function.
-- **Not built yet:** timon's own commands in `timon tasks` with their declarations, and shell
-  completion from the same declarations.
+- **timon's commands as tasks.** `timon tasks --all` lists timon's own commands after the
+  tasks, and `timon tasks --all --json` describes each command and subcommand the way it
+  describes a task: name, description, options with types in the #29 syntax, defaults. The
+  declarations are clap's, read through its command model, so help, parsing and the listing
+  come from one place. The default listing shows only tasks, as `bb tasks`, `just --list` and
+  `mise tasks` do.
+- **Completion** for bash, zsh and fish (`timon completions SHELL`) calls a hidden
+  `timon __complete`, which answers from the same declarations and the task catalog: command,
+  subcommand, task and alias names, flags, and the choices of an option. Loading for completion
+  follows the listing's rule, and a tasks file that fails to load leaves only the commands.
 
 ## agent
 

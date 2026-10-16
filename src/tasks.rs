@@ -480,12 +480,20 @@ impl Catalog {
     }
 
     /// The catalog as text: ungrouped tasks, then each group under its name.
-    pub fn listing(&self, all: bool) -> String {
+    /// With `all`, private tasks too, and `builtins` (name, description) under `timon`.
+    pub fn listing(&self, all: bool, builtins: &[(String, String)]) -> String {
         let shown: Vec<&Task> = self.tasks.iter().filter(|t| all || !t.private).collect();
-        let width = shown.iter().map(|t| t.name.len()).max().unwrap_or(0);
+        let builtins = if all { builtins } else { &[] };
+        let width = shown
+            .iter()
+            .map(|t| t.name.len())
+            .chain(builtins.iter().map(|(n, _)| n.len()))
+            .max()
+            .unwrap_or(0);
         let layer_width = shown
             .iter()
             .map(|t| t.layer.name().len())
+            .chain(builtins.iter().map(|_| Kind::Builtin.name().len()))
             .max()
             .unwrap_or(0);
         let line = |t: &Task, indent: &str| {
@@ -535,6 +543,20 @@ impl Catalog {
             out.push('\n');
             for t in shown.iter().filter(|t| t.group.as_deref() == Some(group)) {
                 out.push_str(&line(t, "  "));
+            }
+        }
+        if !builtins.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("timon\n");
+            for (name, description) in builtins {
+                let text = format!(
+                    "  {name:width$}  {:layer_width$}  {description}",
+                    Kind::Builtin.name()
+                );
+                out.push_str(text.trim_end());
+                out.push('\n');
             }
         }
         out

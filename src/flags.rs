@@ -69,6 +69,19 @@ impl Opt {
     pub fn flag(&self) -> String {
         format!("--{}", self.name.replace('_', "-"))
     }
+
+    /// Whether the flag takes a value: every option but a boolean.
+    pub fn takes_value(&self) -> bool {
+        !self.is_flag()
+    }
+
+    /// The strings a choice option takes, for completion.
+    pub fn choices(&self) -> Vec<String> {
+        choices(self.node())
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
 }
 
 /// Declared options, in name order.
@@ -289,6 +302,20 @@ impl Spec {
             }
         }
         Ok(Self { options })
+    }
+
+    /// The option a word names: `--name`, `--name=...` or `-s`.
+    pub fn lookup(&self, word: &str) -> Option<&Opt> {
+        let word = word.split('=').next().unwrap_or(word);
+        if let Some(long) = word.strip_prefix("--") {
+            return self.find_flag(long);
+        }
+        let short = word.strip_prefix('-')?;
+        let mut chars = short.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => self.options.iter().find(|o| o.short == Some(c)),
+            _ => None,
+        }
     }
 
     fn find_flag(&self, flag: &str) -> Option<&Opt> {

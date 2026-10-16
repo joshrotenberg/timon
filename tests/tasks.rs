@@ -491,6 +491,7 @@ fn the_skill_examples_load_as_tasks_files() {
         .as_array()
         .unwrap()
         .iter()
+        .filter(|t| t["kind"] != "builtin")
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(
