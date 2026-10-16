@@ -1,0 +1,14 @@
+{
+  "name": "timon",
+  "description": "timon: Lua and Fennel over agent, session and tool APIs, for Claude Code and Codex.",
+  "owner": {
+    "name": "Josh Rotenberg"
+  },
+  "plugins": [
+    {
+      "name": "timon",
+      "description": "Lua and Fennel over agent, session and tool APIs: eval or scripts, with bundled skills",
+      "source": "./plugin"
+    }
+  ]
+}

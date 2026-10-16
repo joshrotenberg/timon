@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs the timon that cargo installed. The plugin carries no binary, so updating timon is
+# `cargo install` and nothing in the plugin changes. The desktop apps do not always see the
+# shell's PATH, so cargo's bin directory is tried first.
+for candidate in "${TIMON_BIN:-}" "${CARGO_HOME:-$HOME/.cargo}/bin/timon"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+if command -v timon >/dev/null 2>&1 && [ "$(command -v timon)" != "$0" ]; then
+  exec timon "$@"
+fi
+echo "timon is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/timon" >&2
+exit 127

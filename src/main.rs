@@ -64,8 +64,24 @@ enum Command {
     /// List and read skills: built in, user and project
     #[command(subcommand)]
     Skill(SkillCommand),
+    /// Build the plugin directory from the binary
+    #[command(subcommand)]
+    Plugin(PluginCommand),
     #[command(external_subcommand)]
     Script(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum PluginCommand {
+    /// Write the plugin's skills/ from the skills built into this binary
+    Build {
+        /// The plugin directory
+        #[arg(default_value = "plugin")]
+        dir: PathBuf,
+        /// Report drift and exit 1 instead of writing
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +133,7 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
         Command::Defs { json } => return defs(&layers, json),
         Command::Skill(command) => return skill(&layers, command),
+        Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
         Command::Eval { .. } | Command::Run { .. } | Command::Script(_) => {}
     }
     // The runtime must outlive the values it returns, which refer into its Lua state.
@@ -134,7 +151,8 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Scripts { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
-        | Command::Skill(_) => Ok(MultiValue::new()),
+        | Command::Skill(_)
+        | Command::Plugin(_) => Ok(MultiValue::new()),
     };
     match result {
         Ok(values) => print(&values),
@@ -287,6 +305,41 @@ fn skill(layers: &Layers, command: SkillCommand) -> ExitCode {
                 Err(err) => fail(&err.into()),
             }
         }
+    }
+}
+
+fn plugin_build(dir: &Path, check: bool) -> ExitCode {
+    if check {
+        return match timon::plugin::check(dir) {
+            Ok(drift) if drift.is_empty() => ExitCode::SUCCESS,
+            Ok(drift) => {
+                for (what, paths) in [
+                    ("missing", &drift.missing),
+                    ("changed", &drift.changed),
+                    ("extra", &drift.extra),
+                ] {
+                    for p in paths {
+                        eprintln!("{what}: {}", dir.join(p).display());
+                    }
+                }
+                fail(
+                    &Error::new(
+                        "plugin_drift",
+                        "the plugin's skills differ from this binary's",
+                    )
+                    .with_hint(format!("run: timon plugin build {}", dir.display()))
+                    .into(),
+                )
+            }
+            Err(err) => fail(&err.into()),
+        };
+    }
+    match timon::plugin::build(dir) {
+        Ok(n) => {
+            println!("wrote {n} files under {}", dir.join("skills").display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(&err.into()),
     }
 }
 
