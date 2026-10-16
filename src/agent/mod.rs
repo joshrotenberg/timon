@@ -288,6 +288,10 @@ pub(crate) struct Answer {
 /// A provider's result, or how it failed.
 pub(crate) type Outcome = Result<Answer, (Status, Error)>;
 
+/// Told the provider process's pid and process group as soon as it starts, so a record can
+/// name the process to stop if timon dies first.
+pub type SpawnHook = std::sync::Arc<dyn Fn(u32, Option<u32>) + Send + Sync>;
+
 /// The binary for `provider`: `TIMON_CLAUDE_BIN` or `TIMON_CODEX_BIN`, else the wrapper finds it
 /// on PATH.
 pub fn binary(provider: Provider) -> Option<PathBuf> {
@@ -320,18 +324,19 @@ pub fn check(request: &Request) -> Result<(), Error> {
 
 /// Runs one turn and returns its record. It never fails: how the run ended is in the record.
 pub async fn run(request: &Request) -> Record {
-    run_as(request, new_id()).await
+    run_as(request, new_id(), None).await
 }
 
-/// [`run`] with a chosen record id, for callers that need it before the run starts.
-pub async fn run_as(request: &Request, id: String) -> Record {
+/// [`run`] with a chosen record id, for callers that need it before the run starts, and a hook
+/// told the provider's pid.
+pub async fn run_as(request: &Request, id: String, on_spawn: Option<SpawnHook>) -> Record {
     let started = Instant::now();
     let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let binary = binary(request.provider);
     let mut events = Vec::new();
     let outcome = match request.provider {
-        Provider::Claude => claude::run(request, binary.as_deref(), &mut events).await,
-        Provider::Codex => codex::run(request, binary.as_deref(), &mut events).await,
+        Provider::Claude => claude::run(request, binary.as_deref(), on_spawn, &mut events).await,
+        Provider::Codex => codex::run(request, binary.as_deref(), on_spawn, &mut events).await,
     };
     let mut record = Record {
         id,

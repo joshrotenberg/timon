@@ -60,3 +60,4 @@ records the exact arguments timon passes and the raw output, under `target/tmp/l
 | 2026-10-16 | 2 | 2.1.301 | 0.162.0 | pass in 162 s, most of it scanning 6,600 real sessions with a debug build |
 | 2026-10-16 | 3 | 2.1.301 | | pass in 57 s: the reviewer reported the seeded off-by-one as high; the namer's four findings are on #52 |
 | 2026-10-16 | 4 | 2.1.301 | 0.162.0 | Claude 4 of 4 and Codex 4 of 4, after one skill fix: an agent ran `timon run NAME` inside a longer shell line, which a `timon`-only permission denies; the `timon` skill now says to run timon as a command of its own |
+| 2026-10-16 | 1 | 2.1.301 | | A fan-out of 8 haiku runs at concurrency 4: 10 s wall for 35 s of runs, at most 4 at once, no rate-limit failures, $0.004. A killed timon's provider is now stopped by the next command (#63) |

@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod agents;
+pub mod budget;
 pub mod dirs;
 pub mod docs;
 pub mod error;

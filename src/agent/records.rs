@@ -33,6 +33,56 @@ fn alive(pid: u64) -> bool {
     }
 }
 
+/// What became of an interrupted run's provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// It was still running, and was stopped.
+    Stopped,
+    /// It had already exited.
+    Gone,
+    /// Something runs under its pid, but it may not be the provider, so it was left alone.
+    Unverified,
+    /// The record names no provider process.
+    Unknown,
+}
+
+/// Stops an orphaned provider's process group, after checking that the pid still leads that
+/// group and runs claude or codex: after a crash the pid may belong to something else.
+fn stop_provider(pid: u32, pgid: u32) -> Stop {
+    if !alive(u64::from(pid)) {
+        return Stop::Gone;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: getpgid only reads the process table.
+        let leads = unsafe { libc::getpgid(pid as i32) } == pgid as i32 && pid == pgid;
+        let command = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        if !(leads && (command.contains("claude") || command.contains("codex"))) {
+            return Stop::Unverified;
+        }
+        // SAFETY: signals a process group that was just verified as the provider's.
+        unsafe { libc::killpg(pgid as i32, libc::SIGTERM) };
+        for _ in 0..40 {
+            if !alive(u64::from(pid)) {
+                return Stop::Stopped;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // SAFETY: as above; it did not stop on TERM.
+        unsafe { libc::killpg(pgid as i32, libc::SIGKILL) };
+        Stop::Stopped
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        Stop::Unverified
+    }
+}
+
 /// The run records under a state directory.
 pub struct Store {
     dir: PathBuf,
@@ -83,6 +133,7 @@ impl Store {
 
     /// Records that a run is starting: its request, a `running` result, and an index line with
     /// this process's pid, so a crash leaves evidence that [`Store::reconcile`] can settle.
+    /// Returns the index line, for [`Store::spawned`].
     pub fn begin(
         &self,
         request: &Request,
@@ -90,7 +141,7 @@ impl Store {
         started_at: &str,
         agent: Option<&str>,
         worktree: Option<&Json>,
-    ) -> Result<(), Error> {
+    ) -> Result<Json, Error> {
         self.reconcile()?;
         let run_dir = self.dir.join(id);
         create_private_dir(&run_dir).map_err(|e| io("create", &run_dir, e))?;
@@ -134,12 +185,39 @@ impl Store {
             "prompt": snippet(&request.prompt),
         });
         redact_value(&mut line);
-        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)
+        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+        Ok(line)
+    }
+
+    /// Adds the provider's pid and process group to a running run, so the run can be stopped
+    /// if this timon dies before it.
+    pub fn spawned(&self, line: &Json, pid: u32, pgid: Option<u32>) -> Result<(), Error> {
+        let mut line = line.clone();
+        line["provider_pid"] = json!(pid);
+        line["provider_pgid"] = json!(pgid);
+        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+        let id = line["id"].as_str().unwrap_or_default();
+        let path = self.dir.join(id).join("result.json");
+        if let Some(mut result) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Json>(&t).ok())
+        {
+            result["provider_pid"] = json!(pid);
+            result["provider_pgid"] = json!(pgid);
+            write_private(
+                &path,
+                &serde_json::to_string_pretty(&result).unwrap_or_default(),
+                false,
+            )?;
+        }
+        Ok(())
     }
 
     /// Settles runs left `running` by a timon process that no longer exists: they become
-    /// `interrupted`, with `effects_uncertain` unless the run was read-only. Nothing is replayed
-    /// or signalled. Returns how many were settled.
+    /// `interrupted`, with `effects_uncertain` unless the run was read-only. A provider still
+    /// running for one is stopped when it can be identified (`provider_stopped`), and flagged
+    /// otherwise (`provider_may_be_running`). Nothing is replayed. Returns how many were
+    /// settled.
     pub fn reconcile(&self) -> Result<usize, Error> {
         let mut settled = 0;
         for entry in self.latest()? {
@@ -161,6 +239,18 @@ impl Store {
                 .unwrap_or_else(|| json!({ "id": id }));
             result["status"] = json!("interrupted");
             result["effects_uncertain"] = json!(uncertain);
+            let provider = match (
+                entry["provider_pid"].as_u64(),
+                entry["provider_pgid"].as_u64(),
+            ) {
+                (Some(pid), Some(pgid)) => stop_provider(pid as u32, pgid as u32),
+                _ => Stop::Unknown,
+            };
+            match provider {
+                Stop::Stopped => result["provider_stopped"] = json!(true),
+                Stop::Unverified => result["provider_may_be_running"] = json!(true),
+                Stop::Gone | Stop::Unknown => {}
+            }
             result["error"] = json!({
                 "kind": "interrupted",
                 "message": "the timon process running this ended before the run finished",
@@ -178,6 +268,11 @@ impl Store {
             let mut line = entry.clone();
             line["status"] = json!("interrupted");
             line["effects_uncertain"] = json!(uncertain);
+            match provider {
+                Stop::Stopped => line["provider_stopped"] = json!(true),
+                Stop::Unverified => line["provider_may_be_running"] = json!(true),
+                Stop::Gone | Stop::Unknown => {}
+            }
             write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
             settled += 1;
         }

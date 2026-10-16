@@ -16,6 +16,7 @@ use mlua::{
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use crate::budget::Budget;
 use crate::docs::{Func, Module, Opt};
 use crate::error::{self, Error};
 use crate::modules::{GLOBALS_DOC, Installer, fail_function};
@@ -128,8 +129,8 @@ pub(crate) const PHASE_OF: &str = "timon.phase_of";
 /// `scope`, `phase` and the phase reader pass their caller's coroutine, as `spawn` does.
 const PHASE_SOURCE: &str = r##"
 local scope_from, phase_set, phase_get, running = ...
-local function scope(f)
-  return scope_from((running()), f)
+local function scope(f, opts)
+  return scope_from((running()), f, opts)
 end
 local function phase(...)
   if select("#", ...) == 0 then
@@ -218,6 +219,44 @@ struct ScopeInner {
     phase: RefCell<Option<String>>,
     /// The thread running the scope's function, once it has entered.
     body_thread: Cell<Option<usize>>,
+    /// The budget runs inside the scope count against: its own, or the one it was made in.
+    budget: RefCell<Option<Rc<Budget>>>,
+    /// Whether `budget` is the scope's own, to give back unused reserved runs when it ends.
+    own_budget: Cell<bool>,
+}
+
+impl ScopeInner {
+    fn release_budget(&self) {
+        if self.own_budget.get()
+            && let Some(b) = self.budget.borrow().as_ref()
+        {
+            b.release();
+        }
+    }
+}
+
+/// Gives back a scope's unused reserved runs when it ends, however it ends.
+struct ReleaseBudget(Rc<ScopeInner>);
+
+impl Drop for ReleaseBudget {
+    fn drop(&mut self) {
+        self.0.release_budget();
+    }
+}
+
+/// The budget an agent run started from `thread` counts against: its scope's, or the
+/// invocation's when the thread belongs to no scope.
+pub(crate) fn budget_of(lua: &Lua, thread: Option<&mlua::Thread>) -> mlua::Result<Rc<Budget>> {
+    let from_scope = thread.and_then(|t| {
+        let key = thread_key(t);
+        let state = lua.app_data_ref::<State>()?;
+        let scope = state.threads.borrow().get(&key).and_then(Weak::upgrade)?;
+        scope.budget.borrow().clone()
+    });
+    match from_scope {
+        Some(b) => Ok(b),
+        None => crate::budget::invocation(lua),
+    }
 }
 
 impl ScopeInner {
@@ -420,6 +459,7 @@ async fn scope_run(
     args: MultiValue,
 ) -> Result<MultiValue, Value> {
     let notify = changed(lua);
+    let _release = ReleaseBudget(scope.clone());
     let mut guard = ScopeGuard {
         scope: scope.clone(),
         body: None,
@@ -471,7 +511,14 @@ pub(crate) async fn run_root(
     f: Function,
     args: MultiValue,
 ) -> Result<MultiValue, Value> {
-    scope_run(lua, Rc::new(ScopeInner::default()), f, args).await
+    let scope = Rc::new(ScopeInner::default());
+    let budget = crate::budget::invocation(lua).map_err(|e| {
+        error::normalize(lua, Value::Error(Box::new(e)))
+            .map(Value::Table)
+            .unwrap_or(Value::Nil)
+    })?;
+    *scope.budget.borrow_mut() = Some(budget);
+    scope_run(lua, scope, f, args).await
 }
 
 /// A scope, as Lua sees it: `s:spawn(f, ...)`, `s:cancel()`, and `__close` for the
@@ -499,6 +546,7 @@ impl UserData for ScopeHandle {
                     Ok(())
                 };
                 scope.ended.set(true);
+                scope.release_budget();
                 result.map_err(|e| error::raise(&lua, e))
             }
         });
@@ -597,9 +645,30 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     lua.set_named_registry_value(TASK_MAIN, task_main)?;
 
     let scope_from = installer.wrap(lua.create_async_function(
-        |lua, (thread, f): (mlua::Thread, Option<Function>)| async move {
+        |lua, (thread, f, opts): (mlua::Thread, Option<Function>, Option<Table>)| async move {
+            options::check_opt("scope", opts.as_ref())?;
             let inner = Rc::new(ScopeInner::default());
             *inner.phase.borrow_mut() = phase_of_key(&lua, thread_key(&thread));
+            let outer = budget_of(&lua, Some(&thread))?;
+            let own = match &opts {
+                Some(o) => match o.raw_get::<Option<Table>>("budget")? {
+                    Some(b) => Some(Budget::child(
+                        &outer,
+                        b.raw_get::<Option<i64>>("runs")?.map(|n| n.max(0) as u64),
+                        b.raw_get::<Option<f64>>("usd")?,
+                        o.raw_get::<Option<bool>>("reserve")?.unwrap_or(false),
+                    )?),
+                    None if o.raw_get::<Option<bool>>("reserve")? == Some(true) => {
+                        return Err(Error::new("bad_option", "reserve = true needs budget.runs")
+                            .with_hint("scope(fn, { budget = { runs = N }, reserve = true })")
+                            .into());
+                    }
+                    None => None,
+                },
+                None => None,
+            };
+            inner.own_budget.set(own.is_some());
+            *inner.budget.borrow_mut() = Some(own.unwrap_or(outer));
             let handle = lua.create_userdata(ScopeHandle(inner.clone()))?;
             let Some(f) = f else {
                 return Ok(MultiValue::from_iter([Value::UserData(handle)]));

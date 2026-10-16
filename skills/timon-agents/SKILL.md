@@ -190,6 +190,26 @@ Or `limits = { max_runs = 10, max_usd = 5 }` in `init.lua`. A run that would pas
 raises `budget_exceeded` before it starts. Codex reports no cost, so only runs count for it.
 Per run: `budget = { usd = 1, turns = 15 }` (Claude).
 
+A scope can have its own budget, on top of every enclosing one. Runs in the scope and its
+tasks count against all of them, and no Claude run may spend more than the least any of them
+has left:
+
+```lua
+local ok, err = try(scope, function()
+  for i = 1, 3 do agent.run{ prompt = "Reply with OK" } end
+end, { budget = { runs = 2 } })
+return err.kind  -- budget_exceeded, at the third run
+```
+
+`reserve = true` takes the scope's runs from the enclosing budget up front, so a fan-out that
+cannot finish fails before its first run. Unused runs go back when the scope ends:
+
+```lua
+scope(function(s)
+  for i = 1, 3 do s:spawn(agent.run, { prompt = "Answer in one word: what is 2 + " .. i .. "?" }) end
+end, { budget = { runs = 3 }, reserve = true })
+```
+
 ## Past runs
 
 Every run is recorded, with secrets redacted, including cancelled ones. A run whose timon

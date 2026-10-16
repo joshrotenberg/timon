@@ -611,10 +611,20 @@ fn every_run_is_recorded_with_secrets_redacted() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(states.len(), 2, "a running line, then the result");
     assert_eq!(
-        (states[0]["status"].as_str(), states[1]["status"].as_str()),
-        (Some("running"), Some("ok"))
+        states.len(),
+        3,
+        "a running line, the provider's pid, then the result"
+    );
+    let statuses: Vec<&str> = states
+        .iter()
+        .map(|l| l["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["running", "running", "ok"]);
+    assert!(
+        states[1]["provider_pid"].as_u64().is_some(),
+        "{}",
+        states[1]
     );
     assert!(index.contains("[redacted:anthropic]"));
     assert!(!index.contains(secret));
@@ -958,10 +968,48 @@ fn a_killed_timon_leaves_an_interrupted_run() {
     );
     child.kill().unwrap();
     child.wait().unwrap();
-    kill(&std::fs::read_to_string(&pid_file).unwrap(), "-9");
+    let provider = std::fs::read_to_string(&pid_file).unwrap();
+    let alive = |pid: &str| {
+        Command::new("kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    if cfg!(target_os = "linux") {
+        // The kernel stops the provider with timon (die_with_parent), so it is gone before
+        // the next command looks.
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            !alive(&provider)
+        });
+        if !gone {
+            kill(&provider, "-9");
+        }
+        assert!(gone, "the provider outlived timon on Linux");
+        let run = &runs_json(&s)[0];
+        assert_eq!(run["status"], "interrupted");
+        assert_eq!(run["effects_uncertain"], true);
+        return;
+    }
+    assert!(
+        alive(&provider),
+        "the provider outlives a killed timon until the next command"
+    );
+    // The next command settles the run and stops the provider the record names (#63).
     let run = &runs_json(&s)[0];
+    let gone = (0..50).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        !alive(&provider)
+    });
+    if !gone {
+        kill(&provider, "-9");
+    }
+    assert!(gone, "the orphaned provider was not stopped");
     assert_eq!(run["status"], "interrupted");
     assert_eq!(run["effects_uncertain"], true);
+    assert_eq!(run["provider_stopped"], true, "{run}");
     let shown = s.cli(&["runs", "show", run["id"].as_str().unwrap()], &[]);
     let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(shown["result"]["status"], "interrupted");
@@ -1232,5 +1280,148 @@ fn progress_lines_go_to_stderr_when_asked_for() {
         o.stderr.is_empty(),
         "quiet by default when stderr is not a terminal: {}",
         String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[test]
+fn an_unrelated_process_under_a_recorded_pid_is_left_alone() {
+    use std::os::unix::process::CommandExt;
+    let s = Sandbox::new();
+    // A dead timon, and a pid that now belongs to something that is not a provider.
+    let mut gone = Command::new("true").spawn().unwrap();
+    let dead = gone.id();
+    gone.wait().unwrap();
+    let mut other = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let runs = s.root().join("timon/state/runs");
+    std::fs::create_dir_all(runs.join("r_1")).unwrap();
+    std::fs::write(
+        runs.join("index.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({ "id": "r_1", "status": "running", "access": "write", "pid": dead,
+                "started_at": "2026-10-16T00:00:00Z", "provider_pid": other.id(), "provider_pgid": other.id() })
+        ),
+    )
+    .unwrap();
+    let run = &runs_json(&s)[0];
+    let still = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(still, "an unrelated process was signalled");
+    assert_eq!(run["status"], "interrupted");
+    assert_eq!(run["provider_may_be_running"], true, "{run}");
+}
+
+// Nested budgets (#56)
+
+#[test]
+fn a_scope_budget_limits_the_runs_inside_it_and_its_tasks() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "10",
+            "eval",
+            "local ok, err = try(scope, function()
+               agent.run{ prompt = '1' }
+               scope(function() agent.run{ prompt = '2' } end)
+               agent.run{ prompt = '3' }
+             end, { budget = { runs = 2 } })
+             local spawned = try(scope, function(sc)
+               for i = 1, 3 do sc:spawn(agent.run, { prompt = 'task ' .. i }) end
+             end, { budget = { runs = 2 } })
+             return { kind = err.kind, message = err.message, hint = err.hint,
+                      spawned = spawned, after = agent.run{ prompt = 'after' }.status }",
+        ],
+        &[],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["kind"], "budget_exceeded", "{r}");
+    assert_eq!(
+        r["message"],
+        "the scope's budget has started 2 runs; the limit is 2"
+    );
+    assert_eq!(r["hint"], "raise budget.runs on the scope");
+    assert_eq!(r["spawned"], false, "a third spawned run fails its scope");
+    assert_eq!(
+        r["after"], "ok",
+        "outside the scope only the invocation's limit applies"
+    );
+    let started = runs_json(&s).as_array().unwrap().len();
+    assert_eq!(started, 5, "2 in the first scope, 2 spawned, 1 after");
+}
+
+#[test]
+fn a_claude_run_may_spend_only_what_every_budget_has_left() {
+    let s = Sandbox::new();
+    let o = s.timon(
+        "local ok, err = try(scope, function()
+           for i = 1, 3 do agent.run{ prompt = 'x' } end
+         end, { budget = { usd = 0.02 } })
+         return err.message",
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout).trim(),
+        "the scope's budget has spent $0.0250; the limit is $0.02"
+    );
+    assert!(has_pair(&s.args("claude", 0), "--max-budget-usd", "0.02"));
+    assert!(
+        has_pair(&s.args("claude", 1), "--max-budget-usd", "0.0075"),
+        "{:?}",
+        s.args("claude", 1)
+    );
+}
+
+#[test]
+fn reserve_fails_before_the_first_run_and_gives_back_what_it_did_not_use() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "3",
+            "eval",
+            "local started = false
+             local ok, err = try(scope, function() started = true end,
+               { budget = { runs = 5 }, reserve = true })
+             return { message = err.message, started = started }",
+        ],
+        &[],
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(
+        r["message"],
+        "the scope reserves 5 runs, and this invocation has 3 left"
+    );
+    assert_eq!(r["started"], false);
+
+    let o = s.cli(
+        &[
+            "--max-runs",
+            "3",
+            "eval",
+            "scope(function() agent.run{ prompt = 'in' } end, { budget = { runs = 2 }, reserve = true })
+             agent.run{ prompt = 'out 1' }
+             agent.run{ prompt = 'out 2' }
+             local ok, err = try(agent.run, { prompt = 'out 3' })
+             return err.message",
+        ],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout).trim(),
+        "this invocation has started 3 runs; the limit is 3",
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+
+    let o = s.timon("scope(function() end, { reserve = true })", &[]);
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("bad_option: reserve = true needs budget.runs")
     );
 }
