@@ -74,11 +74,22 @@ enum Command {
     },
     /// List the tasks in reach: tasks.lua and scripts/, in the user and project layers
     Tasks {
-        /// Include private tasks
+        /// Include private tasks and timon's own commands
         #[arg(long)]
         all: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Print a shell completion script for bash, zsh or fish
+    Completions {
+        #[arg(value_parser = ["bash", "zsh", "fish"])]
+        shell: String,
+    },
+    /// Completion candidates for the words after timon; the completion scripts call it
+    #[command(name = "__complete", hide = true)]
+    Complete {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        words: Vec<String>,
     },
     /// List the scripts in reach
     Scripts {
@@ -404,9 +415,14 @@ async fn run(cli: Cli) -> ExitCode {
             return runs(&layers, command, since, limit, json);
         }
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
+        Command::Completions { shell } => {
+            print!("{}", timon::complete::script(&shell).unwrap_or_default());
+            return ExitCode::SUCCESS;
+        }
         Command::Eval { .. }
         | Command::Task { .. }
         | Command::Tasks { .. }
+        | Command::Complete { .. }
         | Command::Script(_)
         | Command::Agent(_)
         | Command::Sessions(_) => {}
@@ -428,6 +444,7 @@ async fn run(cli: Cli) -> ExitCode {
     let command = match cli.command {
         Command::Sessions(command) => return sessions(&rt, command).await,
         Command::Tasks { all, json } => return tasks(&rt, &layers, all, json),
+        Command::Complete { words } => return complete(&rt, &layers, words),
         command => command,
     };
     let result = match command {
@@ -440,6 +457,8 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
         Command::Scripts { .. }
         | Command::Tasks { .. }
+        | Command::Completions { .. }
+        | Command::Complete { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)
@@ -547,6 +566,19 @@ async fn external(
     }
 }
 
+/// Completion candidates, one per line. Nothing is printed for a tasks file that fails to load.
+fn complete(rt: &Runtime, layers: &Layers, words: Vec<String>) -> ExitCode {
+    let words: Vec<String> = match words.first().map(String::as_str) {
+        Some("--") => words[1..].to_vec(),
+        _ => words,
+    };
+    let catalog = catalog(rt, layers).ok();
+    for candidate in timon::complete::complete(&Cli::command(), catalog.as_deref(), &words) {
+        println!("{candidate}");
+    }
+    ExitCode::SUCCESS
+}
+
 /// A script path rather than a task name: it has a .lua or .fnl extension or a directory.
 fn is_path(path: &Path) -> bool {
     path.extension()
@@ -559,10 +591,18 @@ fn tasks(rt: &Runtime, layers: &Layers, all: bool, json: bool) -> ExitCode {
         Ok(catalog) => catalog,
         Err(failure) => return fail(&failure),
     };
+    let root = Cli::command();
     if json {
-        println!("{}", catalog.to_json(all));
+        let mut list = catalog.to_json(all);
+        if all && let serde_json::Value::Array(items) = &mut list {
+            items.extend(timon::complete::builtins(&root));
+        }
+        println!("{list}");
     } else {
-        print!("{}", catalog.listing(all));
+        print!(
+            "{}",
+            catalog.listing(all, &timon::complete::top_level(&root))
+        );
     }
     if let Some(note) = catalog.untrusted_note() {
         eprintln!("{note}");

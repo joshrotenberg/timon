@@ -60,7 +60,8 @@ return {
 ```
 
 ```sh
-timon tasks                   # name, layer, description, by group; --all adds private tasks
+timon tasks                   # name, layer, description, by group
+timon tasks --all --json      # with private tasks and timon's own commands, options typed
 timon check                   # fmt, lint and test, then check; the first failure stops it
 timon -j 3 check              # fmt, lint and test at the same time, output prefixed by task
 timon c                       # an alias
@@ -102,7 +103,10 @@ timon --yes drop-db           # answers its confirm question
 - A project's tasks replace yours by name, and load only after a person reviews the project and
   runs `timon trust`. Do not trust a project on someone's behalf.
 - timon's own commands take precedence over a task's name. `timon tasks` marks such a task, and
-  `timon task NAME` runs it.
+  `timon task NAME` runs it. `timon tasks --all --json` describes timon's commands the way it
+  describes tasks: name, description and options with their types.
+- Shell completion covers commands, tasks, flags and choices: `eval "$(timon completions zsh)"`
+  (or `bash`), or `timon completions fish | source`.
 - A script in `scripts/` is a task whose description is its leading comment; it gets its words
   in `arg` and `...`, and can parse them with `cli.parse(arg, options)`. Declare dependencies,
   aliases and the other fields in `tasks.lua`.

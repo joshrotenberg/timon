@@ -18,8 +18,8 @@ Design: [docs/design.md](docs/design.md).
 | 3 | `sessions`: list, read, search and summarize every session | done |
 | 4 | Toolbox: `sh` and `proc` | done |
 | 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
-| 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks | in progress |
-| 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | planned |
+| 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
+| 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | next |
 | 8 | Workflow patterns | planned |
 | 9 | MCP client and server | planned |
 
@@ -77,6 +77,7 @@ return {
 timon tasks                                # the tasks in reach, with descriptions
 timon check                                # test, then check; the first failure stops it
 timon test -- --nocapture                  # words after -- go to the task
+eval "$(timon completions zsh)"            # completion for commands, tasks and their flags
 ```
 
 Errors are tables with a kind, a message and a hint; `try(f, ...)` returns `true, ...` or
