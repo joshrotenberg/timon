@@ -31,11 +31,11 @@ const GLUE: &str = r#"
 local normalize, handler = ...
 local pack, unpack, pcall, xpcall, error = table.pack, table.unpack, pcall, xpcall, error
 
-local function wrap(f)
+local function wrap(f, name)
   return function(...)
     local r = pack(pcall(f, ...))
     if r[1] then return unpack(r, 2, r.n) end
-    error(normalize(r[2]), 2)
+    error(normalize(r[2], name), 2)
   end
 end
 
@@ -71,7 +71,9 @@ impl Runtime {
     fn build() -> mlua::Result<Self> {
         let lua = Lua::new();
         error::install(&lua)?;
-        let normalize = lua.create_function(|lua, value: Value| error::normalize(lua, value))?;
+        let normalize = lua.create_function(|lua, (value, name): (Value, Option<String>)| {
+            error::normalize_in(lua, value, name.as_deref())
+        })?;
         let handler = lua.create_function(|lua, value: Value| {
             let err = error::normalize(lua, value)?;
             if err.raw_get::<Value>("traceback")?.is_nil() {
@@ -172,6 +174,12 @@ impl Runtime {
     /// Wraps a host function so its errors reach Lua code as error tables.
     pub fn host_function(&self, f: Function) -> mlua::Result<Function> {
         self.wrap.call(f)
+    }
+
+    /// [`Runtime::host_function`] for a built-in with a name, which its bad argument errors
+    /// give: `json.decode: argument 1 must be a string, not nil`.
+    pub(crate) fn named_host_function(&self, f: Function, name: &str) -> mlua::Result<Function> {
+        self.wrap.call((f, name))
     }
 
     /// Compiles user code under strict globals.

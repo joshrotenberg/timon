@@ -108,7 +108,7 @@ local type = type
 return function(f, ...)
   if type(f) ~= "function" then
     error(fail("bad_argument",
-      "bad argument #1 to spawn: expected a function, got a " .. type(f)), 2)
+      "spawn: argument 1 must be a function, not " .. type(f)), 2)
   end
   return spawn_from((running()), f, ...)
 end

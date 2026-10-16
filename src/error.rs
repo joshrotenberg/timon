@@ -67,10 +67,15 @@ impl Error {
 
     /// Converts any mlua error, unwrapping callback and context layers to the cause.
     pub fn from_lua(err: &mlua::Error) -> Self {
+        Self::from_lua_in(err, None)
+    }
+
+    /// [`Error::from_lua`] for an error raised by `function`, which a bad argument names.
+    pub fn from_lua_in(err: &mlua::Error, function: Option<&str>) -> Self {
         match err {
-            mlua::Error::CallbackError { cause, .. } => Self::from_lua(cause),
+            mlua::Error::CallbackError { cause, .. } => Self::from_lua_in(cause, function),
             mlua::Error::WithContext { context, cause } => {
-                let mut inner = Self::from_lua(cause);
+                let mut inner = Self::from_lua_in(cause, function);
                 inner.message = format!("{context}: {}", inner.message);
                 inner
             }
@@ -81,12 +86,60 @@ impl Error {
             mlua::Error::RuntimeError(message) => Self::new("lua", message.clone()),
             mlua::Error::SyntaxError { message, .. } => Self::new("syntax", message.clone()),
             mlua::Error::MemoryError(message) => Self::new("memory", message.clone()),
-            mlua::Error::BadArgument { .. } | mlua::Error::FromLuaConversionError { .. } => {
-                Self::new("bad_argument", err.to_string())
+            mlua::Error::BadArgument {
+                to,
+                pos,
+                name,
+                cause,
+            } => {
+                let function = function.or(to.as_deref());
+                let what = match name {
+                    Some(name) => format!("argument {pos} ({name})"),
+                    None => format!("argument {pos}"),
+                };
+                let problem = match cause.as_ref() {
+                    mlua::Error::FromLuaConversionError { from, to, message } => {
+                        conversion(from, to, message.as_deref())
+                    }
+                    other => Self::from_lua_in(other, None).message,
+                };
+                let message = match function {
+                    Some(f) => format!("{f}: {what} {problem}"),
+                    None => format!("{what} {problem}"),
+                };
+                Self::new("bad_argument", message)
+            }
+            mlua::Error::FromLuaConversionError { from, to, message } => {
+                let problem = conversion(from, to, message.as_deref());
+                let message = match function {
+                    Some(f) => format!("{f}: a value {problem}"),
+                    None => format!("a value {problem}"),
+                };
+                Self::new("bad_argument", message)
             }
             other => Self::new("lua", other.to_string()),
         }
     }
+}
+
+/// What a failed conversion wanted, as a person would say it: `must be a string, not nil`.
+fn conversion(from: &str, to: &str, message: Option<&str>) -> String {
+    let wanted = match to.to_ascii_lowercase().as_str() {
+        "string" | "bstring" | "str" | "std::string::string" => "a string",
+        "integer" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
+        | "usize" => "an integer",
+        "number" | "f32" | "f64" => "a number",
+        "table" => "a table",
+        "function" => "a function",
+        "boolean" | "bool" => "a boolean",
+        _ => {
+            return match message {
+                Some(m) => format!("must be {to}, not {from} ({m})"),
+                None => format!("must be {to}, not {from}"),
+            };
+        }
+    };
+    format!("must be {wanted}, not {from}")
 }
 
 impl fmt::Display for Error {
@@ -187,6 +240,11 @@ pub(crate) fn to_table(lua: &Lua, err: &Error) -> mlua::Result<Table> {
 /// A table with a string `kind` is already an error and only gains the metatable. Rust errors,
 /// strings and other values become `{ kind, message }`; a table without a kind is kept as `data`.
 pub(crate) fn normalize(lua: &Lua, value: Value) -> mlua::Result<Table> {
+    normalize_in(lua, value, None)
+}
+
+/// [`normalize`] for an error raised by the built-in `function`, which a bad argument names.
+pub(crate) fn normalize_in(lua: &Lua, value: Value, function: Option<&str>) -> mlua::Result<Table> {
     match value {
         Value::Table(t) => {
             if let Value::String(kind) = t.raw_get::<Value>("kind")? {
@@ -205,7 +263,7 @@ pub(crate) fn normalize(lua: &Lua, value: Value) -> mlua::Result<Table> {
         }
         Value::Error(err) => match take_raised(lua, &err)? {
             Some(original) => normalize(lua, original),
-            None => to_table(lua, &Error::from_lua(&err)),
+            None => to_table(lua, &Error::from_lua_in(&err, function)),
         },
         Value::String(s) => to_table(lua, &Error::new("lua", s.to_string_lossy())),
         Value::Nil => to_table(lua, &Error::new("lua", "nil raised as an error")),
@@ -306,6 +364,30 @@ pub(crate) fn from_table(t: &Table) -> Error {
 
 #[cfg(test)]
 mod tests {
+    // mlua's BadArgument holds its cause in an Arc, whatever the error type's Send-ness.
+    #[allow(clippy::arc_with_non_send_sync)]
+    #[test]
+    fn a_bad_argument_names_the_function_and_what_it_wanted() {
+        let err = mlua::Error::BadArgument {
+            to: None,
+            pos: 2,
+            name: None,
+            cause: std::sync::Arc::new(mlua::Error::FromLuaConversionError {
+                from: "nil",
+                to: "i64".into(),
+                message: None,
+            }),
+        };
+        assert_eq!(
+            Error::from_lua_in(&err, Some("sleep")).message,
+            "sleep: argument 2 must be an integer, not nil"
+        );
+        assert_eq!(
+            Error::from_lua(&err).message,
+            "argument 2 must be an integer, not nil"
+        );
+    }
+
     use super::*;
 
     #[test]

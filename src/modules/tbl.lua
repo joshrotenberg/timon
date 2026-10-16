@@ -6,7 +6,7 @@ local type, ipairs, pairs, select, tostring, sort = type, ipairs, pairs, select,
 local function want(name, value, kind, pos)
   if type(value) ~= kind then
     error(fail("bad_argument",
-      ("bad argument #%d to %s: expected a %s, got a %s"):format(pos, name, kind, type(value))), 3)
+      ("%s: argument %d must be a %s, not %s"):format(name, pos, kind, type(value))), 3)
   end
 end
 

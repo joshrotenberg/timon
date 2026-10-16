@@ -215,12 +215,41 @@ fn tbl_merges_and_picks() {
 }
 
 #[test]
+fn bad_arguments_name_the_function() {
+    for (code, message) in [
+        (
+            "json.decode(nil)",
+            "json.decode: argument 1 must be a string, not nil",
+        ),
+        (
+            "fs.read(nil)",
+            "fs.read: argument 1 must be a string, not nil",
+        ),
+        (
+            "sessions.list(5)",
+            "sessions.list: argument 1 must be a table, not integer",
+        ),
+        (
+            "json.encode(1, 2)",
+            "json.encode: argument 2 must be a table, not integer",
+        ),
+    ] {
+        let err = fails(code);
+        assert_eq!(
+            (err.kind.as_str(), err.message.as_str()),
+            ("bad_argument", message),
+            "{code}"
+        );
+    }
+}
+
+#[test]
 fn tbl_argument_errors_are_tables() {
     let err = fails("tbl.map('nope', print)");
     assert_eq!(err.kind, "bad_argument");
     assert_eq!(
         err.message,
-        "bad argument #1 to tbl.map: expected a table, got a string"
+        "tbl.map: argument 1 must be a table, not string"
     );
 }
 
