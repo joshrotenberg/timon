@@ -16,10 +16,36 @@ pub enum Mode {
     Strict,
 }
 
+/// Metatable `__name` of tables marked as JSON arrays (`json.array`, decoded arrays).
+pub(crate) const ARRAY_NAME: &str = "timon.json.array";
+/// Metatable `__name` of tables marked as JSON objects (`json.object`, decoded objects).
+pub(crate) const OBJECT_NAME: &str = "timon.json.object";
+/// Metatable `__name` of the `json.null` sentinel.
+pub(crate) const NULL_NAME: &str = "timon.json.null";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Array,
+    Object,
+    Null,
+}
+
+fn marker(t: &Table) -> Option<Marker> {
+    let name: Option<String> = t.metatable()?.raw_get("__name").ok()?;
+    match name.as_deref()? {
+        ARRAY_NAME => Some(Marker::Array),
+        OBJECT_NAME => Some(Marker::Object),
+        NULL_NAME => Some(Marker::Null),
+        _ => None,
+    }
+}
+
 /// Converts a Lua value to JSON.
 ///
 /// A table whose keys are exactly `1..n` with `n > 0` is an array; any other table is an object
-/// with its keys as strings, sorted. `nil` is `null`.
+/// with its keys as strings, sorted. Tables marked by `json.array` or `json.object` keep that
+/// shape even when empty. `nil` and `json.null` are `null`. In strict mode, a table whose keys
+/// are positive integers with a gap is an error rather than an object.
 pub fn to_json(value: &Value, mode: Mode) -> Result<serde_json::Value, Error> {
     convert(value, mode, 0)
 }
@@ -46,18 +72,45 @@ fn convert(value: &Value, mode: Mode, depth: usize) -> Result<serde_json::Value,
 }
 
 fn table(t: &Table, mode: Mode, depth: usize) -> Result<serde_json::Value, Error> {
-    let len = t.raw_len();
+    let marked = marker(t);
+    if marked == Some(Marker::Null) {
+        return Ok(serde_json::Value::Null);
+    }
     let mut entries = Vec::new();
     for pair in t.pairs::<Value, Value>() {
         entries.push(pair.map_err(Error::from)?);
     }
-    let is_array = len > 0
-        && entries.len() == len
+    let n = entries.len();
+    let positive_ints = entries
+        .iter()
+        .all(|(k, _)| matches!(k, Value::Integer(i) if *i >= 1));
+    let sequence = positive_ints
         && entries
             .iter()
-            .all(|(k, _)| matches!(k, Value::Integer(i) if *i >= 1 && (*i as usize) <= len));
-    if is_array {
-        let mut items = vec![serde_json::Value::Null; len];
+            .all(|(k, _)| matches!(k, Value::Integer(i) if (*i as usize) <= n));
+    let as_array = match marked {
+        Some(Marker::Array) => sequence || mode == Mode::Strict,
+        Some(Marker::Object) => false,
+        _ => n > 0 && sequence,
+    };
+    if mode == Mode::Strict && positive_ints && !sequence && (n > 0) {
+        let first_gap = (1..=n as i64)
+            .find(|i| !entries.iter().any(|(k, _)| *k == Value::Integer(*i)))
+            .unwrap_or(1);
+        return Err(Error::new(
+            "not_json",
+            format!("an array has a hole at index {first_gap}"),
+        )
+        .with_hint("use json.null for a missing element, or string keys for an object"));
+    }
+    if as_array {
+        if !sequence {
+            return Err(Error::new(
+                "not_json",
+                "a table marked with json.array has keys that are not 1..n",
+            ));
+        }
+        let mut items = vec![serde_json::Value::Null; n];
         for (k, v) in &entries {
             if let Value::Integer(i) = k {
                 items[(*i - 1) as usize] = convert(v, mode, depth + 1)?;
@@ -163,9 +216,10 @@ mod tests {
         );
         let v = eval(&lua, "return { [1] = 'a', [3] = 'c' }");
         assert_eq!(
-            to_json(&v, Mode::Strict).unwrap(),
+            to_json(&v, Mode::Display).unwrap(),
             serde_json::json!({ "1": "a", "3": "c" })
         );
+        assert_eq!(to_json(&v, Mode::Strict).unwrap_err().kind, "not_json");
     }
 
     #[test]

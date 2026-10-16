@@ -113,3 +113,26 @@ fn version_prints_the_package_version() {
         format!("timon {}\n", env!("CARGO_PKG_VERSION"))
     );
 }
+
+#[test]
+fn log_and_pp_write_to_stderr_and_leave_stdout_as_data() {
+    let output = timon(
+        &[
+            "eval",
+            "log.info('reviewing', 2, 'PRs', { 12, 14 }); local x = pp({ a = 1 }); return x.a",
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "1\n");
+    assert_eq!(
+        stderr(&output),
+        "info: reviewing 2 PRs [12,14]\n{\n  \"a\": 1\n}\n"
+    );
+}
+
+#[test]
+fn help_prints_through_eval() {
+    let output = timon(&["eval", "help(str.split)"], None);
+    assert!(stdout(&output).starts_with("str.split(s, sep) -> array\n"));
+}

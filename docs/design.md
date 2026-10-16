@@ -97,7 +97,8 @@ These hold for every module, so an agent that has used one module can guess the 
   closest known key, so a typo fails before a paid run starts:
 
   ```
-  bad_option: unknown option "promt" to agent.run; did you mean "prompt"?
+  timon: bad_option: unknown option "promt" to agent.run
+    hint: did you mean "prompt"?
   ```
 
   A value of the wrong type raises with the expected type. Definition files (`agents/*.lua` and
@@ -108,8 +109,8 @@ These hold for every module, so an agent that has used one module can guess the 
   one without raising.
 - **Everything is cancellable.** Any call that waits can be cancelled from outside, and a
   cancelled call raises `cancelled`.
-- **Documented at run time.** `help(agent)` lists a module and `help(agent.run)` prints one
-  function's signature, options and an example. The option declarations behind strict options
+- **Documented at run time.** `help(agent)` describes a module and `help(agent.run)` one
+  function's signature, options and an example, as text; `help("agent.run")` works too. The option declarations behind strict options
   are the same source, and they also generate the LuaLS stubs and the reference sections of the
   skills, so the checks, the help, the stubs and the skills cannot drift apart.
 
