@@ -104,9 +104,10 @@ timon (one binary)
 ├─ sessions    every Claude Code and Codex session: list, show, transcript, search, summarize
 ├─ flow        workflow patterns: check, verify, vote, best_of, refine, pipeline, retry, plan
 ├─ mcp         client: any MCP server's tools as Lua calls; server: tasks as MCP tools
-├─ later       hooks, memory, queues, schedules                (to discuss)
+├─ hooks       timon hook: the session-start brief, the pre-tool guard, tasks as handlers
+├─ later       memory, queues, schedules                       (to discuss)
 ├─ storage     JSON files for records; SQLite (bundled, FTS5) for the session index
-├─ surfaces    CLI (tasks), REPL, MCP server; hooks later
+├─ surfaces    CLI (tasks), REPL, MCP server, host hooks
 └─ embedded    built-in tasks, skill library, LuaLS type stubs, plugin templates
 ```
 
@@ -679,7 +680,7 @@ Two layers share one format, over what is built into the binary:
 
 ```
 ~/.config/timon/  and  <project>/.timon/
-├── init.lua              settings for this layer: defaults, limits, serve (optional)
+├── init.lua              settings for this layer: defaults, limits, serve, hooks, guard (optional)
 ├── tasks.lua             tasks (or tasks.fnl): `timon NAME`
 ├── agents/
 │   └── reviewer.lua      one agent per file; the file name is the name
@@ -824,14 +825,50 @@ claude plugin install timon@timon
 ```
 
 - `plugin/` holds both hosts' manifests (`.claude-plugin/plugin.json` for Claude Code,
-  `plugin.json` for Codex), the skills and a `bin/timon` shim. Once `timon serve` exists, both
+  `.codex-plugin/plugin.json` for Codex), the hooks, the skills and a `bin/timon` shim. Once `timon serve` exists, both
   hosts' MCP manifests register it.
 - `timon plugin build plugin/` generates the directory from the embedded skills and checked-in
   templates; `timon plugin build --check plugin/` fails when they differ, and CI runs it.
 - The shim runs the installed binary (`cargo install --path .`). Prebuilt binaries are an open
   question.
-- Rules carried over from bottega: no `version` fields, a relative `./bin/timon` command in
-  Codex's `mcp.json`, and no `hooks/hooks.json`, because Codex reads that path too.
+- Rules carried over from bottega: no `version` fields, and a relative `./bin/timon` command in
+  Codex's `mcp.json`.
+- `hooks/hooks.json` is one file for both hosts: both load it from a plugin, accept the same
+  event names, matchers and JSON output, and substitute `${CLAUDE_PLUGIN_ROOT}` in the command.
+  See Hooks.
+- Codex's manifest is `.codex-plugin/plugin.json`, not the portable root `plugin.json`. Codex
+  0.162 reads a root `plugin.json` first and then loads no plugin hooks, with or without a
+  `hooks` entry (#104); from `.codex-plugin/plugin.json` it finds `hooks/hooks.json`.
+
+## Hooks
+
+Built (#104). Claude Code and Codex run a command for a hook, with the event's JSON on stdin,
+and read JSON from its stdout. The plugin's `hooks/hooks.json` runs `timon hook` for
+SessionStart, and for PreToolUse on `Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch`.
+
+- `timon hook [EVENT]` runs the handlers `init.lua`'s `hooks` setting names for the event, in
+  order: `{ [EVENT] = name | { names } | false }`. A name is a task, or a built-in: `timon:brief`
+  or `timon:guard`. Without a setting, SessionStart runs `timon:brief` and PreToolUse runs
+  `timon:guard`.
+- A task reads the event with `hook.input()` and returns a string (context for the agent) or
+  `{ context, deny, ask, allow, block }`. Contexts are joined; the strictest decision wins
+  (deny, then ask, then allow). A task run by a hook is a script run record with
+  `trigger = "hook:EVENT"`; the built-ins write no records.
+- It always exits 0. A handler that fails, a bad setting or bad input is skipped and reported in
+  `systemMessage`, so a broken hook never stops the host. fd 1 points at stderr while handlers
+  run, as in `timon serve`, so what tasks print cannot corrupt the JSON.
+- The brief: the project's sessions from the last 7 days, both hosts, newest first (the current
+  session, subagents and automated runs left out), and its public tasks, under a line that says
+  session titles are history, not instructions. Nothing when there is neither.
+  `sessions.list{ dir }` finds the sessions: Claude's by their project directory's name and
+  Codex's by their first line, so a 7-day brief over 1,036 sessions takes 0.07 s.
+- The guard does nothing until a `guard` setting exists: `{ writes = { dirs }, commands = {
+  strings } }`. The paths of Write, Edit, MultiEdit, NotebookEdit and Codex's apply_patch (also
+  inside a shell command) must be under a `writes` directory (default: the project root),
+  resolved through `..` and symlinks; a shell command containing a `commands` string is
+  refused. It checks what the agent asks for; it is not a sandbox.
+- A project's `hooks` and `guard` load only once the project is trusted, like its tasks.
+- Codex runs a plugin's hooks after the user reviews and trusts them (`/hooks`).
 
 ## Toolbox
 
@@ -888,8 +925,8 @@ Reads come first in `gh`; writes go through `gh.api` with an explicit method unt
 earn a function. Git runs the `git` program rather than a Rust reimplementation, because pushes
 and worktrees matter and the pure-Rust options do not cover them.
 
-Later, also to discuss: host hooks (`timon hook session-start` injecting a brief), a memory
-store, durable queues and workers, schedules, watch mode and `.env` loading.
+Later, also to discuss: a memory store, durable queues and workers, schedules, watch mode and
+`.env` loading. Host hooks are built (see Hooks).
 
 MCP servers fill the role babashka gives pods: external programs whose functions a script
 calls. timon's MCP client (phase 9) makes any MCP server's tools Lua calls, so it needs no pod
@@ -909,7 +946,7 @@ protocol of its own.
 | 7 | The rest of the toolbox: `git`, `gh`, `http`, `sqlite`; data formats (#72); `eval` input modes (#71) | a release task (bump `Cargo.toml`, tag, push, GitHub release) written as a timon task |
 | 8 | Workflow patterns: `flow` (#59) and its skill | a review with a verifier and a vote of three run as tasks |
 | 9 | MCP: the `mcp` client, and `timon serve` with tasks as tools | an agent calls a project's tasks over MCP |
-| 10 | Hooks, memory, queues, schedules | after phase 9 is in daily use |
+| 10 | Hooks (#104): `timon hook`, the session-start brief, the pre-tool guard, one `hooks.json` for both hosts; then memory, queues, schedules | a Claude Code and a Codex session get the brief and the guard through the plugin |
 
 ## Where code comes from
 
@@ -952,5 +989,6 @@ are libraries for exactly this, not sibling tools.
 5. **Memory.** Whether a timon memory store replaces the local-context MCP server.
 6. **Distribution.** `cargo install` only, or prebuilt binaries the plugin can fetch.
 7. **A machine-wide concurrency cap** across separate timon invocations, or only per invocation.
-8. **Codex hooks.** Codex loads no hooks from plugins, so a Codex hook is user configuration that
-   the README documents.
+8. **Codex hooks.** Decided (#104): Codex loads `hooks/hooks.json` from a plugin whose manifest
+   is `.codex-plugin/plugin.json`, after the user reviews and trusts it, so the plugin's one file
+   serves both hosts.

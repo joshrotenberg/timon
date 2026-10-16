@@ -24,13 +24,14 @@ pub const DOC: Module = Module {
     functions: &[
         Func::new(
             "list",
-            "sessions.list{ backend, project, since, limit, subagents, automated } -> { sessions, hidden }",
+            "sessions.list{ backend, project, dir, since, limit, subagents, automated } -> { sessions, hidden }",
             "Sessions newest first, each with id, backend, title, snippet, project, modified, origin, pull_requests and resumable. Subagents and automated sessions (claude -p, codex exec, and runs timon started) are left out unless asked for, and counted in hidden.",
             "local found = sessions.list{ project = \"timon\", since = \"2d\", limit = 5 }\nfor _, s in ipairs(found.sessions) do print(s.id, s.title or s.snippet) end",
         )
         .with_options(&[
             Opt::new("backend", "\"claude\" | \"codex\"", "only this backend (default: both)"),
             Opt::new("project", "string", "part of the session's directory"),
+            Opt::new("dir", "string", "only sessions that ran in this directory or below it; faster than project"),
             Opt::new("since", "string | number", "a duration back (\"2d\"), a date, or an RFC 3339 time"),
             Opt::new("limit", "integer", "most sessions to return (default 20)"),
             Opt::new("subagents", "boolean", "include sessions another session started"),
@@ -273,6 +274,11 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             };
             if let Some(o) = &opts {
                 list.project = o.raw_get("project")?;
+                list.dir = o
+                    .raw_get::<Option<String>>("dir")?
+                    .map(|d| std::path::absolute(&d))
+                    .transpose()
+                    .map_err(|e| Error::new("io", format!("sessions.list: dir: {e}")))?;
                 list.since = since_opt(&o.raw_get::<Value>("since")?)?;
                 if let Some(n) = o.raw_get::<Option<i64>>("limit")? {
                     list.limit = n.max(0) as usize;

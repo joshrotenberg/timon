@@ -1190,6 +1190,8 @@ fn live_3_namer_returns_naming_findings() {
 #[derive(Debug, Default)]
 struct HostRun {
     commands: Vec<String>,
+    /// The text of every tool result, Claude only.
+    results: Vec<String>,
     /// Every tool call: its name and input.
     tools: Vec<(String, serde_json::Value)>,
     denied: Vec<String>,
@@ -1314,6 +1316,16 @@ impl Live {
                         if b["name"] == "Bash" {
                             run.commands
                                 .push(b["input"]["command"].as_str().unwrap_or("").to_owned());
+                        }
+                    }
+                }
+                Some("user") => {
+                    for b in e["message"]["content"].as_array().into_iter().flatten() {
+                        if b["type"] == "tool_result" {
+                            run.results.push(match &b["content"] {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            });
                         }
                     }
                 }
@@ -1902,4 +1914,182 @@ fn live_8_a_review_with_a_verifier_and_a_vote_of_three() {
         "the vote stops at a quorum of 2: {decide}"
     );
     live.costs("flow");
+}
+
+/// A trusted project with two tasks and a guard, for the hook checks. Returns a path outside
+/// it and a `TIMON_BIN` that logs each call to `hook.log` before running timon.
+fn hooks_project(live: &Live) -> (PathBuf, PathBuf) {
+    live.write(
+        ".timon/tasks.lua",
+        "return {\n  lint = { description = \"Lint the scratch files\", run = \"true\" },\n  ship = { description = \"Ship the release notes\", run = \"true\" },\n}\n",
+    );
+    live.write(
+        ".timon/init.lua",
+        "return { guard = { commands = { \"git push --force\" } } }\n",
+    );
+    live.commit("tasks and a guard");
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+    let bin = live.empty_dir("bin").join("timon-logged");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {}\nexec {} \"$@\"\n",
+            live.dir.path().join("hook.log").display(),
+            env!("CARGO_BIN_EXE_timon")
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (live.dir.path().join("outside.txt"), bin)
+}
+
+fn hooks_prompt(outside: &Path, tool: &str) -> String {
+    format!(
+        "Do two things. 1) If your context has a timon brief, list the task names it gives, exactly. 2) Create the file {} containing the word x with your file editing tool ({tool}). Do not try any other way if it is refused. Then report what happened to the edit, quoting any reason you were given.",
+        outside.display()
+    )
+}
+
+fn hook_calls(live: &Live) -> usize {
+    std::fs::read_to_string(live.dir.path().join("hook.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("hook"))
+        .count()
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_10_claude_gets_the_brief_and_the_guard() {
+    require_live!();
+    let live = Live::new();
+    let (outside, bin) = hooks_project(&live);
+    let run = live.claude_host_custom(
+        &hooks_prompt(&outside, "Write"),
+        true,
+        r#"{"mcpServers":{}}"#,
+        &["Bash(timon:*)".to_owned(), "Write".to_owned()],
+        &[("TIMON_BIN", &bin)],
+    );
+    run.print("live_10 claude");
+    assert!(
+        hook_calls(&live) >= 2,
+        "SessionStart and PreToolUse ran timon hook"
+    );
+    assert!(
+        run.text.contains("lint") && run.text.contains("ship"),
+        "the brief reached the model: {}",
+        run.text
+    );
+    assert!(
+        run.tools.iter().any(|(n, _)| n == "Write"),
+        "it tried the write"
+    );
+    assert!(
+        run.results.iter().any(|r| r.contains("timon guard:")),
+        "the guard refused it: {:?}",
+        run.results
+    );
+    assert!(!outside.exists());
+}
+
+impl Live {
+    /// Runs `codex exec` with timon's plugin installed from this checkout into a sandbox
+    /// `CODEX_HOME` whose login is a link to the real one. Hooks run without the `/hooks`
+    /// review, which a person gives once.
+    fn codex_plugin_host(&self, prompt: &str, env: &[(&str, &Path)]) -> HostRun {
+        let home = self.empty_dir("codex-home");
+        let real = Path::new(&std::env::var("HOME").unwrap()).join(".codex/auth.json");
+        if !home.join("auth.json").exists() {
+            std::os::unix::fs::symlink(real, home.join("auth.json")).unwrap();
+        }
+        let repo = env!("CARGO_MANIFEST_DIR");
+        for args in [
+            &["plugin", "marketplace", "add", repo][..],
+            &["plugin", "add", "timon@timon"],
+        ] {
+            let o = self
+                .command("codex")
+                .args(args)
+                .env("CODEX_HOME", &home)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "codex {args:?}: {}", err(&o));
+        }
+        let o = self
+            .command("codex")
+            .args([
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "--ephemeral",
+                "--dangerously-bypass-hook-trust",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                prompt,
+            ])
+            .env("CODEX_HOME", &home)
+            .envs(env.iter().map(|(k, v)| (*k, *v)))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let mut run = HostRun::default();
+        for line in out(&o).lines() {
+            let Ok(e) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let item = &e["item"];
+            if e["type"] != "item.completed" {
+                continue;
+            }
+            match item["type"].as_str() {
+                Some("command_execution") => {
+                    run.commands
+                        .push(item["command"].as_str().unwrap_or("").to_owned());
+                }
+                Some("file_change") => run.tools.push(("file_change".into(), item.clone())),
+                Some("agent_message") => run.text = item["text"].as_str().unwrap_or("").to_owned(),
+                _ => {}
+            }
+        }
+        assert!(!run.text.is_empty(), "codex gave no answer: {}", err(&o));
+        run
+    }
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_10_codex_gets_the_brief_and_the_guard() {
+    require_live!();
+    let live = Live::new();
+    let (outside, bin) = hooks_project(&live);
+    let run = live.codex_plugin_host(
+        &hooks_prompt(&outside, "apply_patch"),
+        &[("TIMON_BIN", &bin)],
+    );
+    run.print("live_10 codex");
+    assert!(
+        hook_calls(&live) >= 2,
+        "SessionStart and PreToolUse ran timon hook"
+    );
+    assert!(
+        !run.commands.iter().any(|c| c.contains("timon")),
+        "the task names came from the brief, not a command: {:?}",
+        run.commands
+    );
+    assert!(
+        run.text.contains("lint") && run.text.contains("ship"),
+        "the brief reached the model: {}",
+        run.text
+    );
+    assert!(
+        run.text.contains("outside the directories"),
+        "the guard's reason: {}",
+        run.text
+    );
+    assert!(!outside.exists());
 }

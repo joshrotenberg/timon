@@ -116,6 +116,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::formats::MARKDOWN_DOC,
         &modules::formats::TERM_DOC,
         &crate::tasks::TASK_DOC,
+        &crate::hook::DOC,
         &modules::schema::DOC,
         &modules::agent::DOC,
         &modules::sessions::DOC,
