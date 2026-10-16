@@ -5,7 +5,9 @@ pub mod cli;
 pub mod concurrency;
 pub mod formats;
 pub mod fs;
+pub mod gh;
 pub mod git;
+pub mod http;
 pub mod json;
 pub mod log;
 pub mod proc;
@@ -201,6 +203,8 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     tbl::install(&installer)?;
     fs::install(&installer)?;
     git::install(&installer)?;
+    http::install(&installer)?;
+    gh::install(&installer)?;
     log::install(&installer)?;
     concurrency::install(&installer)?;
     proc::install(&installer)?;

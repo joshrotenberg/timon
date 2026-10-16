@@ -130,7 +130,7 @@ A release task, with the toolbox:
 
 ```lua fragment
 release = {
-  description = "Bump the version, date the changelog, commit",
+  description = "Bump the version, date the changelog, commit, tag, push, release",
   depends = { "check" },
   options = { version = { type = "string", doc = "the new version" } },
   confirm = "Commit a release?",
@@ -142,6 +142,10 @@ release = {
     git.commit{ message = "chore: release " .. opts.version, all = true }
     git.tag("v" .. opts.version, { message = "release " .. opts.version })
     git.push{ tags = true }
+    gh.api("repos/{owner}/{repo}/releases", {
+      method = "POST",
+      json = { tag_name = "v" .. opts.version, generate_release_notes = true },
+    })
     return old .. " -> " .. opts.version
   end,
 },
