@@ -869,6 +869,10 @@ SessionStart, and for PreToolUse on `Bash|Write|Edit|MultiEdit|NotebookEdit|appl
   refused. It checks what the agent asks for; it is not a sandbox.
 - A project's `hooks` and `guard` load only once the project is trusted, like its tasks.
 - Codex runs a plugin's hooks after the user reviews and trusts them (`/hooks`).
+- The plugin and the binary update separately, so a plugin can be newer than timon. A timon
+  without `hook` exits 2, which both hosts read as a block, so the shim handles `hook` itself
+  (#107): a missing or failing timon becomes a `systemMessage` naming the fix, and the shim
+  exits 0. Other commands keep their exit codes.
 
 ## Toolbox
 

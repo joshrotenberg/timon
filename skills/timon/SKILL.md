@@ -9,8 +9,10 @@ One binary: Lua 5.4 and Fennel over a set of modules. Run code from the shell:
 
 Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
 line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
-as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
-of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+as one single-quoted argument, which may span lines and cannot contain `'`: use `"` for Lua
+strings, and put code whose text needs an apostrophe in a file run with `timon eval -f FILE`.
+Read files with `fs.read` in Lua instead of piping them in, and skip `$?`: a failure prints
+`timon: kind: message` and exits nonzero.
 
 ```sh
 timon eval '1 + 1'                 # 2: an expression returns its value

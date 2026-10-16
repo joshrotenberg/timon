@@ -2,13 +2,41 @@
 # Runs the timon that cargo installed. The plugin carries no binary, so updating timon is
 # `cargo install` and nothing in the plugin changes. The desktop apps do not always see the
 # shell's PATH, so cargo's bin directory is tried first.
+install="cargo install --locked --git https://github.com/joshrotenberg/timon"
+bin=""
 for candidate in "${TIMON_BIN:-}" "${CARGO_HOME:-$HOME/.cargo}/bin/timon"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    exec "$candidate" "$@"
+    bin=$candidate
+    break
   fi
 done
-if command -v timon >/dev/null 2>&1 && [ "$(command -v timon)" != "$0" ]; then
-  exec timon "$@"
+if [ -z "$bin" ] && command -v timon >/dev/null 2>&1 && [ "$(command -v timon)" != "$0" ]; then
+  bin=$(command -v timon)
 fi
-echo "timon is not installed; run: cargo install --locked --git https://github.com/joshrotenberg/timon" >&2
-exit 127
+
+# A hook must never block the host. Claude Code and Codex read exit 2 from a hook as a block,
+# and a timon older than the plugin has no hook command and exits 2. So `hook` always exits 0,
+# and a missing or failing timon becomes a message to the user.
+if [ "${1:-}" = "hook" ]; then
+  if [ -z "$bin" ]; then
+    printf '{"systemMessage":"timon hook: timon is not installed; run: %s"}\n' "$install"
+    exit 0
+  fi
+  out=$("$bin" "$@")
+  code=$?
+  if [ "$code" -eq 0 ]; then
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out"
+    fi
+    exit 0
+  fi
+  name=$(printf '%s' "$bin" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"systemMessage":"timon hook: %s exited %s, so the hook did nothing. The plugin may be newer than timon; update it: %s"}\n' "$name" "$code" "$install"
+  exit 0
+fi
+
+if [ -z "$bin" ]; then
+  echo "timon is not installed; run: $install" >&2
+  exit 127
+fi
+exec "$bin" "$@"
