@@ -30,8 +30,17 @@ Test names carry their phase (`live_0_`, `live_1_` and so on), so a phase runs o
 | 0 | CLI versions against the wrappers' tested ranges; not logged in is `not_logged_in` on both providers | none |
 | 1 | contracts, access levels, sessions, events, failure classification, cancellation, limits, records, on both providers | $0.01 of Claude usage; Codex reports none |
 | 2 | timon-started sessions in the archives, transcripts, real summaries | $0.001 |
-| 3 | the dogfood agents in `.timon/` | about $0.50 |
-| 4 | timon as a plugin (#46) | |
+| 3 | the dogfood agents in `.timon/`: the reviewer finds a seeded bug, the namer returns a valid `naming` answer | $0.17 (sonnet) |
+| 4 | timon as a plugin: an agent on each host uses the skills and `timon` for JSON, the API reference, a named script and sessions | $0.02 for Claude; Codex reports none |
+
+Phase 4 runs each host with only timon added:
+- Claude Code runs with `--plugin-dir plugin`, `--setting-sources project` and an empty
+  `--mcp-config`, and Bash allows only `timon` commands.
+- Codex has no plugin directory flag. Its skills go in the test repository's `.agents/skills`,
+  which Codex reads, and `timon` goes on `PATH`.
+
+So the Codex marketplace install itself is not exercised, because it would change the real
+`~/.codex`.
 
 ## Recorded output
 
@@ -49,3 +58,5 @@ records the exact arguments timon passes and the raw output, under `target/tmp/l
 | 2026-10-16 | 0 | 2.1.301 (tested range) | 0.162.0 (newer than codex-wrapper 0.4.4's tested 0.147.0) | pass, after two fixes: Claude's not-logged-in message was its raw result JSON, and in stream mode it was classified as `provider_failed`; Codex messages kept a tracing prefix |
 | 2026-10-16 | 1 | 2.1.301 | 0.162.0 | 13 of 13 pass in 156 s. Fixed: an unknown model is now `unknown_model` with a readable message on both providers. Found: a killed timon leaves its provider running (#63) |
 | 2026-10-16 | 2 | 2.1.301 | 0.162.0 | pass in 162 s, most of it scanning 6,600 real sessions with a debug build |
+| 2026-10-16 | 3 | 2.1.301 | | pass in 57 s: the reviewer reported the seeded off-by-one as high; the namer's four findings are on #52 |
+| 2026-10-16 | 4 | 2.1.301 | 0.162.0 | Claude 4 of 4 and Codex 4 of 4, after one skill fix: an agent ran `timon run NAME` inside a longer shell line, which a `timon`-only permission denies; the `timon` skill now says to run timon as a command of its own |

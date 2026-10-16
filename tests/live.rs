@@ -159,6 +159,64 @@ impl Live {
     }
 }
 
+impl Live {
+    /// Copies the repository's `.timon` into the sandbox's user layer, which needs no trust.
+    fn with_dogfood_layer(&self) {
+        copy_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join(".timon"),
+            &self.dir.path().join("timon/config"),
+        );
+    }
+
+    /// Copies files from this repository into the work repository, at the same paths, and
+    /// commits them.
+    fn copy_from_repo(&self, paths: &[&str]) {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for p in paths {
+            let to = self.work().join(p);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(repo.join(p), to).unwrap();
+        }
+        self.commit("copy from the repository");
+    }
+
+    fn write(&self, path: &str, text: &str) {
+        let to = self.work().join(path);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(to, text).unwrap();
+    }
+
+    fn commit(&self, message: &str) {
+        for args in [
+            &["add", "-A"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-qm",
+                message,
+            ],
+        ] {
+            let o = self.command("git").args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", err(&o));
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 /// The most one `timon` invocation in these tests may spend.
 const MAX_USD: &str = "0.30";
 const CLAUDE: &str = "provider = 'claude', model = 'haiku'";
@@ -893,4 +951,542 @@ fn live_2_timon_sessions_are_listed_read_and_summarized() {
         "the codex run's session is not listed: {listed}"
     );
     live.costs("sessions");
+}
+
+// Phase 3: the dogfood agents in .timon/. Spends tokens (sonnet).
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_3_reviewer_finds_a_seeded_bug() {
+    require_live!();
+    let live = Live::new();
+    live.with_dogfood_layer();
+    live.copy_from_repo(&["AGENTS.md"]);
+    live.write(
+        "src/sum.rs",
+        "/// Sums the first `n` values of `xs`.\npub fn sum_first(xs: &[i64], n: usize) -> i64 {\n    let mut total = 0;\n    for i in 0..=n {\n        total += xs[i];\n    }\n    total\n}\n",
+    );
+    live.commit("add sum_first");
+    let r = live.eval(
+        "return agent.run{ agent = 'reviewer', ephemeral = true, prompt = 'Review src/sum.rs.' }",
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    eprintln!("reviewer: {} on {}", r["answer"]["verdict"], r["model"]);
+    for f in r["answer"]["findings"].as_array().unwrap() {
+        eprintln!(
+            "  [{}] {}:{} {}",
+            f["severity"], f["file"], f["line"], f["title"]
+        );
+    }
+    assert_eq!(r["answer"]["verdict"], "request_changes", "{r}");
+    let findings = r["answer"]["findings"].as_array().unwrap();
+    assert!(
+        findings.iter().any(|f| {
+            let all = f.to_string().to_lowercase();
+            f["file"].as_str().unwrap_or("").contains("sum.rs")
+                && [
+                    "off-by-one",
+                    "off by one",
+                    "0..=n",
+                    "out of bounds",
+                    "panic",
+                    "n + 1",
+                ]
+                .iter()
+                .any(|w| all.contains(w))
+        }),
+        "the off-by-one was not reported: {r}"
+    );
+    live.costs("reviewer");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_3_namer_returns_naming_findings() {
+    require_live!();
+    let live = Live::new();
+    live.with_dogfood_layer();
+    live.copy_from_repo(&[
+        "AGENTS.md",
+        "src/agent/mod.rs",
+        "src/agent/claude.rs",
+        "src/agent/codex.rs",
+        "src/agent/events.rs",
+        "src/agent/records.rs",
+        "src/agent/worktree.rs",
+    ]);
+    let r = live.eval(
+        "return agent.run{ agent = 'namer', ephemeral = true, prompt = 'Audit the names in this area: run records, events and their files, in src/agent/*.rs' }",
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    let a = &r["answer"];
+    assert!(a["area"].is_string(), "{r}");
+    eprintln!("namer on {}: {}", r["model"], a["area"]);
+    for f in a["findings"].as_array().unwrap() {
+        assert!(f["places"].is_array(), "{f}");
+        eprintln!(
+            "  {} -> {}: {} ({})",
+            f["current"], f["proposed"], f["rule"], f["places"]
+        );
+    }
+    live.costs("namer");
+}
+
+// Phase 4: timon as a plugin (#46). Spends tokens.
+
+/// What a host agent did: the shell commands it ran, its final text and its cost.
+#[derive(Debug, Default)]
+struct HostRun {
+    commands: Vec<String>,
+    denied: Vec<String>,
+    skills: Vec<String>,
+    text: String,
+    usd: f64,
+}
+
+impl HostRun {
+    fn ran_timon(&self) -> bool {
+        self.commands.iter().any(|c| c.contains("timon"))
+    }
+
+    fn print(&self, label: &str) {
+        eprintln!("{label}: ${:.4}", self.usd);
+        for c in &self.commands {
+            eprintln!("  $ {}", c.chars().take(200).collect::<String>());
+        }
+        for d in &self.denied {
+            eprintln!("  denied: {}", d.chars().take(200).collect::<String>());
+        }
+        eprintln!(
+            "  answer: {}",
+            self.text.chars().take(300).collect::<String>()
+        );
+    }
+}
+
+impl Live {
+    /// Runs Claude Code as the host, with only timon's plugin loaded (no user settings, no MCP
+    /// servers) and only `timon` commands allowed in Bash, plus `tools`.
+    fn claude_host(&self, prompt: &str, tools: &[&str]) -> HostRun {
+        self.claude_host_with(prompt, tools, &[])
+    }
+
+    fn claude_host_with(&self, prompt: &str, tools: &[&str], env: &[(&str, &Path)]) -> HostRun {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut allowed = vec!["Bash(timon:*)".to_owned()];
+        allowed.extend(tools.iter().map(|t| (*t).to_owned()));
+        let mut child = self
+            .command("claude")
+            .args(["-p", "--plugin-dir"])
+            .arg(repo.join("plugin"))
+            .args([
+                "--setting-sources",
+                "project",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--model",
+                "haiku",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "dontAsk",
+                "--allowedTools",
+                &allowed.join(","),
+                "--no-session-persistence",
+                "--max-turns",
+                "25",
+            ])
+            .env("TIMON_BIN", env!("CARGO_BIN_EXE_timon"))
+            .envs(env.iter().map(|(k, v)| (*k, *v)))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(prompt.as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        let mut run = HostRun::default();
+        for line in out(&o).lines() {
+            let Ok(e) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            match e["type"].as_str() {
+                Some("system") if e["subtype"] == "init" => {
+                    run.skills = e["skills"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|s| s.as_str().map(str::to_owned))
+                        .collect();
+                }
+                Some("assistant") => {
+                    for b in e["message"]["content"].as_array().into_iter().flatten() {
+                        if b["type"] == "tool_use" && b["name"] == "Bash" {
+                            run.commands
+                                .push(b["input"]["command"].as_str().unwrap_or("").to_owned());
+                        }
+                    }
+                }
+                Some("result") => {
+                    run.text = e["result"].as_str().unwrap_or("").to_owned();
+                    run.usd = e["total_cost_usd"].as_f64().unwrap_or(0.0);
+                    for d in e["permission_denials"].as_array().into_iter().flatten() {
+                        run.denied.push(d["tool_input"].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !run.text.is_empty() || o.status.success(),
+            "claude failed: {}",
+            err(&o)
+        );
+        run
+    }
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_claude_uses_timon_to_reshape_json() {
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "data.json",
+        r#"[{"name":"alpha","size":3,"kind":"a"},{"name":"beta","size":10,"kind":"b"},{"name":"gamma","size":7,"kind":"a"}]"#,
+    );
+    let run = live.claude_host(
+        "Use timon to read data.json and give me the names of the entries whose size is over 5, as a JSON array. Reply with only the array.",
+        &[],
+    );
+    run.print("reshape");
+    assert!(
+        run.skills.iter().any(|s| s.contains("timon")),
+        "the plugin's skills did not load: {:?}",
+        run.skills
+    );
+    assert!(run.ran_timon(), "the agent never ran timon");
+    let answer: Vec<String> = serde_json::from_str(
+        run.text
+            .trim()
+            .trim_matches('`')
+            .trim_start_matches("json")
+            .trim(),
+    )
+    .unwrap_or_else(|e| panic!("not a JSON array ({e}): {}", run.text));
+    let mut answer = answer;
+    answer.sort();
+    assert_eq!(answer, ["beta", "gamma"]);
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_claude_reads_the_reference_before_an_unfamiliar_module() {
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "data.json",
+        r#"[{"name":"alpha","kind":"a"},{"name":"beta","kind":"b"},{"name":"gamma","kind":"a"}]"#,
+    );
+    let run = live.claude_host(
+        "Use timon to count the entries in data.json by their kind. Check timon's API reference for a function that groups, and use it. Reply with only a JSON object from kind to count.",
+        &[],
+    );
+    run.print("reference");
+    assert!(
+        run.commands
+            .iter()
+            .any(|c| c.contains("timon skill") || c.contains("help(")),
+        "the agent did not read the reference"
+    );
+    let answer: serde_json::Value = serde_json::from_str(
+        run.text
+            .trim()
+            .trim_matches('`')
+            .trim_start_matches("json")
+            .trim(),
+    )
+    .unwrap_or_else(|e| panic!("not JSON ({e}): {}", run.text));
+    assert_eq!(answer, serde_json::json!({ "a": 2, "b": 1 }));
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_claude_writes_and_runs_a_named_script() {
+    require_live!();
+    let live = Live::new();
+    std::fs::create_dir_all(live.work().join(".timon/scripts")).unwrap();
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+    let run = live.claude_host(
+        "Write a timon script named count-lines in this project's .timon/scripts that returns the number of lines in README.md, then run it with timon run and reply with only the number.",
+        &["Write", "Edit", "Read"],
+    );
+    run.print("script");
+    let script = live.work().join(".timon/scripts/count-lines.lua");
+    let fennel = live.work().join(".timon/scripts/count-lines.fnl");
+    assert!(script.exists() || fennel.exists(), "no script was written");
+    assert!(
+        run.commands
+            .iter()
+            .any(|c| c.contains("timon run count-lines")),
+        "the script was not run with timon run"
+    );
+    assert_eq!(run.text.trim(), "3", "README.md has 3 lines");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_claude_finds_an_earlier_session() {
+    require_live!();
+    let live = Live::new();
+    // A Codex session in a sandbox CODEX_HOME, so the search covers a known archive.
+    let codex_home = live.empty_dir("codex-home");
+    let rollout = codex_home.join("sessions/2026/10/16/rollout-2026-10-16T09-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001.jsonl");
+    std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    std::fs::write(
+        &rollout,
+        [
+            serde_json::json!({ "type": "session_meta", "payload": { "id": "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001", "cwd": "/work/ledger", "originator": "codex_cli_rs", "source": "cli" } }),
+            serde_json::json!({ "type": "event_msg", "payload": { "type": "user_message", "message": "the zanzibar ledger import drops every row with a semicolon in the memo field" } }),
+            serde_json::json!({ "type": "event_msg", "payload": { "type": "agent_message", "message": "The importer splits on semicolons before it parses quotes; fixed in import.rs." } }),
+        ]
+        .iter()
+        .map(|l| format!("{l}\n"))
+        .collect::<String>(),
+    )
+    .unwrap();
+    let file = std::fs::File::options().write(true).open(&rollout).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+    let env = [("CODEX_HOME", codex_home.as_path())];
+    // Build the index first, so the agent's search is complete and quick.
+    let o = live.timon(&["sessions", "index"], &env);
+    assert!(o.status.success(), "{}", err(&o));
+
+    // The host inherits CODEX_HOME, and so does the timon it runs.
+    let run = live.claude_host_with(
+        "Earlier I worked on a bug where a ledger import dropped rows. Use timon to find that session in my Codex sessions and reply with only its session id.",
+        &[],
+        &env,
+    );
+    run.print("sessions");
+    assert!(
+        run.commands.iter().any(|c| c.contains("sessions")),
+        "the agent did not use timon's sessions"
+    );
+    assert!(
+        run.text.contains("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001"),
+        "{}",
+        run.text
+    );
+}
+
+impl Live {
+    /// Runs Codex as the host. Codex has no plugin directory flag, so the plugin's skills go in
+    /// the repository's `.agents/skills`, which Codex reads, and `timon` goes on PATH. Nothing is
+    /// installed into the real `CODEX_HOME`.
+    fn codex_host_with(&self, prompt: &str, env: &[(&str, &Path)]) -> HostRun {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        copy_dir(
+            &repo.join("plugin/skills"),
+            &self.work().join(".agents/skills"),
+        );
+        let bin = self.dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let link = bin.join("timon");
+        if !link.exists() {
+            std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_timon"), &link).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut child = self
+            .command("codex")
+            .args([
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "--ephemeral",
+                "--ignore-user-config",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                "-",
+            ])
+            .env("PATH", path)
+            .envs(env.iter().map(|(k, v)| (*k, *v)))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(prompt.as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        let mut run = HostRun::default();
+        for line in out(&o).lines() {
+            let Ok(e) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let item = &e["item"];
+            if e["type"] != "item.completed" {
+                continue;
+            }
+            match item["type"].as_str() {
+                Some("command_execution") => {
+                    let command = item["command"].as_str().unwrap_or("").to_owned();
+                    if item["exit_code"].as_i64().is_some_and(|c| c != 0) {
+                        run.denied.push(format!(
+                            "exit {}: {command}: {}",
+                            item["exit_code"],
+                            item["aggregated_output"]
+                                .as_str()
+                                .unwrap_or("")
+                                .chars()
+                                .take(200)
+                                .collect::<String>()
+                        ));
+                    }
+                    run.commands.push(command);
+                }
+                Some("agent_message") => run.text = item["text"].as_str().unwrap_or("").to_owned(),
+                _ => {}
+            }
+        }
+        assert!(!run.text.is_empty(), "codex gave no answer: {}", err(&o));
+        run
+    }
+}
+
+fn json_answer(text: &str) -> serde_json::Value {
+    let t = text.trim();
+    let t = t
+        .strip_prefix("```json")
+        .or_else(|| t.strip_prefix("```"))
+        .unwrap_or(t);
+    let t = t.strip_suffix("```").unwrap_or(t).trim();
+    serde_json::from_str(t).unwrap_or_else(|e| panic!("not JSON ({e}): {text}"))
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_codex_uses_timon() {
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "data.json",
+        r#"[{"name":"alpha","size":3,"kind":"a"},{"name":"beta","size":10,"kind":"b"},{"name":"gamma","size":7,"kind":"a"}]"#,
+    );
+    live.commit("data");
+    let run = live.codex_host_with(
+        "Use the timon tool (see its skill) to read data.json and give me the names of the entries whose size is over 5, as a JSON array. Reply with only the array.",
+        &[],
+    );
+    run.print("codex reshape");
+    assert!(run.ran_timon(), "codex never ran timon");
+    let mut names: Vec<String> = serde_json::from_value(json_answer(&run.text)).unwrap();
+    names.sort();
+    assert_eq!(names, ["beta", "gamma"]);
+
+    std::fs::create_dir_all(live.work().join(".timon/scripts")).unwrap();
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+    let run = live.codex_host_with(
+        "Write a timon script named count-lines in this project's .timon/scripts that returns the number of lines in README.md, then run it with timon run and reply with only the number.",
+        &[],
+    );
+    run.print("codex script");
+    assert!(
+        run.commands
+            .iter()
+            .any(|c| c.contains("timon run count-lines")),
+        "the script was not run with timon run"
+    );
+    assert_eq!(run.text.trim(), "3", "README.md has 3 lines");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_codex_finds_an_earlier_session() {
+    require_live!();
+    let live = Live::new();
+    // A Claude session in a sandbox CLAUDE_CONFIG_DIR; the Codex host does not need Claude's login.
+    let config = live.empty_dir("claude-config");
+    let file = config.join("projects/-work-ledger/0199aaaa-bbbb-4ccc-8ddd-eeeeffff0002.jsonl");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        [
+            serde_json::json!({ "type": "user", "cwd": "/work/ledger", "entrypoint": "cli", "sessionId": "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0002",
+                "message": { "role": "user", "content": "the zanzibar ledger import drops every row with a semicolon in the memo field" } }),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant",
+                "content": [{ "type": "text", "text": "The importer splits on semicolons before it parses quotes; fixed in import.rs." }] } }),
+        ]
+        .iter()
+        .map(|l| format!("{l}\n"))
+        .collect::<String>(),
+    )
+    .unwrap();
+    let f = std::fs::File::options().write(true).open(&file).unwrap();
+    f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+    let env = [("CLAUDE_CONFIG_DIR", config.as_path())];
+    let run = live.codex_host_with(
+        "Earlier I worked on a bug where a ledger import dropped rows. Use timon to find that session in my Claude Code sessions and reply with only its session id.",
+        &env,
+    );
+    run.print("codex sessions");
+    assert!(
+        run.commands.iter().any(|c| c.contains("sessions")),
+        "codex did not use timon's sessions"
+    );
+    assert!(
+        run.text.contains("0199aaaa-bbbb-4ccc-8ddd-eeeeffff0002"),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_4_codex_reads_the_reference_before_an_unfamiliar_module() {
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "data.json",
+        r#"[{"name":"alpha","kind":"a"},{"name":"beta","kind":"b"},{"name":"gamma","kind":"a"}]"#,
+    );
+    live.commit("data");
+    let run = live.codex_host_with(
+        "Use timon to count the entries in data.json by their kind. Check timon's API reference for a function that groups, and use it. Reply with only a JSON object from kind to count.",
+        &[],
+    );
+    run.print("codex reference");
+    assert!(
+        run.commands.iter().any(|c| c.contains("timon skill")
+            || c.contains("help(")
+            || c.contains("references/api.md")),
+        "codex did not read the reference"
+    );
+    assert_eq!(
+        json_answer(&run.text),
+        serde_json::json!({ "a": 2, "b": 1 })
+    );
 }

@@ -10,7 +10,7 @@ One binary: Lua 5.4 and Fennel over a set of modules. Run code from the shell:
 ```sh
 timon eval '1 + 1'                 # 2: an expression returns its value
 timon eval '{ a = 1, b = { 2 } }'  # tables print as JSON: {"a":1,"b":[2]}
-timon eval -f job.lua              # a file
+timon eval -f job.lua              # run a Lua file; read data with fs.read
 timon job.lua 12 14                # a script; arguments in `arg` and `...`
 timon eval --fnl '(+ 1 2)'         # Fennel
 echo 'return 6 * 7' | timon eval - # stdin
@@ -90,6 +90,8 @@ end
 
 ## Rules
 
+- Run `timon` as a command of its own, not inside a longer shell line with `;`, `&&`, `$?` or
+  redirects: a host that allows only `timon` commands denies the whole line. Do the rest in Lua.
 - An error is a table with `kind`, `message` and often `hint`. Uncaught, it prints all three and
   exits 1. Read the hint: it usually names the fix.
 - Globals, module fields and options are strict: a typo raises with "did you mean".
