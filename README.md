@@ -1,8 +1,10 @@
 # timon
 
-One self-contained binary: Lua (and Fennel) over APIs for running Claude and Codex as
-subagents, reading past sessions, MCP, git, JSON, HTTP, GitHub and SQLite. Eval from the command
-line or write scripts. Skills are bundled; it ships as a Claude Code and Codex plugin.
+A task runner in one self-contained binary, in the style of babashka and voga: tasks and
+scripts in Lua or Fennel, over a toolbox for the work around a codebase. Agents are built in and
+first class: run Claude and Codex as subagents, read every past session, validate answers
+against contracts, all with budgets and run records. Skills are bundled, and it ships as a
+Claude Code and Codex plugin.
 
 Design: [docs/design.md](docs/design.md).
 
@@ -12,9 +14,14 @@ Design: [docs/design.md](docs/design.md).
 |---|---|---|
 | 0 | Design, crate | done |
 | 1 | Runtime, directories, skills, plugin | done (REPL left) |
-| 2 | `agent`: runs, contracts, records, budgets, worktrees, events | done |
+| 2 | `agent`: runs, contracts, records, budgets, worktrees, events; script runs as records, resume | done |
 | 3 | `sessions`: list, read, search and summarize every session | done |
-| 4 | Toolbox, MCP client and server | to discuss |
+| 4 | Toolbox: `sh` and `proc` | next |
+| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon <task>` | planned |
+| 6 | Built-in tasks, typed options, plans | planned |
+| 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | planned |
+| 8 | Workflow patterns | planned |
+| 9 | MCP client and server | planned |
 
 ## Install
 
