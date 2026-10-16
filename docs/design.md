@@ -44,6 +44,8 @@ agent and session APIs:
 | Dagger | a container-based workflow engine with Go, Python and TypeScript SDKs and LLMs as a core type | no containers or engine; drives the Claude Code and Codex CLIs with their sessions; one binary |
 | Subtask, ai-dispatch | CLIs that dispatch Claude Code and Codex subagents | general tasks first; agents are one module |
 
+The feature-by-feature matrix, with the gaps it shows, is in [prior-art.md](prior-art.md).
+
 ## Rules
 
 1. **The APIs are the product.** Lua 5.4 and Fennel are used as published: no custom syntax, no
