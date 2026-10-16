@@ -211,6 +211,28 @@ impl Runtime {
         }
     }
 
+    /// Compiles code the way `timon eval` does: an expression returns its value, and with
+    /// `fennel` the source is Fennel.
+    pub fn compile_eval(
+        &self,
+        source: &str,
+        name: &str,
+        fennel: bool,
+    ) -> Result<Function, Failure> {
+        if fennel {
+            let lua_source = crate::fennel::compile(&self.lua, source, name)?;
+            return self.compile(&lua_source, name, false);
+        }
+        self.compile(source, name, true)
+    }
+
+    /// Sets a global from JSON, with `json`'s array and object markers.
+    pub fn set_global(&self, name: &str, value: &serde_json::Value) -> Result<(), Failure> {
+        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+        let value = crate::modules::json::decode(&self.lua, value).map_err(lua_err)?;
+        self.lua.globals().raw_set(name, value).map_err(lua_err)
+    }
+
     /// Evaluates `source` the way `timon eval` does.
     pub async fn eval(&self, source: &str, name: &str) -> Result<MultiValue, Failure> {
         let f = self.compile(source, name, true)?;

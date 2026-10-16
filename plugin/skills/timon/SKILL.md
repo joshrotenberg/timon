@@ -16,6 +16,8 @@ timon tasks                        # the tasks in reach: tasks.lua and scripts/
 timon check                        # run a task, after its dependencies
 timon eval --fnl '(+ 1 2)'         # Fennel
 echo 'return 6 * 7' | timon eval - # stdin
+git log --oneline | timon eval -i 'return #input'              # input: the lines of stdin
+cat events.jsonl | timon eval -I --stream 'return input.kind'  # once per JSON value
 ```
 
 Strings print raw, tables print as JSON, and logs go to stderr, so stdout is data you can pipe.
@@ -35,6 +37,8 @@ timon skill show timon --ref api    # every function with an example
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt`; also string methods: `s:trim()` |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs`, `path` | files, directories, path names |
+| `toml`, `yaml`, `csv` | `decode`, `encode`; `toml.set` and `toml.edit` change one value and keep the rest of the file |
+| `markdown`, `term` | `headings` and `code` blocks with line numbers; `tty`, `color`, `width` |
 | `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
 | `cli` | `parse` a script's flags against typed options, as tasks declare them; `help` |
 | `task` | `run` another task from inside a task |
@@ -73,6 +77,21 @@ for _, file in ipairs(fs.glob(path.join(dir, "**", "*.md"))) do
 end
 return counts  -- {"todo.md":2}
 ```
+
+Bump a version and read a changelog, keeping the file's comments:
+
+```lua
+local cargo = '[package]\nname = "app"\nversion = "0.1.0" # bumped by release\n'
+local bumped, old = toml.set(cargo, "package.version", "0.2.0")
+local changelog = "# Changelog\n\n## Unreleased\n\n- feat: tasks\n"
+local next = markdown.headings(changelog)[2]
+return old, bumped:match("version = [^\n]*"), next.text, next.line
+-- 0.1.0, version = "0.2.0" # bumped by release, Unreleased, 3
+```
+
+`-i` binds the lines of stdin to `input`, `-I` its JSON values (one document or JSON lines),
+`-o` prints a returned list one element per line, `-O` as JSON lines, and `--stream` runs the
+code once per line or value without reading all of stdin first.
 
 Run programs:
 

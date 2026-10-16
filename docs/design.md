@@ -809,11 +809,15 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
    for an exit code, and `proc.spawn` starts a background process. Every process belongs to its
    task and runs in its own process group, so cancellation, Ctrl-C and timeouts stop it the way
    they stop agent providers.
-2. **`eval` as a pipeline tool (#71):** `-i` reads lines, `-j` JSON and `-J` JSON lines into
-   `input`, `-o` prints an array line by line, and `--stream` runs once per line or value, as
-   bb's one-liner flags do.
-3. **`git`, `gh`, `http`, `sqlite`, and data formats** (#72: `toml` with edits that keep
-   formatting, `yaml`, `csv`, `markdown`, `term`). The shapes below are starting points:
+2. **`eval` as a pipeline tool (#71), built:** bb's one-liner flags with JSON for EDN. `-i`
+   binds the lines of stdin to `input`, `-I` its JSON values (one document or JSON lines),
+   `-o` prints a returned list one element per line, `-O` as JSON lines, and `--stream` runs
+   once per line or value without reading all of stdin. `-j` stays `--jobs`.
+3. **Data formats (#72), built:** `toml` (decode, encode, and `set`/`edit`, which change one
+   value through toml_edit and keep every other byte), `yaml` (saphyr, YAML 1.2), `csv`,
+   `markdown` (headings and code blocks with line numbers, through pulldown-cmark) and `term`.
+   Decoders return tables with `json`'s markers, so values round-trip.
+4. **`git`, `gh`, `http`, `sqlite`.** The shapes below are starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }

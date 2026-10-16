@@ -126,6 +126,24 @@ timon --yes drop-db           # answers its confirm question
 | `confirm` | `string` | a question answered before anything runs |
 | `platforms` | `string[]` | `linux`, `macos`, `windows` and the other Rust OS names |
 
+A release task, with the toolbox:
+
+```lua fragment
+release = {
+  description = "Bump the version, date the changelog, commit",
+  depends = { "check" },
+  options = { version = { type = "string", doc = "the new version" } },
+  confirm = "Commit a release?",
+  run = function(opts)
+    local old = toml.edit("Cargo.toml", "package.version", opts.version)
+    local log = fs.read("CHANGELOG.md")
+    fs.write("CHANGELOG.md", (log:gsub("## Unreleased", "## " .. opts.version, 1)))
+    sh{ "git", "commit", "-am", "chore: release " .. opts.version }
+    return old .. " -> " .. opts.version
+  end,
+},
+```
+
 In Fennel, `tasks.fnl` returns the same table:
 
 ```fennel
