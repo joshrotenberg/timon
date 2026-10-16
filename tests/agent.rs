@@ -453,8 +453,17 @@ fn every_run_is_recorded_with_secrets_redacted() {
         assert_eq!(mode & 0o777, 0o600);
     }
     let index = std::fs::read_to_string(s.root().join("timon/state/runs/index.jsonl")).unwrap();
-    assert_eq!(index.lines().count(), 1);
+    let states: Vec<serde_json::Value> = index
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(states.len(), 2, "a running line, then the result");
+    assert_eq!(
+        (states[0]["status"].as_str(), states[1]["status"].as_str()),
+        (Some("running"), Some("ok"))
+    );
     assert!(index.contains("[redacted:anthropic]"));
+    assert!(!index.contains(secret));
 }
 
 #[test]
@@ -696,4 +705,111 @@ fn agents_lists_definitions_with_descriptions() {
     assert_eq!(list[0]["name"], "quick");
     assert_eq!(list[0]["description"], "Reviews one PR");
     assert_eq!(list[1]["layer"], "user");
+}
+
+// Settled records (#31)
+
+fn runs_json(s: &Sandbox) -> serde_json::Value {
+    let o = s.cli(&["runs", "--json"], &[]);
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+#[test]
+fn a_cancelled_run_is_recorded() {
+    let s = Sandbox::new();
+    let pid_file = s.root().join("pid");
+    let code = format!(
+        r#"
+        return par.race(
+          function() return agent.run{{ prompt = 'slow' }} end,
+          function()
+            while not fs.exists('{}') do sleep('20ms') end
+            return 'done'
+          end
+        )
+        "#,
+        pid_file.display()
+    );
+    let o = s.timon(
+        &code,
+        &[
+            ("FAKE_DELAY", "30"),
+            ("FAKE_PID_FILE", pid_file.to_str().unwrap()),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let runs = runs_json(&s);
+    assert_eq!(runs[0]["status"], "cancelled");
+    let id = runs[0]["id"].as_str().unwrap();
+    let result = std::fs::read_to_string(
+        s.root()
+            .join("timon/state/runs")
+            .join(id)
+            .join("result.json"),
+    )
+    .unwrap();
+    assert!(result.contains("\"cancelled\""), "{result}");
+}
+
+/// Starts `timon eval code` in the background and waits until the fake provider is running.
+fn start_slow(s: &Sandbox, code: &str, pid_file: &Path) -> std::process::Child {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))
+        .args(["eval", code])
+        .current_dir(s.root())
+        .env("TIMON_HOME", s.root().join("timon"))
+        .env("HOME", s.root())
+        .env("TIMON_CLAUDE_BIN", fixtures.join("fake-claude"))
+        .env("FAKE_DELAY", "30")
+        .env("FAKE_PID_FILE", pid_file)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..500 {
+        if pid_file.exists() {
+            return child;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("the fake provider never started");
+}
+
+fn kill(pid: &str, signal: &str) {
+    let _ = Command::new("kill").args([signal, pid.trim()]).status();
+}
+
+#[test]
+fn ctrl_c_records_the_run_as_cancelled() {
+    let s = Sandbox::new();
+    let pid_file = s.root().join("pid");
+    let mut child = start_slow(&s, "agent.run{ prompt = 'slow' }", &pid_file);
+    kill(&child.id().to_string(), "-INT");
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130));
+    assert_eq!(runs_json(&s)[0]["status"], "cancelled");
+    kill(&std::fs::read_to_string(&pid_file).unwrap(), "-9");
+}
+
+#[test]
+fn a_killed_timon_leaves_an_interrupted_run() {
+    let s = Sandbox::new();
+    let pid_file = s.root().join("pid");
+    let mut child = start_slow(
+        &s,
+        "agent.run{ prompt = 'edit', access = 'write' }",
+        &pid_file,
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    kill(&std::fs::read_to_string(&pid_file).unwrap(), "-9");
+    let run = &runs_json(&s)[0];
+    assert_eq!(run["status"], "interrupted");
+    assert_eq!(run["effects_uncertain"], true);
+    let shown = s.cli(&["runs", "show", run["id"].as_str().unwrap()], &[]);
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["result"]["status"], "interrupted");
+    assert_eq!(shown["result"]["error"]["kind"], "interrupted");
 }

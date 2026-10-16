@@ -7,13 +7,31 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Value as Json, json};
 
-use super::{Record, Request};
+use super::{Access, Record, Request};
 use crate::error::Error;
 use crate::layers::create_private_dir;
 use crate::redact::redact_value;
 
 /// Prompt characters kept in the index.
 const SNIPPET: usize = 120;
+
+/// Whether a process with this pid exists.
+fn alive(pid: u64) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: kill with signal 0 sends nothing; it only checks that the process exists.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
 
 /// The run records under a state directory.
 pub struct Store {
@@ -63,6 +81,135 @@ impl Store {
         &self.dir
     }
 
+    /// Records that a run is starting: its request, a `running` result, and an index line with
+    /// this process's pid, so a crash leaves evidence that [`Store::reconcile`] can settle.
+    pub fn begin(
+        &self,
+        request: &Request,
+        id: &str,
+        started_at: &str,
+        agent: Option<&str>,
+        worktree: Option<&Json>,
+    ) -> Result<(), Error> {
+        self.reconcile()?;
+        let run_dir = self.dir.join(id);
+        create_private_dir(&run_dir).map_err(|e| io("create", &run_dir, e))?;
+        let mut request_json = request.to_json();
+        if let Some(agent) = agent {
+            request_json["agent"] = json!(agent);
+        }
+        redact_value(&mut request_json);
+        write_private(
+            &run_dir.join("request.json"),
+            &serde_json::to_string_pretty(&request_json).unwrap_or_default(),
+            false,
+        )?;
+        let mut running = json!({
+            "id": id,
+            "started_at": started_at,
+            "status": "running",
+            "provider": request.provider.name(),
+            "model": request.model,
+            "access": request.access.name(),
+            "pid": std::process::id(),
+            "worktree": worktree,
+        });
+        redact_value(&mut running);
+        write_private(
+            &run_dir.join("result.json"),
+            &serde_json::to_string_pretty(&running).unwrap_or_default(),
+            false,
+        )?;
+        let mut line = json!({
+            "id": id,
+            "started_at": started_at,
+            "provider": request.provider.name(),
+            "model": request.model,
+            "agent": agent,
+            "status": "running",
+            "access": request.access.name(),
+            "pid": std::process::id(),
+            "prompt": snippet(&request.prompt),
+        });
+        redact_value(&mut line);
+        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)
+    }
+
+    /// Settles runs left `running` by a timon process that no longer exists: they become
+    /// `interrupted`, with `effects_uncertain` unless the run was read-only. Nothing is replayed
+    /// or signalled. Returns how many were settled.
+    pub fn reconcile(&self) -> Result<usize, Error> {
+        let mut settled = 0;
+        for entry in self.latest()? {
+            if entry["status"] != "running" {
+                continue;
+            }
+            let Some(pid) = entry["pid"].as_u64() else {
+                continue;
+            };
+            if pid == u64::from(std::process::id()) || alive(pid) {
+                continue;
+            }
+            let id = entry["id"].as_str().unwrap_or_default().to_owned();
+            let uncertain = entry["access"].as_str() != Some(Access::Read.name());
+            let result_path = self.dir.join(&id).join("result.json");
+            let mut result: Json = std::fs::read_to_string(&result_path)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_else(|| json!({ "id": id }));
+            result["status"] = json!("interrupted");
+            result["effects_uncertain"] = json!(uncertain);
+            result["error"] = json!({
+                "kind": "interrupted",
+                "message": "the timon process running this ended before the run finished",
+                "hint": if uncertain {
+                    "the agent could write; check its working directory or worktree"
+                } else {
+                    "it was read-only, so nothing was changed"
+                },
+            });
+            write_private(
+                &result_path,
+                &serde_json::to_string_pretty(&result).unwrap_or_default(),
+                false,
+            )?;
+            let mut line = entry.clone();
+            line["status"] = json!("interrupted");
+            line["effects_uncertain"] = json!(uncertain);
+            write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+            settled += 1;
+        }
+        Ok(settled)
+    }
+
+    /// The last index line of every run, in the order the runs started.
+    fn latest(&self) -> Result<Vec<Json>, Error> {
+        let path = self.dir.join("index.jsonl");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(io("read", &path, e)),
+        };
+        let mut order: Vec<String> = Vec::new();
+        let mut last: std::collections::HashMap<String, Json> = std::collections::HashMap::new();
+        for entry in text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Json>(l).ok())
+        {
+            let Some(id) = entry["id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            if !last.contains_key(&id) {
+                order.push(id.clone());
+            }
+            last.insert(id, entry);
+        }
+        Ok(order
+            .into_iter()
+            .filter_map(|id| last.remove(&id))
+            .collect())
+    }
+
     /// Writes a run's request and result, and adds it to the index.
     pub fn save(
         &self,
@@ -95,7 +242,9 @@ impl Store {
             "provider": record.provider.name(),
             "model": record.model,
             "agent": agent,
+            "access": request.access.name(),
             "status": record.status.name(),
+            "session": record.session,
             "ms": record.ms,
             "usd": record.usage.usd,
             "output_tokens": record.usage.output_tokens,
@@ -105,17 +254,13 @@ impl Store {
         write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)
     }
 
-    /// Index entries, newest first, started at or after `since`, at most `limit`.
+    /// Index entries, newest first, started at or after `since`, at most `limit`; each run's
+    /// latest state, after settling runs whose process is gone.
     pub fn list(&self, since: Option<DateTime<Utc>>, limit: usize) -> Result<Vec<Json>, Error> {
-        let path = self.dir.join("index.jsonl");
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(io("read", &path, e)),
-        };
-        let mut entries: Vec<Json> = text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Json>(l).ok())
+        self.reconcile()?;
+        let mut entries: Vec<Json> = self
+            .latest()?
+            .into_iter()
             .filter(|entry| match since {
                 None => true,
                 Some(since) => entry["started_at"]
@@ -127,6 +272,16 @@ impl Store {
         entries.reverse();
         entries.truncate(limit);
         Ok(entries)
+    }
+
+    /// The provider session ids of every recorded run, so sessions timon started can be told
+    /// apart from a person's.
+    pub fn sessions(&self) -> std::collections::HashSet<String> {
+        self.latest()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| e["session"].as_str().map(str::to_owned))
+            .collect()
     }
 
     /// One run's request and result. `id` may be an unambiguous prefix.

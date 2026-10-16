@@ -339,6 +339,51 @@ fn record_table(lua: &Lua, record: &Record) -> mlua::Result<Table> {
     Ok(t)
 }
 
+/// Settles a run's record exactly once: with its result, or as `cancelled` when the run's
+/// future is dropped first (a cancelled scope, a `par.race` loser, Ctrl-C). Writing happens
+/// synchronously, so it also works from `Drop`.
+struct Settle {
+    store: Option<agent::records::Store>,
+    request: Request,
+    id: String,
+    started_at: String,
+    agent: Option<String>,
+    worktree: Option<agent::worktree::Worktree>,
+    started: std::time::Instant,
+    done: bool,
+}
+
+impl Settle {
+    fn finish(&mut self, record: &mut Record) {
+        self.done = true;
+        record.started_at = self.started_at.clone();
+        if let Some(wt) = &self.worktree {
+            let kept = wt.finish().unwrap_or(true);
+            record.worktree = Some(wt.to_json(kept));
+        }
+        if let Some(store) = &self.store
+            && let Err(err) = store.save(&self.request, record, self.agent.as_deref())
+        {
+            eprintln!("timon: the run record was not saved: {err}");
+        }
+    }
+}
+
+impl Drop for Settle {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let mut record = Record::cancelled(
+            &self.request,
+            self.id.clone(),
+            self.started_at.clone(),
+            self.started.elapsed().as_millis() as u64,
+        );
+        self.finish(&mut record);
+    }
+}
+
 async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
@@ -370,22 +415,35 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     } else {
         None
     };
-    let mut record = agent::run_as(&request, id).await;
-    if let Some(wt) = &worktree {
-        let kept = wt.finish().unwrap_or(true);
-        record.worktree = Some(wt.to_json(kept));
-    }
-    spent(&lua, record.usage.usd);
-    if let Some(state) = state {
-        let agent = spec.raw_get::<Option<String>>("agent")?;
-        if let Err(err) = agent::records::Store::new(std::path::Path::new(&state)).save(
+    let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let agent_name = spec.raw_get::<Option<String>>("agent")?;
+    let store = state
+        .as_ref()
+        .map(|s| agent::records::Store::new(std::path::Path::new(s)));
+    if let Some(store) = &store
+        && let Err(err) = store.begin(
             &request,
-            &record,
-            agent.as_deref(),
-        ) {
-            eprintln!("timon: the run record was not saved: {err}");
-        }
+            &id,
+            &started_at,
+            agent_name.as_deref(),
+            worktree.as_ref().map(|w| w.to_json(true)).as_ref(),
+        )
+    {
+        eprintln!("timon: the run record was not started: {err}");
     }
+    let mut settle = Settle {
+        store,
+        request: request.clone(),
+        id: id.clone(),
+        started_at,
+        agent: agent_name,
+        worktree,
+        started: std::time::Instant::now(),
+        done: false,
+    };
+    let mut record = agent::run_as(&request, id).await;
+    settle.finish(&mut record);
+    spent(&lua, record.usage.usd);
     record_table(&lua, &record)
 }
 

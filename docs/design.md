@@ -365,8 +365,10 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   tokens only, so a USD budget counts Claude runs and says so.
 - **Cancellation.** Ctrl-C, a cancelled handle or an ended script stops the run's process group
   with a grace period, then kills it. Every outcome is recorded, including `cancelled`.
-- **Run records.** Each run writes `request.json` and `result.json` under `state/runs/<id>/`
-  and a line in `state/runs/index.jsonl`: `timon runs`, `timon runs show ID`,
+- **Run records.** Each run writes `request.json` and a `running` result under
+  `state/runs/<id>/` before the provider starts, then its final result; `state/runs/index.jsonl`
+  gets a line for each state. A run whose timon process died is found later and settled as
+  `interrupted`, with `effects_uncertain` unless it was read-only; nothing is replayed. `timon runs`, `timon runs show ID`,
   `agent.runs{ since = "1d" }`. Secrets are redacted before anything is written.
 - **Worktrees.** `worktree = true` creates a worktree in the state directory on a
   `timon/<run id>` branch, runs there, and removes the worktree if it is clean. A dirty one is
