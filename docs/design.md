@@ -764,7 +764,11 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
    for an exit code, and `proc.spawn` starts a background process. Every process belongs to its
    task and runs in its own process group, so cancellation, Ctrl-C and timeouts stop it the way
    they stop agent providers.
-2. **`git`, `gh`, `http`, `sqlite`**, next. The shapes below are starting points:
+2. **`eval` as a pipeline tool (#71):** `-i` reads lines, `-j` JSON and `-J` JSON lines into
+   `input`, `-o` prints an array line by line, and `--stream` runs once per line or value, as
+   bb's one-liner flags do.
+3. **`git`, `gh`, `http`, `sqlite`, and data formats** (#72: `toml` with edits that keep
+   formatting, `yaml`, `csv`, `markdown`, `term`). The shapes below are starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }
@@ -792,6 +796,10 @@ and worktrees matter and the pure-Rust options do not cover them.
 Later, also to discuss: host hooks (`timon hook session-start` injecting a brief), a memory
 store, durable queues and workers, schedules, watch mode and `.env` loading.
 
+MCP servers fill the role babashka gives pods: external programs whose functions a script
+calls. timon's MCP client (phase 9) makes any MCP server's tools Lua calls, so it needs no pod
+protocol of its own.
+
 ## Phases
 
 | Phase | Delivers | Done when |
@@ -803,7 +811,7 @@ store, durable queues and workers, schedules, watch mode and `.env` loading.
 | 4 | Toolbox: `sh` and `proc` (#70) | this repository's gates run as a timon script, streaming output and exiting with the first failing gate's code |
 | 5 | Tasks v1 (#68): `tasks.lua` in both layers, `timon tasks`, `timon <task>`, `depends`, tasks as script runs | this repository's gates, release steps and dogfood scripts are tasks in daily use, and an agent runs them through the plugin |
 | 6 | Built-in tasks and typed options: timon's commands declared as tasks; options from the type syntax with `--help`; several tasks per invocation with `--jobs`; `task.run`; exit codes (#39); `--dry-run` (#38) | `timon tasks` lists built-in and project tasks alike, and every command's help comes from its declaration |
-| 7 | The rest of the toolbox: `git`, `gh`, `http`, `sqlite` | a release task (tag, push, GitHub release) written as a timon task |
+| 7 | The rest of the toolbox: `git`, `gh`, `http`, `sqlite`; data formats (#72); `eval` input modes (#71) | a release task (bump `Cargo.toml`, tag, push, GitHub release) written as a timon task |
 | 8 | Workflow patterns: `flow` (#59) and its skill | a review with a verifier and a vote of three run as tasks |
 | 9 | MCP: the `mcp` client, and `timon serve` with tasks as tools | an agent calls a project's tasks over MCP |
 | 10 | Hooks, memory, queues, schedules | after phase 9 is in daily use |
