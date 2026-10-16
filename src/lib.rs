@@ -19,6 +19,7 @@ pub mod plugin;
 pub mod redact;
 pub mod runtime;
 pub mod scripts;
+pub mod serve;
 pub mod sessions;
 mod settings;
 pub mod skills;

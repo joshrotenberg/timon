@@ -1111,6 +1111,66 @@ pub async fn run(
             values
         }
     };
+    let name = task.name.clone();
+    run_given(rt, catalog, &name, given, how).await
+}
+
+/// The `confirm` questions of the tasks a run of `name` runs.
+pub fn questions(catalog: &Catalog, name: &str) -> Vec<String> {
+    catalog
+        .plan(name)
+        .iter()
+        .filter_map(|t| t.confirm.clone())
+        .collect()
+}
+
+/// Checks options given as JSON, as an MCP call gives them, against the task's declarations,
+/// and fills in the defaults. `args`, if given, is a list of words.
+pub fn given_from_json(rt: &Runtime, task: &Task, args: &Json) -> Result<Map<String, Json>, Error> {
+    let lua = rt.lua();
+    let table = match crate::modules::json::decode(lua, args).map_err(|e| Error::from_lua(&e))? {
+        Value::Table(t) => t,
+        _ => lua.create_table().map_err(|e| Error::from_lua(&e))?,
+    };
+    let mut given = match &task.source {
+        Source::Script(_) => {
+            let mut m = Map::new();
+            if let Some(args) = args.get("args") {
+                m.insert("args".into(), args.clone());
+            }
+            m
+        }
+        Source::File(_) => task.options.check(&table, &format!("task {}", task.name))?,
+    };
+    given
+        .entry("args")
+        .or_insert_with(|| Json::Array(Vec::new()));
+    Ok(given)
+}
+
+/// Runs the task `name` with options already parsed: `given` holds them and `args`.
+pub async fn run_given(
+    rt: &Runtime,
+    catalog: Rc<Catalog>,
+    name: &str,
+    given: Map<String, Json>,
+    how: How,
+) -> Result<MultiValue, Failure> {
+    let lua = rt.lua();
+    let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+    let task = catalog.find(name)?;
+    if let (Source::Script(path), false) = (&task.source, how.dry_run) {
+        let words: Vec<String> = match given.get("args") {
+            Some(Json::Array(a)) => a
+                .iter()
+                .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        };
+        return rt
+            .run_named_script(path, &words, &task.name, Some(task.layer.name()))
+            .await;
+    }
     let planned = levels(&catalog, &task.name, &HashSet::new());
     if how.dry_run {
         let plan: Vec<Json> = planned

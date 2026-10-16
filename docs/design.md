@@ -644,20 +644,28 @@ crates:close()                                   -- also when the opening scope 
 
 ### Server
 
-`timon serve` runs an MCP server over stdio for hosts that prefer tools to a shell, or have no
-shell:
+Built (#34). `timon serve` runs an MCP server over stdio, through tower-mcp, for hosts that
+prefer tools to a shell, or have no shell:
 
 | Tool | Does |
 |---|---|
-| `eval` | Evaluates Lua or Fennel and returns the result as JSON |
-| `scripts` | Lists the scripts in reach, with descriptions and parameter schemas |
-| `run_script` | Runs a script by name with arguments |
-| `sessions_search`, `sessions_transcript` | The sessions module, for hosts that call tools only |
+| each public task | runs the task after its dependencies; its input schema is the task's typed options, plus `args` |
+| `eval` | evaluates Lua or Fennel and returns the result |
 
-A script with typed parameters can also be exposed as its own tool by naming it in `init.lua`
-(`serve = { expose = { "triage" } }`), so a host sees a typed tool instead of a generic runner.
-The skills are published as MCP resources with the same text, so a client without plugin support
-reads the same guidance.
+- A result is text plus `{ value }` as structured content; a failure is an error result with
+  `{ error = { kind, message, hint, data } }`. A task call is a script run record, as from the
+  CLI.
+- A task whose plan asks `confirm` takes a required `confirmed`; a call without it is an error
+  telling the agent to ask the user. Only the user's answer should set it.
+- The skills are resources, `timon://skills/NAME`, so a client without plugin support reads the
+  same guidance.
+- Each call runs in a fresh runtime on the `LocalSet`, behind a channel from tower-mcp's `Send`
+  handlers: calls are isolated, can overlap, and see the current tasks and settings. Cancelling
+  a request drops its run, which stops its processes.
+- stdout carries the protocol: the transport writes to a copy of fd 1, and fd 1 points at
+  stderr, so what tasks print cannot corrupt the stream.
+- The tool list is built at start; a changed `tasks.lua` needs a restart (no
+  `tools/list_changed` yet). Tool annotations wait for declared effects (#83).
 
 ## Directories
 
