@@ -34,9 +34,13 @@ impl Sandbox {
     }
 
     fn timon(&self, code: &str, env: &[(&str, &str)]) -> Output {
+        self.cli(&["eval", code], env)
+    }
+
+    fn cli(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_timon"));
-        cmd.args(["eval", code])
+        cmd.args(args)
             .current_dir(self.root())
             .env("TIMON_HOME", self.root().join("timon"))
             .env("HOME", self.root())
@@ -421,4 +425,86 @@ fn codex_failures_are_classified() {
         &[],
     );
     assert!(String::from_utf8_lossy(&o.stderr).contains("timon: unsupported:"));
+}
+
+// Run records and budgets (#22)
+
+#[test]
+fn every_run_is_recorded_with_secrets_redacted() {
+    let s = Sandbox::new();
+    let secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+    let r = s.json(
+        &format!("agent.run{{ prompt = 'use key {secret} please' }}"),
+        &[],
+    );
+    let id = r["id"].as_str().unwrap();
+    let dir = s.root().join("timon/state/runs").join(id);
+    let request = std::fs::read_to_string(dir.join("request.json")).unwrap();
+    let result = std::fs::read_to_string(dir.join("result.json")).unwrap();
+    assert!(!request.contains(secret) && !result.contains(secret));
+    assert!(request.contains("[redacted:anthropic]"), "{request}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join("result.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let index = std::fs::read_to_string(s.root().join("timon/state/runs/index.jsonl")).unwrap();
+    assert_eq!(index.lines().count(), 1);
+    assert!(index.contains("[redacted:anthropic]"));
+}
+
+#[test]
+fn runs_are_listed_newest_first_and_shown_by_prefix() {
+    let s = Sandbox::new();
+    s.json("agent.run{ prompt = 'first' }", &[]);
+    let second = s.json("agent.run{ prompt = 'second', provider = 'codex' }", &[]);
+    let o = s.cli(&["runs", "--json"], &[]);
+    let list: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(list[0]["prompt"], "second");
+    assert_eq!(list[0]["provider"], "codex");
+    assert_eq!(list[1]["usd"], 0.0125);
+
+    let id = second["id"].as_str().unwrap();
+    let o = s.cli(&["runs", "show", &id[..id.len() - 2]], &[]);
+    let shown: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(shown["request"]["prompt"], "second");
+    assert_eq!(shown["result"]["status"], "ok");
+
+    let o = s.timon("#agent.runs{ since = '1d' }", &[]);
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "2\n");
+}
+
+#[test]
+fn max_runs_stops_the_next_run() {
+    let s = Sandbox::new();
+    let code = "for i = 1, 3 do agent.run{ prompt = 'p' .. i } end";
+    let o = s.cli(&["eval", code, "--max-runs", "2"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("budget_exceeded: this invocation has started 2 runs; the limit is 2"),
+        "{err}"
+    );
+    assert!(s.logs().join("claude-1.json").exists() && !s.logs().join("claude-2.json").exists());
+}
+
+#[test]
+fn max_usd_from_settings_stops_the_next_run() {
+    let s = Sandbox::new();
+    s.write(
+        s.config().join("init.lua"),
+        "return { limits = { max_usd = 0.02 } }",
+    );
+    let code = "for i = 1, 3 do agent.run{ prompt = 'p' .. i } end";
+    let o = s.timon(code, &[]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("this invocation has spent $0.0250; the limit is $0.02"),
+        "{err}"
+    );
+    assert!(!s.logs().join("claude-2.json").exists());
 }

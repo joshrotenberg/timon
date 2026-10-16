@@ -3,6 +3,7 @@
 
 mod claude;
 mod codex;
+pub mod records;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -104,6 +105,26 @@ pub struct Request {
 }
 
 impl Request {
+    /// The request as JSON, for the run's request.json.
+    pub fn to_json(&self) -> Json {
+        json!({
+            "prompt": self.prompt,
+            "provider": self.provider.name(),
+            "model": self.model,
+            "effort": self.effort,
+            "access": self.access.name(),
+            "tools": self.tools,
+            "cwd": self.cwd,
+            "system": self.system,
+            "output": self.output.as_ref().map(|s| s.json_schema()),
+            "timeout_ms": self.timeout.map(|t| t.as_millis() as u64),
+            "budget": { "usd": self.budget.usd, "turns": self.budget.turns },
+            "resume": self.resume,
+            "fork": self.fork,
+            "native": self.native,
+        })
+    }
+
     pub fn new(provider: Provider, prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
@@ -162,6 +183,8 @@ pub struct Usage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Record {
     pub id: String,
+    /// When the run started, RFC 3339 in UTC.
+    pub started_at: String,
     pub status: Status,
     /// The validated structured output, when the request asked for one.
     pub answer: Option<Json>,
@@ -181,6 +204,7 @@ impl Record {
     pub fn to_json(&self) -> Json {
         json!({
             "id": self.id,
+            "started_at": self.started_at,
             "status": self.status.name(),
             "answer": self.answer,
             "text": self.text,
@@ -248,6 +272,7 @@ pub fn check(request: &Request) -> Result<(), Error> {
 /// Runs one turn and returns its record. It never fails: how the run ended is in the record.
 pub async fn run(request: &Request) -> Record {
     let started = Instant::now();
+    let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let binary = binary(request.provider);
     let outcome = match request.provider {
         Provider::Claude => claude::run(request, binary.as_deref()).await,
@@ -255,6 +280,7 @@ pub async fn run(request: &Request) -> Record {
     };
     let mut record = Record {
         id: new_id(),
+        started_at,
         status: Status::Ok,
         answer: None,
         text: String::new(),

@@ -584,6 +584,19 @@ local b = agent.spawn{ prompt = "Summarize CHANGELOG.md", provider = "codex" }
 local ra, rb = a:await(), b:await()
 ```
 
+### `agent.runs{ since, limit } -> array`
+
+Recorded runs, newest first: id, started_at, provider, model, agent, status, ms, usd, output_tokens and the start of the prompt. timon runs show ID has the full request and result.
+
+| Option | Type | |
+|---|---|---|
+| `since` | any | a duration back from now, such as "1d" or "2h" |
+| `limit` | integer | most entries to return (default 20) |
+
+```lua
+for _, r in ipairs(agent.runs{ since = "1d" }) do print(r.id, r.status, r.prompt) end
+```
+
 ### `agent.continue(record, prompt, spec) -> record`
 
 Resumes record's session with a new prompt, on the same provider. spec adds or overrides fields.

@@ -1,5 +1,6 @@
 //! `agent`: Claude Code and Codex runs from Lua.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -57,6 +58,16 @@ pub const DOC: Module = Module {
             "local a = agent.spawn{ prompt = \"Summarize README.md\" }\nlocal b = agent.spawn{ prompt = \"Summarize CHANGELOG.md\", provider = \"codex\" }\nlocal ra, rb = a:await(), b:await()",
         ),
         Func::new(
+            "runs",
+            "agent.runs{ since, limit } -> array",
+            "Recorded runs, newest first: id, started_at, provider, model, agent, status, ms, usd, output_tokens and the start of the prompt. timon runs show ID has the full request and result.",
+            "for _, r in ipairs(agent.runs{ since = \"1d\" }) do print(r.id, r.status, r.prompt) end",
+        )
+        .with_options(&[
+            Opt::new("since", Ty::Any, "a duration back from now, such as \"1d\" or \"2h\""),
+            Opt::new("limit", Ty::Integer, "most entries to return (default 20)"),
+        ]),
+        Func::new(
             "continue",
             "agent.continue(record, prompt, spec) -> record",
             "Resumes record's session with a new prompt, on the same provider. spec adds or overrides fields.",
@@ -67,6 +78,85 @@ pub const DOC: Module = Module {
 
 /// Registry key of the agent definition directories, project first.
 pub(crate) const AGENT_DIRS: &str = "timon.agent_dirs";
+
+/// Registry key of the state directory, where run records go.
+pub(crate) const STATE_DIR: &str = "timon.state_dir";
+
+/// Limits for one invocation, and what it has used.
+struct Spending {
+    max_runs: Option<u64>,
+    max_usd: Option<f64>,
+    runs: Cell<u64>,
+    usd: Cell<f64>,
+}
+
+/// Limits given on the command line; they win over init.lua.
+pub struct Overrides {
+    pub max_runs: Option<u64>,
+    pub max_usd: Option<f64>,
+}
+
+fn spending(lua: &Lua) -> mlua::Result<()> {
+    if lua.app_data_ref::<Spending>().is_some() {
+        return Ok(());
+    }
+    let (cli_runs, cli_usd) = match lua.app_data_ref::<Overrides>() {
+        Some(o) => (o.max_runs, o.max_usd),
+        None => (None, None),
+    };
+    let spending = Spending {
+        max_runs: cli_runs.or(setting::<i64>(lua, "limits", "max_runs")?.map(|n| n.max(0) as u64)),
+        max_usd: cli_usd.or(setting::<f64>(lua, "limits", "max_usd")?),
+        runs: Cell::new(0),
+        usd: Cell::new(0.0),
+    };
+    lua.set_app_data(spending);
+    Ok(())
+}
+
+/// Raises `budget_exceeded` if starting another run would pass a limit, else counts it.
+fn start_run(lua: &Lua) -> mlua::Result<()> {
+    spending(lua)?;
+    let Some(s) = lua.app_data_ref::<Spending>() else {
+        return Ok(());
+    };
+    if let Some(max) = s.max_runs
+        && s.runs.get() >= max
+    {
+        return Err(Error::new(
+            "budget_exceeded",
+            format!(
+                "this invocation has started {} runs; the limit is {max}",
+                s.runs.get()
+            ),
+        )
+        .with_hint("raise --max-runs or limits.max_runs")
+        .into());
+    }
+    if let Some(max) = s.max_usd
+        && s.usd.get() >= max
+    {
+        return Err(Error::new(
+            "budget_exceeded",
+            format!(
+                "this invocation has spent ${:.4}; the limit is ${max}",
+                s.usd.get()
+            ),
+        )
+        .with_hint(
+            "raise --max-usd or limits.max_usd; Codex runs report no cost and are not counted",
+        )
+        .into());
+    }
+    s.runs.set(s.runs.get() + 1);
+    Ok(())
+}
+
+fn spent(lua: &Lua, usd: Option<f64>) {
+    if let (Some(s), Some(usd)) = (lua.app_data_ref::<Spending>(), usd) {
+        s.usd.set(s.usd.get() + usd);
+    }
+}
 
 const GLUE: &str = r#"
 local run, spawn, fail = ...
@@ -257,7 +347,19 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
         .acquire()
         .await
         .map_err(|_| Error::new("internal", "the run queue closed"))?;
+    start_run(&lua)?;
     let record = agent::run(&request).await;
+    spent(&lua, record.usage.usd);
+    if let Some(state) = lua.named_registry_value::<Option<String>>(STATE_DIR)? {
+        let agent = spec.raw_get::<Option<String>>("agent")?;
+        if let Err(err) = agent::records::Store::new(std::path::Path::new(&state)).save(
+            &request,
+            &record,
+            agent.as_deref(),
+        ) {
+            eprintln!("timon: the run record was not saved: {err}");
+        }
+    }
     record_table(&lua, &record)
 }
 
@@ -318,6 +420,33 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             let table = error::to_table(&lua, &err)?;
             table.raw_set("data", record)?;
             Err(error::raise(&lua, Value::Table(table)))
+        })?,
+    )?;
+    installer.function(
+        &DOC,
+        Some(&module),
+        "runs",
+        lua.create_function(|lua, opts: Option<Table>| {
+            options::check_opt("agent.runs", opts.as_ref())?;
+            let Some(state) = lua.named_registry_value::<Option<String>>(STATE_DIR)? else {
+                return json_module::array(lua, None).map(Value::Table);
+            };
+            let mut since = None;
+            let mut limit = 20usize;
+            if let Some(opts) = &opts {
+                let s: Value = opts.raw_get("since")?;
+                if !s.is_nil() {
+                    let back = chrono::Duration::from_std(concurrency::duration(&s)?)
+                        .map_err(|e| Error::new("bad_option", e.to_string()))?;
+                    since = Some(chrono::Utc::now() - back);
+                }
+                if let Some(n) = opts.raw_get::<Option<i64>>("limit")? {
+                    limit = n.max(0) as usize;
+                }
+            }
+            let entries =
+                agent::records::Store::new(std::path::Path::new(&state)).list(since, limit)?;
+            json_module::decode(lua, &serde_json::Value::Array(entries))
         })?,
     )?;
     let spawn: Function = lua.globals().raw_get("spawn")?;

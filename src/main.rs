@@ -20,6 +20,12 @@ use timon::{Error, Failure, Runtime};
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Most agent runs this invocation may start
+    #[arg(long, global = true, value_name = "N")]
+    max_runs: Option<u64>,
+    /// Most USD this invocation's Claude runs may spend
+    #[arg(long, global = true, value_name = "USD")]
+    max_usd: Option<f64>,
 }
 
 #[derive(Subcommand)]
@@ -61,6 +67,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// List recorded agent runs, newest first, or show one
+    Runs {
+        #[command(subcommand)]
+        command: Option<RunsCommand>,
+        /// Only runs started within this long, such as 1d or 2h
+        #[arg(long)]
+        since: Option<String>,
+        /// Most runs to list
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// List and read skills: built in, user and project
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -69,6 +88,15 @@ enum Command {
     Plugin(PluginCommand),
     #[command(external_subcommand)]
     Script(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum RunsCommand {
+    /// Print a run's request and result
+    Show {
+        /// The run id, or an unambiguous prefix
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +161,12 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
         Command::Defs { json } => return defs(&layers, json),
         Command::Skill(command) => return skill(&layers, command),
+        Command::Runs {
+            command,
+            since,
+            limit,
+            json,
+        } => return runs(&layers, command, since, limit, json),
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
         Command::Eval { .. } | Command::Run { .. } | Command::Script(_) => {}
     }
@@ -141,6 +175,7 @@ async fn run(cli: Cli) -> ExitCode {
         Ok(rt) => rt,
         Err(failure) => return fail(&failure),
     };
+    rt.set_limits(cli.max_runs, cli.max_usd);
     let result = match cli.command {
         Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
         Command::Run { name, args } => match layers.script(&name) {
@@ -152,6 +187,7 @@ async fn run(cli: Cli) -> ExitCode {
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)
+        | Command::Runs { .. }
         | Command::Plugin(_) => Ok(MultiValue::new()),
     };
     match result {
@@ -306,6 +342,58 @@ fn skill(layers: &Layers, command: SkillCommand) -> ExitCode {
             }
         }
     }
+}
+
+fn runs(
+    layers: &Layers,
+    command: Option<RunsCommand>,
+    since: Option<String>,
+    limit: usize,
+    json: bool,
+) -> ExitCode {
+    let store = timon::agent::records::Store::new(&layers.dirs.state);
+    if let Some(RunsCommand::Show { id }) = command {
+        return match store.show(&id) {
+            Ok(run) => {
+                println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(&err.into()),
+        };
+    }
+    let since = match since.map(|s| timon::modules::concurrency::parse_duration(&s)) {
+        None => None,
+        Some(Ok(back)) => match chrono::Duration::from_std(back) {
+            Ok(back) => Some(chrono::Utc::now() - back),
+            Err(e) => return fail(&Error::new("bad_option", e.to_string()).into()),
+        },
+        Some(Err(err)) => return fail(&err.into()),
+    };
+    let entries = match store.list(since, limit) {
+        Ok(entries) => entries,
+        Err(err) => return fail(&err.into()),
+    };
+    if json {
+        println!("{}", serde_json::Value::Array(entries));
+        return ExitCode::SUCCESS;
+    }
+    for e in &entries {
+        let usd = e["usd"]
+            .as_f64()
+            .map(|u| format!("${u:.4}"))
+            .unwrap_or_else(|| "-".to_owned());
+        println!(
+            "{}  {}  {:6}  {:9}  {:>7}ms  {:>8}  {}",
+            e["id"].as_str().unwrap_or("?"),
+            e["started_at"].as_str().unwrap_or("?"),
+            e["provider"].as_str().unwrap_or("?"),
+            e["status"].as_str().unwrap_or("?"),
+            e["ms"].as_u64().unwrap_or(0),
+            usd,
+            e["prompt"].as_str().unwrap_or(""),
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 fn plugin_build(dir: &Path, check: bool) -> ExitCode {
