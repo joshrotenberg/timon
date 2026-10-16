@@ -66,6 +66,16 @@ timon: undefined_global: undefined global "prnt"
   at eval:1
 ```
 
+## Working on timon
+
+The repository has its own project layer in `.timon/`: a reviewer agent, a naming-audit agent
+and contract, and scripts. Read it, then trust it once:
+
+```sh
+timon trust && timon scripts
+timon run em-dash        # also runs in cargo test
+```
+
 ## License
 
 MIT or Apache-2.0, at your option.

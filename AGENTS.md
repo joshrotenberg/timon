@@ -50,6 +50,13 @@ While bootstrapping:
 - Every options table is declared, and the declaration drives strict checking, `help()`, the
   LuaLS stubs and the skill references. Never add an option without declaring it.
 
+## Dogfood
+
+- `.timon/` is this repository's project layer, and `tests/dogfood.rs` loads and runs it. Use
+  it when working on timon, and add to it when a script or agent would help.
+- `timon run em-dash` checks our own text for em dashes; `cargo test` runs it over the
+  repository.
+
 ## State and tests
 
 - Everything timon writes goes under the XDG config, state and cache directories described in
