@@ -550,7 +550,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `model` | string | the provider's model name |
 | `effort` | string | claude: low, medium, high, xhigh, max; codex: passed through |
 | `access` | string | "read" (default), "write", or "full" (needs limits.allow_full) |
-| `tools` | table | claude's tool list, replacing the one access picks |
+| `tools` | table | claude's tool list, replacing the one access picks; {} allows none |
 | `cwd` | string | the directory to run in |
 | `system` | string | instructions added to the system prompt |
 | `output` | any | a contract name or a schema; the answer is validated |
@@ -560,6 +560,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `fork` | string | a session id to branch from (claude) |
 | `native` | table | extra command-line arguments for the provider |
 | `worktree` | boolean | run in a new git worktree; kept only if the run changed it |
+| `ephemeral` | boolean | leave no session behind for the provider to resume |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -657,6 +658,49 @@ One page of a session's items, each { index, kind, text, name, count }. kind is 
 local page = sessions.transcript(id, { kinds = { "user", "assistant" }, limit = 50 })
 for _, item in ipairs(page.items) do print(item.index, item.kind, item.text) end
 if page.has_more then page = sessions.transcript(id, { offset = page.next_offset }) end
+```
+
+### `sessions.search{ query, mode, backend, project, since, until, limit, per_session, order, subagents, active, automated, exclude } -> result`
+
+Searches every session's text. Returns hits (session rows with match_count and matches { index, kind, name, excerpt }), hidden counts, exhaustive, absence_is_proof when nothing matched, and a note saying what was left out. The index refreshes first, within 15 s. The current session is excluded unless exclude says otherwise.
+
+| Option | Type | |
+|---|---|---|
+| `query` | string | what to find (required) |
+| `mode` | string | terms (default: every word), phrase, fts (FTS5 syntax) or regex |
+| `backend` | string | "claude" or "codex" |
+| `project` | string | part of the session's directory |
+| `since` | any | a duration back ("7d"), a date, or an RFC 3339 time |
+| `until` | any | the same forms as since |
+| `limit` | integer | most sessions (default 20) |
+| `per_session` | integer | most matches shown per session (default 3) |
+| `order` | string | "relevance" (default) or "recent" |
+| `subagents` | boolean | include sessions another session started |
+| `active` | boolean | include sessions written in the last 10 minutes |
+| `automated` | boolean | include claude -p, codex exec and timon's own runs |
+| `exclude` | any | a session id to leave out (default: the current session); false for none |
+
+```lua
+local r = sessions.search{ query = "compressed rollouts", since = "7d" }
+for _, hit in ipairs(r.hits) do
+  print(hit.id, hit.title or hit.snippet, hit.matches[1].excerpt)
+end
+if #r.hits == 0 and not r.absence_is_proof then print(r.note) end
+```
+
+### `sessions.summarize(id, { model, force, backend }) -> summary`
+
+Summarizes a session with Claude (default haiku): goal, what happened, decisions, state, open items. Spends tokens through agent.run, so budgets apply and each call is a run record; the transcript is redacted before it is sent. Cached until the session changes, so a repeat costs nothing. Returns { id, backend, text, model, usd, cached, chunks, chunks_summarized }.
+
+| Option | Type | |
+|---|---|---|
+| `model` | string | the Claude model (default haiku); a different one than the cache's makes a new summary |
+| `force` | boolean | summarize again even when the cache is current |
+| `backend` | string | "claude" or "codex", when a prefix matches both |
+
+```lua
+local s = sessions.summarize("01a117cb")
+print(s.text, s.cached and "(cached)" or string.format("$%.4f", s.usd))
 ```
 
 ### `sessions.current() -> session | nil`

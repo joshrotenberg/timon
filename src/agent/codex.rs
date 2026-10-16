@@ -103,6 +103,9 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
             if request.output.is_some() {
                 command = command.output_schema(&schema_arg);
             }
+            if request.ephemeral {
+                command = command.ephemeral();
+            }
             command.execute_json_cancellable(&client, never).await
         }
         Some(session) => {
@@ -122,6 +125,9 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
             }
             if request.output.is_some() {
                 command = command.output_schema(&schema_arg);
+            }
+            if request.ephemeral {
+                command = command.ephemeral();
             }
             command.execute_json_cancellable(&client, never).await
         }

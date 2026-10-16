@@ -69,10 +69,16 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
                 Some(tools) => tools.clone(),
                 None => defaults.iter().map(|t| (*t).to_owned()).collect(),
             };
-            command
-                .permission_mode(mode)
-                .tools(tools.clone())
-                .allowed_tools(tools)
+            if tools.is_empty() {
+                // An empty list would emit no flag and leave Claude's defaults on; `--tools ""`
+                // turns every tool off.
+                command.permission_mode(mode).tools([""])
+            } else {
+                command
+                    .permission_mode(mode)
+                    .tools(tools.clone())
+                    .allowed_tools(tools)
+            }
         }
     };
     if let Some(model) = &request.model {
@@ -86,6 +92,9 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
     }
     if let Some(shape) = &request.output {
         command = command.json_schema(shape.json_schema().to_string());
+    }
+    if request.ephemeral {
+        command = command.no_session_persistence();
     }
     if let Some(usd) = request.budget.usd {
         command = command.max_budget_usd(usd);

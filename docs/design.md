@@ -398,18 +398,18 @@ sessions.show(id)          -- metadata plus the command a person would use to re
 sessions.current()         -- the session timon is running inside, when the host says so
 
 sessions.transcript(id, { offset = 0, limit = 50, kinds = { "user", "assistant" } })
--- { items = { { index, kind, text, tool }, ... }, next_offset = 50, has_more = true }
+-- { items = { { index, kind, text, name, count }, ... }, next_offset = 50, has_more = true }
 
 sessions.search{
   query   = "mlua async",
   mode    = "terms",         -- "terms" | "phrase" | "fts" | "regex"
   backend = nil, project = nil, since = "30d", limit = 20,
-  exclude = sessions.current(),
-}
--- { hits = { { session = {...}, matches = { { index, kind, excerpt } } } },
---   exhaustive = true, note = "..." }
+}                          -- the current session is left out unless exclude = false
+-- { hits = { { id, backend, title, ..., matches = { { index, kind, excerpt } } } },
+--   exhaustive = true, absence_is_proof = nil, note = "..." }
 
-sessions.summarize(id)     -- spends tokens through agent.run; cached until the session changes
+sessions.summarize(id, { model = "haiku" })
+-- { text, model, usd, cached, chunks, chunks_summarized }
 ```
 
 - Ids accept an unambiguous prefix.
@@ -419,7 +419,11 @@ sessions.summarize(id)     -- spends tokens through agent.run; cached until the 
 - `exhaustive = false` means finding nothing proves nothing, and `note` says what was not
   covered.
 - Transcript text is redacted (`[redacted:<kind>]`) and untrusted.
-- The CLI door mirrors the module: `timon sessions search mlua --since 30d`.
+- Summaries run through `agent.run` (`ephemeral`, no tools, one turn), so budgets and run
+  records apply. The transcript is redacted before it is sent; a long one is summarized in
+  parts and merged. The cache is keyed by the session file's size and modification time.
+- The CLI door mirrors the module, plain text by default and JSON with `--json`:
+  `timon sessions search mlua --since 30d`.
 
 ## mcp
 
@@ -562,9 +566,9 @@ return {
 
 ## Storage
 
-timon keeps everything it writes in SQLite, bundled into the binary through rusqlite, with FTS5
-for text search. Definitions are files a person edits; everything else is a database or sits
-beside one.
+Definitions are files a person edits. Records timon writes once and reads back whole (runs,
+summaries) are JSON files; what needs queries (the session index) is SQLite, bundled through
+rusqlite with FTS5 for text search.
 
 ```
 ~/.local/state/timon/        $XDG_STATE_HOME/timon
@@ -573,7 +577,8 @@ beside one.
 ├── runs/<id>/               request.json, result.json per agent run
 └── worktrees/<id>/          worktrees for `worktree = true` runs
 ~/.cache/timon/              $XDG_CACHE_HOME/timon
-└── sessions.db              the session index; safe to delete, rebuilt on the next call
+├── index.db                 the session index; safe to delete, rebuilt on the next search
+└── summaries/               one JSON file per summarized session
 ```
 
 - XDG locations are used on macOS as well, as most command-line tools do, so config, state and
@@ -581,9 +586,9 @@ beside one.
 - `TIMON_HOME` puts config, state and cache under one root. Tests set it to a temporary
   directory and assert that no path escapes it.
 - Directories are 0700 and files 0600, because they hold transcript text.
-- Project state is keyed by the project root inside these databases, so timon writes nothing
-  into a repository except what a person puts in `.timon/`.
-- Schema changes are numbered migrations applied at open, in one transaction.
+- timon writes nothing into a repository except what a person puts in `.timon/` and worktrees
+  it is asked for.
+- The session index carries a schema version; a different one is rebuilt, since it is a cache.
 - Removing the state and cache directories removes everything timon wrote.
 
 ## Bundled skills

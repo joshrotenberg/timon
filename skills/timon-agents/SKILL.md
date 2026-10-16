@@ -99,7 +99,8 @@ if r.worktree.kept then print("changes in " .. r.worktree.path .. " on " .. r.wo
 | `write` | adds Edit, Write, NotebookEdit | workspace-write sandbox |
 | `full` | no permission checks | no sandbox |
 
-`full` needs `limits = { allow_full = true }` in `init.lua`. `tools` replaces Claude's list.
+`full` needs `limits = { allow_full = true }` in `init.lua`. `tools` replaces Claude's list;
+`tools = {}` allows none. `ephemeral = true` leaves no session behind to resume or list.
 
 ## Named agents
 

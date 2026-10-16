@@ -13,7 +13,7 @@ Design: [docs/design.md](docs/design.md).
 | 0 | Design, crate | done |
 | 1 | Runtime, directories, skills, plugin | done (REPL left) |
 | 2 | `agent`: runs, contracts, records, budgets, worktrees | done (events left) |
-| 3 | `sessions`: list, read and search every session | in progress (list, show, transcript done) |
+| 3 | `sessions`: list, read, search and summarize every session | done |
 | 4 | Toolbox, MCP client and server | to discuss |
 
 ## Install
@@ -53,6 +53,7 @@ timon run triage                           # a named script from ~/.config/timon
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
 timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions
+timon sessions search "flaky parser" --since 30d                      # every session's text
 ```
 
 Errors are tables with a kind, a message and a hint; `try(f, ...)` returns `true, ...` or

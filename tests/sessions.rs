@@ -57,8 +57,12 @@ impl Archive {
     }
 
     fn timon(&self, code: &str, env: &[(&str, &str)]) -> Output {
+        self.cli(&["eval", code], env)
+    }
+
+    fn cli(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_timon"));
-        cmd.args(["eval", code])
+        cmd.args(args)
             .current_dir(self.dir.path())
             .env("TIMON_HOME", self.dir.path().join("timon"))
             .env("HOME", self.home());
@@ -454,4 +458,493 @@ fn a_codex_transcript_drops_the_copies_between_streams_and_reads_compressed_file
     let compressed = a.json(&format!("sessions.transcript('{ID_B}')"), &[]);
     assert_eq!(kinds(&plain), kinds(&compressed));
     assert_eq!(plain["items"], compressed["items"]);
+}
+
+// Search and the index (#42)
+
+/// Sessions old enough to be outside the 10-minute active window.
+fn searchable() -> Archive {
+    let a = Archive::new();
+    a.claude(
+        "-work-s",
+        ID_A,
+        &[
+            claude_user("please fix the flaky parser test", "/work/s"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": "The parser drops quoted colons." },
+                { "type": "tool_use", "id": "t1", "name": "Grep", "input": { "pattern": "zanzibar" } } ] } }),
+        ],
+        60,
+    );
+    a.codex(
+        ID_B,
+        &[
+            codex_meta(ID_B, "/work/c", serde_json::json!("cli")),
+            codex_user("compress the quokka archive"),
+        ],
+        90,
+        true,
+    );
+    a.codex(
+        ID_C,
+        &[
+            codex_meta(ID_C, "/work/c", serde_json::json!("exec")),
+            codex_user("scripted quokka run"),
+        ],
+        120,
+        false,
+    );
+    a
+}
+
+fn hit_ids(r: &serde_json::Value) -> Vec<String> {
+    r["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn search_finds_words_in_both_backends_with_excerpts() {
+    let a = searchable();
+    let r = a.json("sessions.search{ query = 'parser colons' }", &[]);
+    assert_eq!(hit_ids(&r), [ID_A]);
+    let m = &r["hits"][0]["matches"][0];
+    assert_eq!(m["kind"], "assistant");
+    assert_eq!(m["index"], 1);
+    assert!(m["excerpt"].as_str().unwrap().contains("[parser]"), "{m}");
+    assert_eq!(r["exhaustive"], true);
+
+    let r = a.json("sessions.search{ query = 'quokka' }", &[]);
+    assert_eq!(
+        hit_ids(&r),
+        [ID_B],
+        "the compressed rollout is searchable; exec is hidden"
+    );
+    assert_eq!(r["hidden"]["automated"], 1);
+    assert!(r["note"].as_str().unwrap().contains("automated = true"));
+    let r = a.json("sessions.search{ query = 'quokka', automated = true }", &[]);
+    assert_eq!(r["returned"], 2);
+}
+
+#[test]
+fn match_indexes_are_transcript_indexes() {
+    let a = searchable();
+    let r = a.json("sessions.search{ query = 'zanzibar' }", &[]);
+    let m = &r["hits"][0]["matches"][0];
+    assert_eq!(m["kind"], "tool_call");
+    let page = a.json(
+        &format!(
+            "sessions.transcript('{ID_A}', {{ offset = {}, limit = 1 }})",
+            m["index"]
+        ),
+        &[],
+    );
+    assert_eq!(page["items"][0]["kind"], "tool_call");
+    assert!(
+        page["items"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("zanzibar")
+    );
+}
+
+#[test]
+fn search_modes() {
+    let a = searchable();
+    let terms = a.json("sessions.search{ query = 'colons quoted' }", &[]);
+    assert_eq!(terms["returned"], 1, "terms match in any order");
+    let phrase = a.json(
+        "sessions.search{ query = 'colons quoted', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(phrase["returned"], 0, "a phrase keeps its order");
+    assert_eq!(phrase["absence_is_proof"], true);
+    let phrase = a.json(
+        "sessions.search{ query = 'quoted colons', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(phrase["returned"], 1);
+    let fts = a.json(
+        "sessions.search{ query = 'zanzibar OR quokka', mode = 'fts' }",
+        &[],
+    );
+    assert_eq!(fts["returned"], 2);
+    let regex = a.json("sessions.search{ query = 'fla.y', mode = 'regex' }", &[]);
+    assert_eq!(hit_ids(&regex), [ID_A]);
+    let o = a.timon("sessions.search{ query = 'x', mode = 'fuzzy' }", &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown mode"));
+    let o = a.timon("sessions.search{ query = '   ' }", &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("bad_query"));
+}
+
+#[test]
+fn the_current_session_and_recent_ones_are_left_out_and_counted() {
+    let a = searchable();
+    let r = a.json(
+        "sessions.search{ query = 'parser' }",
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    );
+    assert_eq!(r["returned"], 0);
+    assert_eq!(r["hidden"]["excluded"], 1);
+    assert_eq!(r["absence_is_proof"], false);
+    let r = a.json(
+        "sessions.search{ query = 'parser', exclude = false }",
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    );
+    assert_eq!(r["returned"], 1);
+
+    a.claude(
+        "-work-new",
+        ID_A2,
+        &[claude_user("fresh parser work", "/work/new")],
+        0,
+    );
+    let r = a.json("sessions.search{ query = 'fresh parser' }", &[]);
+    assert_eq!(r["hidden"]["active"], 1);
+    let r = a.json(
+        "sessions.search{ query = 'fresh parser', active = true }",
+        &[],
+    );
+    assert_eq!(r["returned"], 1);
+}
+
+#[test]
+fn the_index_follows_appends_removals_and_rebuilds() {
+    let a = searchable();
+    assert_eq!(
+        a.json("sessions.search{ query = 'kumquat' }", &[])["returned"],
+        0
+    );
+    let file = a
+        .home()
+        .join(".claude/projects/-work-s")
+        .join(format!("{ID_A}.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(f, "{}", claude_user("now about kumquat", "/work/s")).unwrap();
+    drop(f);
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let r = a.json("sessions.search{ query = 'kumquat' }", &[]);
+    assert_eq!(r["returned"], 1);
+    assert_eq!(r["coverage"]["refresh"]["appended"], 1);
+
+    std::fs::remove_file(&file).unwrap();
+    let r = a.json("sessions.search{ query = 'kumquat' }", &[]);
+    assert_eq!(r["returned"], 0);
+    assert_eq!(r["coverage"]["refresh"]["removed"], 1);
+
+    let fixtures_home = a.home();
+    let o = Command::new(env!("CARGO_BIN_EXE_timon"))
+        .args(["sessions", "index", "--rebuild"])
+        .current_dir(a.dir.path())
+        .env("TIMON_HOME", a.dir.path().join("timon"))
+        .env("HOME", &fixtures_home)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(report["reindexed"], 2);
+    assert_eq!(report["pending"], 0);
+}
+
+// Summaries (#43)
+
+fn fake_claude() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake-claude")
+        .display()
+        .to_string()
+}
+
+fn logged(dir: &Path) -> Vec<serde_json::Value> {
+    let mut calls: Vec<(usize, serde_json::Value)> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let n = name["claude-".len()..name.len() - ".json".len()]
+                .parse()
+                .unwrap();
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            (n, serde_json::from_str(&text).unwrap())
+        })
+        .collect();
+    calls.sort_by_key(|(n, _)| *n);
+    calls.into_iter().map(|(_, c)| c).collect()
+}
+
+#[test]
+fn a_summary_is_redacted_ephemeral_and_cached_until_the_session_changes() {
+    let a = Archive::new();
+    let secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+    let lines = [
+        claude_user(&format!("deploy with key {secret}"), "/work/app"),
+        serde_json::json!({ "type": "assistant", "message": { "role": "assistant",
+            "content": [{ "type": "text", "text": "deployed" }] } }),
+    ];
+    a.claude("-work-app", ID_A, &lines, 10);
+    let log = a.dir.path().join("log");
+    std::fs::create_dir_all(&log).unwrap();
+    let claude = fake_claude();
+    let log_dir = log.display().to_string();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_LOG_DIR", log_dir.as_str()),
+        ("FAKE_TEXT", "Goal: deploy."),
+    ];
+    let summarize = |opts: &str| {
+        a.json(
+            &format!("return sessions.summarize(\"aaaaaaaa-1111\", {opts})"),
+            &env,
+        )
+    };
+
+    let s = summarize("{}");
+    assert_eq!(s["text"], "Goal: deploy.");
+    assert_eq!(s["id"], ID_A);
+    assert_eq!(s["model"], "haiku");
+    assert_eq!(s["cached"], false);
+    assert_eq!(s["usd"], 0.0125);
+    assert_eq!(
+        (s["chunks"].as_u64(), s["chunks_summarized"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let calls = logged(&log);
+    assert_eq!(calls.len(), 1);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("deployed") && prompt.contains("[redacted:anthropic]"));
+    assert!(!prompt.contains(secret));
+    let args: Vec<&str> = calls[0]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(args.contains(&"--no-session-persistence"), "{args:?}");
+    assert!(
+        args.windows(2).any(|w| w == ["--model", "haiku"]),
+        "{args:?}"
+    );
+    assert!(args.windows(2).any(|w| w == ["--tools", ""]), "{args:?}");
+
+    let again = summarize("{}");
+    assert_eq!(
+        (again["cached"].as_bool(), again["usd"].as_f64()),
+        (Some(true), Some(0.0))
+    );
+    assert_eq!(logged(&log).len(), 1);
+
+    assert_eq!(summarize("{ force = true }")["cached"], false);
+    let sonnet = summarize("{ model = \"sonnet\" }");
+    assert_eq!(
+        (sonnet["cached"].as_bool(), sonnet["model"].as_str()),
+        (Some(false), Some("sonnet"))
+    );
+    assert_eq!(summarize("{}")["model"], "sonnet");
+    assert_eq!(logged(&log).len(), 3);
+
+    let mut more = lines.to_vec();
+    more.push(claude_user("and roll back", "/work/app"));
+    a.claude("-work-app", ID_A, &more, 1);
+    assert_eq!(summarize("{}")["cached"], false);
+    assert_eq!(logged(&log).len(), 4);
+
+    let runs = a.json("return agent.runs{}", &[]);
+    assert_eq!(runs.as_array().unwrap().len(), 4);
+    let o = a.timon(
+        "return sessions.summarize(\"aaaaaaaa-1111\", { modle = \"x\" })",
+        &env,
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("did you mean \"model\""));
+}
+
+#[test]
+fn a_long_session_is_summarized_in_parts_and_merged_within_budget() {
+    let a = Archive::new();
+    // Records are capped at 4,000 characters each, so length comes from their number.
+    let block = "word ".repeat(700);
+    let lines: Vec<serde_json::Value> = (0..80)
+        .map(|i| claude_user(&format!("part{i} {block}"), "/work/app"))
+        .collect();
+    a.claude("-work-app", ID_A, &lines, 10);
+    let log = a.dir.path().join("log");
+    std::fs::create_dir_all(&log).unwrap();
+    let claude = fake_claude();
+    let log_dir = log.display().to_string();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_LOG_DIR", log_dir.as_str()),
+        ("FAKE_TEXT", "- a bullet"),
+    ];
+    let s = a.json("return sessions.summarize(\"aaaaaaaa\")", &env);
+    assert_eq!(
+        (s["chunks"].as_u64(), s["chunks_summarized"].as_u64()),
+        (Some(2), Some(2))
+    );
+    assert_eq!(s["usd"], 0.0125 * 3.0);
+    let prompts: Vec<String> = logged(&log)
+        .iter()
+        .map(|c| c["prompt"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(prompts.len(), 3);
+    assert!(prompts[0].starts_with("This is part 1 of 2"));
+    assert!(prompts[1].starts_with("This is part 2 of 2"));
+    assert!(prompts[2].contains("Merge them") && prompts[2].contains("PART 2:\n- a bullet"));
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_timon"));
+    let o = cmd
+        .args([
+            "eval",
+            "return sessions.summarize(\"aaaaaaaa\", { force = true })",
+            "--max-runs",
+            "2",
+        ])
+        .current_dir(a.dir.path())
+        .env("TIMON_HOME", a.dir.path().join("timon"))
+        .env("HOME", a.home())
+        .envs(env)
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("budget_exceeded"));
+}
+
+// The CLI door (#44)
+
+fn out(o: &Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn the_cli_lists_shows_and_finds_the_current_session() {
+    let a = fixture();
+    let o = a.cli(&["sessions", "list"], &[]);
+    let (stdout, stderr) = out(&o);
+    assert!(o.status.success(), "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(lines[0].starts_with("aaaaaaaa  claude"), "{stdout}");
+    assert!(lines[0].ends_with("/work/timon  Build fix"), "{stdout}");
+    assert!(lines[1].starts_with("bbbbbbbb  codex"), "{stdout}");
+    assert_eq!(
+        stderr.trim(),
+        "left out: 1 automated (--automated), 1 subagents (--subagents)"
+    );
+
+    let o = a.cli(
+        &[
+            "sessions",
+            "list",
+            "--backend",
+            "codex",
+            "--automated",
+            "--json",
+        ],
+        &[],
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let ids: Vec<&str> = r["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [ID_B, ID_A2]);
+
+    let (stdout, _) = out(&a.cli(&["sessions", "show", "aaaaaaaa-1111"], &[]));
+    assert!(stdout.contains("title     Build fix"), "{stdout}");
+    assert!(
+        stdout.contains("prs       https://github.com/o/r/pull/7"),
+        "{stdout}"
+    );
+    let o = a.cli(&["sessions", "show", "ffff"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("not_found"));
+
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "current"],
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    ));
+    assert!(stdout.starts_with(&format!("id        {ID_A}")), "{stdout}");
+    let o = a.cli(&["sessions", "current"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("CLAUDE_CODE_SESSION_ID"));
+}
+
+#[test]
+fn the_cli_pages_transcripts_and_searches() {
+    let a = searchable();
+    let (stdout, stderr) = out(&a.cli(&["sessions", "transcript", ID_A, "--limit", "1"], &[]));
+    assert_eq!(stdout.trim(), "[0] USER: please fix the flaky parser test");
+    assert!(stderr.contains("more with --offset 1"), "{stderr}");
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "transcript", ID_A, "--kind", "tool_call"],
+        &[],
+    ));
+    assert!(stdout.starts_with("[2] TOOL CALL: Grep("), "{stdout}");
+
+    let (stdout, stderr) = out(&a.cli(&["sessions", "search", "parser colons"], &[]));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines[0].starts_with("aaaaaaaa  claude"), "{stdout}");
+    assert!(lines[1].starts_with("  [1] assistant: "), "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let (_, stderr) = out(&a.cli(&["sessions", "search", "quokka"], &[]));
+    assert!(stderr.contains("automated = true"), "{stderr}");
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "search", "quokka", "--automated", "--json"],
+        &[],
+    ));
+    let r: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(r["returned"], 2);
+    let (stdout, stderr) = out(&a.cli(&["sessions", "search", "nowhere"], &[]));
+    assert!(
+        stdout.is_empty() && stderr.starts_with("no matches"),
+        "{stderr}"
+    );
+    let o = a.cli(&["sessions", "search", "x", "--mode", "fuzzy"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("fuzzy"));
+}
+
+#[test]
+fn the_cli_summarizes_and_says_what_it_cost() {
+    let a = searchable();
+    let claude = fake_claude();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_TEXT", "Goal: fix the parser."),
+    ];
+    let (stdout, stderr) = out(&a.cli(&["sessions", "summarize", "aaaaaaaa"], &env));
+    assert_eq!(stdout.trim(), "Goal: fix the parser.");
+    assert_eq!(stderr.trim(), "haiku, $0.0125");
+    let (_, stderr) = out(&a.cli(&["sessions", "summarize", "aaaaaaaa"], &env));
+    assert_eq!(stderr.trim(), "haiku, cached");
+    let o = a.cli(
+        &[
+            "--max-runs",
+            "0",
+            "sessions",
+            "summarize",
+            "aaaaaaaa",
+            "--force",
+        ],
+        &env,
+    );
+    assert!(out(&o).1.contains("budget_exceeded"), "{}", out(&o).1);
 }

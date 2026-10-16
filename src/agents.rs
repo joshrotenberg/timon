@@ -28,6 +28,7 @@ pub const FIELDS: &[&str] = &[
     "budget",
     "worktree",
     "native",
+    "ephemeral",
 ];
 
 /// One definition file.
