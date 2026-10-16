@@ -147,7 +147,7 @@ struct Spec {
 }
 
 /// The first piece of shell syntax in an unquoted (or double-quoted) part of `s`.
-fn shell_syntax(s: &str) -> Option<String> {
+pub(crate) fn shell_syntax(s: &str) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();
     let (mut single, mut double, mut escaped) = (false, false, false);
     let mut word_start = true;

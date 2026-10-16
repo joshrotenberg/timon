@@ -286,7 +286,8 @@ The stock Lua standard library stays intact.
 
 ## Tasks
 
-Built in phase 5 (#68); the items marked phase 6 are not.
+Built in phases 5 (#68) and 6, except built-in commands as tasks and completion (see the last
+item).
 
 ```lua
 -- .timon/tasks.lua (and ~/.config/timon/tasks.lua, or tasks.fnl)
@@ -302,9 +303,9 @@ return {
     depends = { "check" },
     budget = { runs = 3, usd = 2 },
     aliases = { "r" },
+    options = { base = { type = "string", default = "main", short = "b", doc = "the branch" } },
     run = function(opts, deps)
-      return agent.ask{ agent = "reviewer",
-                        prompt = "Review the diff against " .. (opts.args[1] or "main") }
+      return agent.ask{ agent = "reviewer", prompt = "Review the diff against " .. opts.base }
     end,
   },
 }
@@ -313,19 +314,27 @@ return {
 ```sh
 timon tasks                          # tasks.lua and scripts/, both layers; --all, --json
 timon check                          # a task, when no timon command has the name
-timon review develop                 # opts.args is { "develop" }
+timon review -b develop              # opts.base is "develop"; --help prints the options
+timon -j 2 review                    # independent dependencies at the same time
+timon --dry-run review               # the plan as JSON
 timon test -- --nocapture            # words after -- are taken as they are
 timon task runs                      # always the task, even when a command has the name
 timon --yes drop-db                  # answers confirm
 ```
 
-- **A task** is a table (`description`, `run`, `depends`, `budget`, `aliases`, `group`,
-  `private`, `confirm`, `platforms`), a command string for `sh`, or a function. The fields are
+- **A task** is a table (`description`, `run`, `options`, `depends`, `budget`, `aliases`,
+  `group`, `private`, `confirm`, `platforms`), a command string, or a function. The fields are
   declared like options and checked when tasks load, with did-you-mean. So are unknown
   dependencies, cycles, and aliases that clash with a task, another alias or a command.
-- **`run(opts, deps)`.** `opts.args` holds the words after the task name; `deps.NAME` is each
-  dependency's first result. A string `run` gets the words appended. Words before `--` that
-  start with `-` are refused, because typed options (phase 6) will parse them.
+- **`run(opts, deps)`.** `opts` holds the typed options and `opts.args` the other words;
+  `deps.NAME` is each dependency's first result. A command string runs without a shell and gets
+  the words appended as words, so shell syntax in it is refused when tasks load.
+- **Options** are declared in the #29 type syntax, alone or as `{ type, default, short, doc }`,
+  and parsed by one engine (`src/flags.rs`) that also serves `cli.parse` in scripts. Flags
+  follow babashka.cli: `--key value`, `--key=value`, `--flag`, `--no-flag`, a repeated flag for
+  a list, a short name, `--`. `timon NAME --help` is generated from the declaration, and
+  `timon tasks --json` includes it. Scripts keep `arg` and parse it with `cli.parse` when they
+  want flags, as bb scripts use babashka.cli.
 - **Scripts are tasks.** Every script in `scripts/` is a task whose description is its leading
   comment, and on its own it runs as a script always has. The other fields are declared in
   `tasks.lua`, because listing reads scripts without running them; long task bodies go in
@@ -341,9 +350,17 @@ timon --yes drop-db                  # answers confirm
   task's status and time in its result, so it is resumable (#57). A task's `budget` scopes the
   agent runs inside it (#56). `confirm` asks before anything runs, and `--yes` answers it;
   `platforms` stops a plan with an unavailable task before anything runs.
-- **Phase 6:** timon's commands declared as tasks; typed `options` in the #29 syntax, parsed
-  from `--key` flags with generated `--help`, shared with scripts; several tasks per
-  invocation with `--jobs`; `task.run(name, opts)`; `--dry-run` (#38).
+- **Plans in parallel.** One task per invocation, as in bb: the words after the name are its
+  own. `--jobs N` runs dependencies that do not depend on each other at the same time, level by
+  level, with each command task's output prefixed by its name. Several tasks at once are a task
+  that depends on them.
+- **`task.run(name, opts)`** runs a task from inside `run`, in the same script run: its
+  dependencies that have not run in this invocation, then the task, with `opts` checked like
+  flags. It does not ask `confirm`.
+- **`--dry-run`** prints the plan as JSON: each task, its level, what it runs and its options.
+  It cannot see `task.run` calls inside a function.
+- **Not built yet:** timon's own commands in `timon tasks` with their declarations, and shell
+  completion from the same declarations.
 
 ## agent
 
@@ -818,7 +835,7 @@ protocol of its own.
 | 3 | `sessions`: list, show, transcript, search, current, summarize; the index; `timon sessions` | the same hit sets as trovador for a fixed list of queries on one archive snapshot |
 | 4 | Toolbox: `sh` and `proc` (#70) | this repository's gates run as a timon script, streaming output and exiting with the first failing gate's code |
 | 5 | Tasks v1 (#68): `tasks.lua` in both layers, `timon tasks`, `timon <task>`, `depends`, tasks as script runs | this repository's gates, release steps and dogfood scripts are tasks in daily use, and an agent runs them through the plugin |
-| 6 | Built-in tasks and typed options: timon's commands declared as tasks; options from the type syntax with `--help`; several tasks per invocation with `--jobs`; `task.run`; exit codes (#39); `--dry-run` (#38) | `timon tasks` lists built-in and project tasks alike, and every command's help comes from its declaration |
+| 6 | Built-in tasks and typed options: timon's commands declared as tasks; options from the type syntax with `--help`, and `cli.parse` for scripts; `--jobs` for independent dependencies; `task.run`; exit codes (#39); `--dry-run`; shell completion | `timon tasks` lists built-in and project tasks alike, and every command's help comes from its declaration |
 | 7 | The rest of the toolbox: `git`, `gh`, `http`, `sqlite`; data formats (#72); `eval` input modes (#71) | a release task (bump `Cargo.toml`, tag, push, GitHub release) written as a timon task |
 | 8 | Workflow patterns: `flow` (#59) and its skill | a review with a verifier and a vote of three run as tasks |
 | 9 | MCP: the `mcp` client, and `timon serve` with tasks as tools | an agent calls a project's tasks over MCP |

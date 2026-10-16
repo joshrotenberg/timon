@@ -1,6 +1,7 @@
 //! The modules installed into every runtime, and the installer that registers them for `help()`.
 
 pub mod agent;
+pub mod cli;
 pub mod concurrency;
 pub mod fs;
 pub mod json;
@@ -200,6 +201,8 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     log::install(&installer)?;
     concurrency::install(&installer)?;
     proc::install(&installer)?;
+    cli::install(&installer)?;
+    crate::tasks::install(&installer)?;
     schema::install(&installer)?;
     agent::install(&installer)?;
     sessions::install(&installer)?;

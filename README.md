@@ -18,7 +18,7 @@ Design: [docs/design.md](docs/design.md).
 | 3 | `sessions`: list, read, search and summarize every session | done |
 | 4 | Toolbox: `sh` and `proc` | done |
 | 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
-| 6 | Built-in tasks, typed options, plans | next |
+| 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks | in progress |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | planned |
 | 8 | Workflow patterns | planned |
 | 9 | MCP client and server | planned |
