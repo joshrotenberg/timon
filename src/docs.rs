@@ -145,6 +145,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::log::DOC,
         &modules::concurrency::DOC,
         &modules::schema::DOC,
+        &modules::agent::DOC,
     ]
 }
 

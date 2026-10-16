@@ -439,7 +439,7 @@ async fn await_task(lua: &Lua, task: &TaskInner) -> mlua::Result<MultiValue> {
 }
 
 /// Parses a duration: a number of seconds, or a string such as "250ms", "2s", "1.5m", "1h".
-fn duration(value: &Value) -> Result<Duration, Error> {
+pub(crate) fn duration(value: &Value) -> Result<Duration, Error> {
     let bad = || {
         Error::new(
             "bad_argument",

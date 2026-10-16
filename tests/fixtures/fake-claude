@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""A fake `claude -p` for tests. Never contacts a model.
+
+FAKE_MODE: ok (default), auth, max_turns, is_error
+FAKE_TEXT: the result text (default: "echo: " + the prompt)
+FAKE_STRUCTURED: JSON for structured_output
+FAKE_SESSION: the session id (default: claude-session-1)
+FAKE_DELAY: seconds to sleep first
+FAKE_PID_FILE: write this process's pid here first
+FAKE_LOG_DIR: append {args, prompt, cwd} as claude-N.json
+FAKE_RUNNING_DIR: a marker per running process; the count seen at start goes to ../seen-PID
+"""
+import json, os, sys, time
+
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+log = os.environ.get("FAKE_LOG_DIR")
+if log:
+    n = len([f for f in os.listdir(log) if f.startswith("claude-")])
+    with open(os.path.join(log, f"claude-{n}.json"), "w") as f:
+        json.dump({"args": args, "prompt": prompt, "cwd": os.getcwd()}, f)
+if os.environ.get("FAKE_PID_FILE"):
+    with open(os.environ["FAKE_PID_FILE"], "w") as f:
+        f.write(str(os.getpid()))
+running = os.environ.get("FAKE_RUNNING_DIR")
+if running:
+    marker = os.path.join(running, str(os.getpid()))
+    open(marker, "w").close()
+    seen = len(os.listdir(running))
+    with open(os.path.join(running, "..", f"seen-{os.getpid()}"), "w") as f:
+        f.write(str(seen))
+time.sleep(float(os.environ.get("FAKE_DELAY", "0")))
+if running:
+    os.remove(marker)
+
+session = os.environ.get("FAKE_SESSION", "claude-session-1")
+if "--resume" in args:
+    session = args[args.index("--resume") + 1]
+if "--fork-session" in args:
+    session = "claude-forked-1"
+mode = os.environ.get("FAKE_MODE", "ok")
+result = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": os.environ.get("FAKE_TEXT", "echo: " + prompt),
+    "session_id": session,
+    "total_cost_usd": 0.0125,
+    "duration_ms": 7,
+    "num_turns": 1,
+    "usage": {"input_tokens": 120, "output_tokens": 30},
+}
+if os.environ.get("FAKE_STRUCTURED"):
+    result["structured_output"] = json.loads(os.environ["FAKE_STRUCTURED"])
+
+if mode == "auth":
+    sys.stderr.write("Not logged in · Please run /login\n")
+    sys.exit(1)
+if mode == "max_turns":
+    result.update(subtype="error_max_turns", is_error=True, result="", num_turns=30)
+    print(json.dumps(result))
+    sys.exit(1)
+if mode == "is_error":
+    result.update(subtype="error_during_execution", is_error=True, result="it broke")
+print(json.dumps(result))

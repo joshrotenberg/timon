@@ -108,6 +108,14 @@ impl Runtime {
             crate::modules::schema::CONTRACT_DIRS,
             self.lua.create_sequence_from(contract_dirs)?,
         )?;
+        let agent_dirs: Vec<String> = crate::agents::dirs(layers)
+            .iter()
+            .map(|(_, d)| d.display().to_string())
+            .collect();
+        self.lua.set_named_registry_value(
+            crate::modules::agent::AGENT_DIRS,
+            self.lua.create_sequence_from(agent_dirs)?,
+        )?;
         let settings = crate::settings::load(&self.lua, &layers.init_files())?;
         self.lua.set_named_registry_value(SETTINGS, settings)?;
         Ok(())

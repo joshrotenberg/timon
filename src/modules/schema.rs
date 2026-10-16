@@ -313,6 +313,14 @@ fn shape_of(value: &Value, what: &str) -> Result<Rc<Shape>, Error> {
     .with_hint("build one with schema.string, schema.object{...} and the rest"))
 }
 
+/// The shape named by `value`: a schema, or the name of a contract.
+pub(crate) fn resolve(lua: &Lua, value: &Value) -> Result<Rc<Shape>, Error> {
+    match value {
+        Value::String(name) => contract(lua, &name.to_string_lossy()),
+        other => shape_of(other, "output"),
+    }
+}
+
 /// Loads contract `name` from the layers, then the built-in ones; cached per runtime.
 pub(crate) fn contract(lua: &Lua, name: &str) -> Result<Rc<Shape>, Error> {
     let cache: Table = match lua.named_registry_value::<Option<Table>>(CACHE)? {
