@@ -2,10 +2,10 @@
 //!
 //! Both hosts run a command with the event's JSON on stdin and read JSON from its stdout.
 //! `timon hook` runs the handlers `init.lua`'s `hooks` setting names for the event: tasks, or
-//! the built-ins [`BRIEF`] (recent sessions and the tasks in reach, at session start) and
-//! [`GUARD`] (edits and shell commands checked against the `guard` setting, before a tool
-//! runs). It always exits 0: a handler that fails is skipped and reported to the user as a
-//! `systemMessage`, so a broken hook never stops the host.
+//! the built-ins [`BRIEF`] (recent sessions, interrupted runs and the tasks in reach, at
+//! session start) and [`GUARD`] (edits and shell commands checked against the `guard`
+//! setting, before a tool runs). It always exits 0: a handler that fails is skipped and
+//! reported to the user as a `systemMessage`, so a broken hook never stops the host.
 
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;

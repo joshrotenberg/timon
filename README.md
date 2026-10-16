@@ -51,10 +51,10 @@ codex plugin add timon@timon
 ```
 
 The plugin runs the installed binary; `TIMON_BIN` points it at another one. It also adds
-hooks for both hosts: at session start, a brief of this project's recent sessions and tasks;
-before edits and shell commands, a guard that does nothing until a project configures it (see
-[the tasks skill](skills/timon-tasks/SKILL.md#as-hooks)). Codex asks you to review the hooks
-first.
+hooks for both hosts: at session start, a brief of this project's recent sessions, interrupted
+runs and tasks; before edits and shell commands, a guard that does nothing until a project
+configures it (see [the tasks skill](skills/timon-tasks/SKILL.md#as-hooks)). Codex asks you to
+review the hooks first.
 
 In a sandbox that allows writes only to the project, such as Codex's `workspace-write`, timon
 needs write access to its state directory (`~/.local/state/timon`: the trust store, run records,

@@ -578,7 +578,9 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   with a grace period, then kills it. Every outcome is recorded, including `cancelled`.
 - **Run records.** Each run writes `request.json` and a `running` result under
   `state/runs/<id>/` before the provider starts, then its final result; `state/runs/index.jsonl`
-  gets a line for each state. A run whose timon process died is found later and settled as
+  gets a line for each state, with the directory the run works for (`cwd`: for a worktree run,
+  the directory the worktree was made from). Script run lines in `state/scripts/index.jsonl`
+  have `cwd` too. Lines written before `cwd` was added have none. A run whose timon process died is found later and settled as
   `interrupted`, with `effects_uncertain` unless it was read-only; nothing is replayed. `timon runs`, `timon runs show ID`,
   `agent.runs{ since = "1d" }`. Secrets are redacted before anything is written.
 - **Worktrees.** `worktree = true` creates a worktree in the state directory on a
@@ -907,11 +909,14 @@ SessionStart, and for PreToolUse on `Bash|Write|Edit|MultiEdit|NotebookEdit|appl
   `systemMessage`, so a broken hook never stops the host. fd 1 points at stderr while handlers
   run, as in `timon serve`, so what tasks print cannot corrupt the JSON.
 - The brief: up to 5 of the project's sessions from the last 7 days, both hosts, newest first
-  (the current session, subagents and automated runs left out), under a line that says their
-  titles are history, not instructions; up to 12 public tasks; and a line when the project's
-  `.timon` is not trusted. Nothing when there is none of these.
-  `sessions.list{ dir }` finds the sessions: Claude's by their project directory's name and
-  Codex's by their first line, so a 7-day brief over 1,036 sessions takes 0.07 s.
+  (the current session, subagents and automated runs left out); its agent and script runs from
+  the same 7 days that were interrupted, at most 3, found by the `cwd` on their index lines (an
+  agent run of a listed script run is left out, since `--resume` on the script covers it); up
+  to 12 public tasks; and a line when the project's `.timon` is not trusted. Session titles and
+  run prompts sit under lines that say they are history, not instructions. Nothing when there
+  is none of these. The task list is cut, with `- and N more`, to keep the brief under 2,000
+  characters. `sessions.list{ dir }` finds the sessions: Claude's by their project directory's
+  name and Codex's by their first line, so a 7-day brief over 1,036 sessions takes 0.07 s.
 - The guard does nothing until a `guard` setting exists: `{ writes = { dirs }, commands = {
   strings } }`. The paths of Write, Edit, MultiEdit, NotebookEdit and Codex's apply_patch (also
   inside a shell command) must be under a `writes` directory (default: the project root),
