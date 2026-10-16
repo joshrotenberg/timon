@@ -284,26 +284,7 @@ impl Runtime {
         source: &str,
         record: bool,
     ) -> Result<Function, Failure> {
-        let name = format!("@{}", path.display());
-        let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
-            crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(source), &name)?
-        } else {
-            strip_shebang(source).into_owned()
-        };
-        let f = self.compile(&lua_source, &name, false)?;
-        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
-        let describe = if record {
-            self.lua.create_function(describe_script)
-        } else {
-            self.lua
-                .create_function(|_, spec: Table| Ok(check_script(&spec)?))
-        }
-        .map_err(lua_err)?;
-        self.lua
-            .load(SCRIPT_DRIVER)
-            .set_name(INTERNAL_CHUNK)
-            .call((f, describe))
-            .map_err(lua_err)
+        script_function_in(&self.lua, path, source, record)
     }
 
     /// Settles a script run's record with how the run ended.
@@ -370,6 +351,39 @@ impl Runtime {
         self.lua.set_app_data(run.clone());
         Ok(Some(run))
     }
+}
+
+/// [`Runtime::script_function`], with only the Lua state at hand.
+pub(crate) fn script_function_in(
+    lua: &Lua,
+    path: &Path,
+    source: &str,
+    record: bool,
+) -> Result<Function, Failure> {
+    let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+    let name = format!("@{}", path.display());
+    let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
+        crate::fennel::compile(lua, &crate::fennel::strip_shebang(source), &name)?
+    } else {
+        strip_shebang(source).into_owned()
+    };
+    let env: Table = lua.named_registry_value(ENV).map_err(lua_err)?;
+    let f = lua
+        .load(lua_source)
+        .set_name(&name)
+        .set_environment(env)
+        .into_function()
+        .map_err(lua_err)?;
+    let describe = if record {
+        lua.create_function(describe_script)
+    } else {
+        lua.create_function(|_, spec: Table| Ok(check_script(&spec)?))
+    }
+    .map_err(lua_err)?;
+    lua.load(SCRIPT_DRIVER)
+        .set_name(INTERNAL_CHUNK)
+        .call((f, describe))
+        .map_err(lua_err)
 }
 
 /// The script run to resume from, given on the command line.

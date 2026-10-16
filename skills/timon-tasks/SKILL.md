@@ -1,6 +1,6 @@
 ---
 name: timon-tasks
-description: Use when defining or running timon tasks - a project's or your own tasks.lua, timon tasks, timon NAME, dependencies, words after --, aliases, groups, confirm and platforms. Load the timon skill first for the basics.
+description: Use when defining or running timon tasks - a project's or your own tasks.lua, timon tasks, timon NAME, typed options and --help, dependencies and --jobs, task.run, --dry-run, words after --, aliases, groups, confirm and platforms. Load the timon skill first for the basics.
 ---
 
 # Tasks
@@ -31,9 +31,22 @@ return {
     description = "Review the diff against a base branch",
     depends = { "check" },
     budget = { runs = 3, usd = 1 },
+    options = {
+      base = { type = "string", default = "main", short = "b", doc = "the branch to diff against" },
+      model = '("sonnet" | "opus")?',
+    },
     run = function(opts, deps)
-      local base = opts.args[1] or "main"
-      return agent.ask("Review the diff against " .. base .. ". The gates said: " .. deps.check)
+      return agent.ask{
+        prompt = "Review the diff against " .. opts.base .. ". The gates said: " .. deps.check,
+        model = opts.model,
+      }
+    end,
+  },
+  release = {
+    description = "Check, then review against main",
+    run = function(opts, deps)
+      task.run("check")
+      return task.run("review", { base = "main", model = "opus" })
     end,
   },
   ["drop-db"] = {
@@ -47,23 +60,37 @@ return {
 ```
 
 ```sh
-timon tasks                 # name, layer, description, by group; --all adds private tasks
-timon check                 # fmt, lint and test, then check; the first failure stops it
-timon c                     # an alias
-timon review develop        # opts.args is { "develop" }
-timon test -- --nocapture   # words after -- are taken as they are: cargo test --nocapture
-timon task runs             # a task that a timon command shares a name with
-timon --yes drop-db         # answers its confirm question
+timon tasks                   # name, layer, description, by group; --all adds private tasks
+timon check                   # fmt, lint and test, then check; the first failure stops it
+timon -j 3 check              # fmt, lint and test at the same time, output prefixed by task
+timon c                       # an alias
+timon review -b develop --model opus
+timon review --help           # the options, from the declaration
+timon --dry-run release       # the plan as JSON; nothing runs
+timon test -- --nocapture     # words after -- go to the command: cargo test --nocapture
+timon task runs               # a task that a timon command shares a name with
+timon --yes drop-db           # answers its confirm question
 ```
 
 ## How tasks run
 
-- `run(opts, deps)`: `opts.args` holds the words after the task name, and `deps.NAME` is each
-  dependency's first result. A string `run` is a command for `sh`, with the words appended.
-- Dependencies run once each, depth first in the order declared, then the task. The first
-  failure stops the plan, and its exit code is timon's.
-- Words before `--` that start with `-` are refused until tasks declare options. timon's own
-  flags (`--yes`, `--max-usd`, `--resume`) go before the task name.
+- `run(opts, deps)`: `opts` holds the options and `opts.args` the other words; `deps.NAME` is
+  each dependency's first result. A string `run` is a command run without a shell; the words
+  are appended as words, so shell syntax in it is refused when tasks load.
+- `options` are declared like `cli.parse` options: a type (`"string?"`, `"integer"`,
+  `"boolean"`, `"string[]"`, `'"a" | "b"'`) or `{ type, default, short, doc }`. A non-optional
+  type without a default must be given. Flags: `--base dev`, `--base=dev`, `-b dev`,
+  `--verbose`, `--no-verbose`, a repeated flag for a list. Unknown flags and bad values exit 2
+  with did-you-mean, and `timon NAME --help` prints the options.
+- Dependencies run once each, depth first in the order declared, then the task, each with its
+  own defaults. `--jobs N` (`-j`) runs dependencies that do not depend on each other at the same
+  time. The first failure stops the plan, and its exit code is timon's.
+- `task.run(name, opts)` runs another task from inside `run`, with its dependencies that have
+  not run yet, and returns its result. It checks `opts` like flags and does not ask `confirm`.
+- `--dry-run` prints the plan: each task, its level, what it runs and its options. It cannot
+  see `task.run` calls inside a function.
+- timon's own flags (`--yes`, `--jobs`, `--dry-run`, `--max-usd`, `--resume`) go before the
+  task name.
 - `confirm` asks before anything runs. Without a terminal it fails unless `--yes` is given.
   `platforms` stops a plan with a task this system cannot run before anything runs.
 - A task, its dependencies and their agent runs are one script run: `timon runs --scripts`
@@ -77,7 +104,8 @@ timon --yes drop-db         # answers its confirm question
 - timon's own commands take precedence over a task's name. `timon tasks` marks such a task, and
   `timon task NAME` runs it.
 - A script in `scripts/` is a task whose description is its leading comment; it gets its words
-  in `arg` and `...`. Declare dependencies, aliases and the other fields in `tasks.lua`.
+  in `arg` and `...`, and can parse them with `cli.parse(arg, options)`. Declare dependencies,
+  aliases and the other fields in `tasks.lua`.
 - The top level of `tasks.lua` runs whenever tasks are listed, so programs and agents raise
   there: run them inside `run`. Put long task bodies in `lib/` and `require` them.
 
@@ -85,6 +113,7 @@ timon --yes drop-db         # answers its confirm question
 |---|---|---|
 | `description` | `string` | one line for `timon tasks` |
 | `run` | `function \| string` | `run(opts, deps)`, or a command for `sh` |
+| `options` | `table` | typed options: a type string, or `{ type, default, short, doc }` |
 | `depends` | `string[]` | tasks to run first, by name |
 | `budget` | `{ runs, usd }` | limits on the agent runs inside the task |
 | `aliases` | `string[]` | other names on the command line |

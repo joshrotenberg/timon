@@ -8,16 +8,18 @@
 //!   review = {
 //!     description = "Review the diff against a base",
 //!     depends = { "check" },
+//!     options = { base = { type = "string", default = "main", doc = "the branch" } },
 //!     run = function(opts, deps)
-//!       return agent.ask{ prompt = "Review the diff against " .. (opts.args[1] or "main") }
+//!       return agent.ask{ prompt = "Review the diff against " .. opts.base }
 //!     end,
 //!   },
 //! }
 //! ```
 //!
 //! `timon tasks` lists the catalog and `timon NAME` runs a task: its dependencies first, once
-//! each and depth first, then the task, as one script run (see [`crate::scripts`]). A project's
-//! tasks replace the user's by name. A script on its own runs as it always has.
+//! each and depth first, then the task, as one script run (see [`crate::scripts`]). With
+//! `--jobs N`, independent dependencies run at the same time. A project's tasks replace the
+//! user's by name. A script on its own runs as it always has.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -28,8 +30,12 @@ use std::time::Instant;
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::docs::Opt;
+use mlua::Function;
+use serde_json::{Map, Value as Json};
+
+use crate::docs::{Func, Module, Opt};
 use crate::error::{Error, Failure};
+use crate::flags::Spec;
 use crate::layers::{self, Kind, Layer, Layers};
 use crate::modules::agent::Progress;
 use crate::modules::schema::Problem;
@@ -43,6 +49,11 @@ pub const FIELDS: &[Opt] = &[
         "run",
         "function | string",
         "run(opts, deps), or a command for sh; opts.args holds the words after the task name",
+    ),
+    Opt::new(
+        "options",
+        "table<string, string | { type: string, default: any?, short: string?, doc: string? }>",
+        "typed options, given as --name flags and passed in opts; a type string, or { type, default, short, doc }",
     ),
     Opt::new(
         "depends",
@@ -123,6 +134,8 @@ pub struct Task {
     pub private: bool,
     pub confirm: Option<String>,
     pub platforms: Vec<String>,
+    /// Typed options, for a task in a tasks file.
+    pub options: Spec,
     /// The layer whose task of the same name this one replaces.
     pub replaces: Option<Kind>,
 }
@@ -140,6 +153,7 @@ impl Task {
             private: false,
             confirm: None,
             platforms: Vec::new(),
+            options: Spec::default(),
             replaces: None,
         }
     }
@@ -152,8 +166,34 @@ impl Task {
 
 /// What a tasks-file task runs, kept in the Lua state.
 struct Body {
+    /// A function, or nothing for a task that only has dependencies.
     run: Value,
+    /// A command's words, for a task whose `run` is a string.
+    words: Option<Vec<String>>,
     budget: Value,
+}
+
+/// A command string's words. Shell syntax is refused: a command task runs without a shell,
+/// so the words given to it are passed as words.
+fn command_words(path: &Path, task: &str, command: &str) -> Result<Vec<String>, Error> {
+    if let Some(syntax) = crate::modules::proc::shell_syntax(command) {
+        return Err(bad(
+            path,
+            format!("the command of task \"{task}\" uses shell syntax ({syntax})"),
+        )
+        .with_hint("run it from a function: run = function() sh(\"...\", { shell = true }) end"));
+    }
+    match shell_words::split(command) {
+        Ok(words) if !words.is_empty() => Ok(words),
+        Ok(_) => Err(bad(
+            path,
+            format!("the command of task \"{task}\" is empty"),
+        )),
+        Err(e) => Err(bad(
+            path,
+            format!("the command of task \"{task}\" cannot be split into words: {e}"),
+        )),
+    }
 }
 
 /// Every task in reach.
@@ -429,6 +469,7 @@ impl Catalog {
                     "private": t.private,
                     "confirm": t.confirm,
                     "platforms": t.platforms,
+                    "options": t.options.to_json(),
                     "available": t.available(),
                     "hidden_by_builtin": self.hidden_by_builtin(t),
                     "replaces": t.replaces.map(Kind::name),
@@ -574,18 +615,21 @@ fn load_file(
             private: false,
             confirm: None,
             platforms: Vec::new(),
+            options: Spec::default(),
             replaces: None,
         };
         let body = match value {
             Value::String(s) => {
                 task.description = s.to_string_lossy();
                 Body {
-                    run: Value::String(s),
+                    run: Value::Nil,
+                    words: Some(command_words(path, &name, &task.description)?),
                     budget: Value::Nil,
                 }
             }
             Value::Function(f) => Body {
                 run: Value::Function(f),
+                words: None,
                 budget: Value::Nil,
             },
             Value::Table(t) => {
@@ -597,6 +641,13 @@ fn load_file(
                     return Err(field_error(path, &name, &e.path, e.problem).into());
                 }
                 read_fields(&mut task, &t).map_err(|e| Failure::from(Error::from_lua(&e)))?;
+                if let Some(options) = t
+                    .raw_get::<Option<Table>>("options")
+                    .map_err(|e| Failure::from(Error::from_lua(&e)))?
+                {
+                    task.options = Spec::from_lua(&options)
+                        .map_err(|m| bad(path, format!("task \"{name}\": {m}")))?;
+                }
                 let run: Value = t
                     .raw_get("run")
                     .map_err(|e| Failure::from(Error::from_lua(&e)))?;
@@ -605,13 +656,19 @@ fn load_file(
                         .with_hint("give it run, depends, or both")
                         .into());
                 }
-                if task.description.is_empty()
-                    && let Value::String(s) = &run
-                {
-                    task.description = s.to_string_lossy();
-                }
+                let words = match &run {
+                    Value::String(s) => {
+                        let command = s.to_string_lossy();
+                        if task.description.is_empty() {
+                            task.description = command.clone();
+                        }
+                        Some(command_words(path, &name, &command)?)
+                    }
+                    _ => None,
+                };
                 Body {
-                    run,
+                    run: if words.is_some() { Value::Nil } else { run },
+                    words,
                     budget: t
                         .raw_get("budget")
                         .map_err(|e| Failure::from(Error::from_lua(&e)))?,
@@ -692,31 +749,6 @@ fn field_error(path: &Path, task: &str, at: &str, problem: Problem) -> Error {
     }
 }
 
-/// The words for a task: words before `--` that look like options are refused until tasks
-/// declare options; `--` itself is dropped and everything after it is taken as it is.
-pub fn task_args(name: &str, words: &[String]) -> Result<Vec<String>, Error> {
-    let mut args = Vec::new();
-    let mut rest = false;
-    for word in words {
-        if rest {
-            args.push(word.clone());
-        } else if word == "--" {
-            rest = true;
-        } else if word.starts_with('-') && word.len() > 1 {
-            return Err(Error::new(
-                "usage",
-                format!("task \"{name}\" takes no options, got \"{word}\""),
-            )
-            .with_hint(format!(
-                "pass words for the task after --: timon {name} -- {word}; timon's own flags go before the task name"
-            )));
-        } else {
-            args.push(word.clone());
-        }
-    }
-    Ok(args)
-}
-
 /// Asks each `confirm` question of the plan on stderr, unless `yes`.
 fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
     for task in plan {
@@ -747,66 +779,338 @@ fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
     Ok(())
 }
 
-/// Runs the plan: each task with its dependencies' results, the last with the words.
+/// Runs steps: each level in order, the steps of a level at most `jobs` at a time, each with
+/// its dependencies' results. Returns the last step's values.
 const TASK_DRIVER: &str = r#"
-local steps, started, finished, join = ...
-local pack, unpack, type, rawset = table.pack, table.unpack, type, rawset
-return function(args)
-  local results, out = {}, pack()
-  for i, step in ipairs(steps) do
-    started(step.name)
-    local deps = {}
-    for _, d in ipairs(step.depends) do deps[d] = results[d] end
-    local opts = { args = i == #steps and args or {} }
-    local run = step.run
-    local function body()
-      if step.script then
-        rawset(_G, "arg", { [0] = step.script })
-        return run()
-      elseif type(run) == "string" then
-        sh(#opts.args > 0 and run .. " " .. join(opts.args) or run)
-      elseif run ~= nil then
-        return run(opts, deps)
-      end
+local started, finished, failed, xrun, jobs = ...
+local pack, unpack, rawset, ipairs, error = table.pack, table.unpack, rawset, ipairs, error
+local results = {}
+local function run_step(step)
+  started(step.name)
+  local deps = {}
+  for _, d in ipairs(step.depends) do deps[d] = results[d] end
+  local function body()
+    if step.script then
+      rawset(_G, "arg", { [0] = step.script, unpack(step.opts.args) })
+      return step.run(unpack(step.opts.args))
+    elseif step.words then
+      local cmd = {}
+      for _, w in ipairs(step.words) do cmd[#cmd + 1] = w end
+      for _, w in ipairs(step.opts.args) do cmd[#cmd + 1] = w end
+      cmd.prefix = step.prefix
+      sh(cmd)
+    elseif step.run ~= nil then
+      return step.run(step.opts, deps)
     end
-    if step.budget ~= nil then
-      out = pack(scope(body, { budget = step.budget }))
+  end
+  local function bounded()
+    if step.budget ~= nil then return scope(body, { budget = step.budget }) end
+    return body()
+  end
+  local r = pack(xrun(bounded))
+  if not r[1] then
+    failed(step.name, r[2])
+    error(r[2], 0)
+  end
+  results[step.name] = r[2]
+  finished(step.name)
+  return pack(unpack(r, 2, r.n))
+end
+return function(steps)
+  local levels, out = {}, pack()
+  for _, step in ipairs(steps) do
+    local level = levels[step.level]
+    if not level then
+      level = {}
+      levels[step.level] = level
+    end
+    level[#level + 1] = step
+  end
+  for i = 1, #levels do
+    local level = levels[i]
+    if jobs > 1 and #level > 1 then
+      par.map(level, run_step, { limit = jobs })
     else
-      out = pack(body())
+      for _, step in ipairs(level) do out = run_step(step) end
     end
-    results[step.name] = out[1]
-    finished(step.name)
   end
   return unpack(out, 1, out.n)
 end
 "#;
 
-/// Which task of a plan is running, for the record.
-struct Progressing {
+/// How a task runs, from timon's own flags.
+#[derive(Debug, Clone, Copy)]
+pub struct How {
+    /// Answer every `confirm` question.
+    pub yes: bool,
+    /// Most tasks of one level running at once.
+    pub jobs: usize,
+    /// Return the plan instead of running it.
+    pub dry_run: bool,
+}
+
+impl Default for How {
+    fn default() -> Self {
+        Self {
+            yes: false,
+            jobs: 1,
+            dry_run: false,
+        }
+    }
+}
+
+/// The plan for `name` without the tasks already `done` (the task itself always stays), each
+/// with its level: 1 for a task whose dependencies are all done, else one more than its
+/// highest dependency's.
+fn levels<'a>(catalog: &'a Catalog, name: &str, done: &HashSet<String>) -> Vec<(&'a Task, usize)> {
+    let mut level: HashMap<&str, usize> = HashMap::new();
+    let mut out = Vec::new();
+    for task in catalog.plan(name) {
+        if task.name != name && done.contains(&task.name) {
+            continue;
+        }
+        let l = 1 + task
+            .depends
+            .iter()
+            .filter_map(|d| level.get(d.as_str()))
+            .max()
+            .copied()
+            .unwrap_or(0);
+        level.insert(&task.name, l);
+        out.push((task, l));
+    }
+    out
+}
+
+/// What a step runs, for a dry run.
+fn runs(catalog: &Catalog, task: &Task) -> Json {
+    match (&task.source, catalog.bodies.get(&task.name)) {
+        (Source::Script(path), _) => Json::String(format!("script {}", path.display())),
+        (Source::File(_), Some(Body { words: Some(w), .. })) => Json::String(shell_words::join(w)),
+        (
+            Source::File(_),
+            Some(Body {
+                run: Value::Function(_),
+                ..
+            }),
+        ) => Json::String("function".into()),
+        _ => Json::Null,
+    }
+}
+
+/// The options of a step: the target's, or its own defaults for a dependency.
+fn step_opts(
+    task: &Task,
+    target: &str,
+    given: &Map<String, Json>,
+) -> Result<Map<String, Json>, Error> {
+    let mut opts = if task.name == target {
+        given.clone()
+    } else {
+        task.options.defaults().map_err(|e| {
+            Error::new(
+                "bad_tasks",
+                format!(
+                    "task \"{}\" is a dependency, so it runs with its defaults, but {}",
+                    task.name, e.message
+                ),
+            )
+            .with_hint("give the option a default, or call the task with task.run(name, opts)")
+        })?
+    };
+    opts.entry("args")
+        .or_insert_with(|| Json::Array(Vec::new()));
+    Ok(opts)
+}
+
+/// The steps of a plan, as the driver takes them.
+fn steps(
+    lua: &Lua,
+    catalog: &Catalog,
+    planned: &[(&Task, usize)],
+    target: &str,
+    given: &Map<String, Json>,
+    jobs: usize,
+) -> Result<Table, Failure> {
+    let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+    let steps = lua.create_table().map_err(lua_err)?;
+    for (i, (task, level)) in planned.iter().enumerate() {
+        let step = lua.create_table().map_err(lua_err)?;
+        step.raw_set("name", task.name.as_str()).map_err(lua_err)?;
+        step.raw_set("depends", task.depends.clone())
+            .map_err(lua_err)?;
+        step.raw_set("level", *level).map_err(lua_err)?;
+        let opts = step_opts(task, target, given)?;
+        step.raw_set(
+            "opts",
+            crate::modules::json::decode(lua, &Json::Object(opts)).map_err(lua_err)?,
+        )
+        .map_err(lua_err)?;
+        let shared = planned.iter().filter(|(_, l)| l == level).count() > 1;
+        if jobs > 1 && shared {
+            step.raw_set("prefix", format!("[{}] ", task.name))
+                .map_err(lua_err)?;
+        }
+        match &task.source {
+            Source::File(_) => {
+                if let Some(body) = catalog.bodies.get(&task.name) {
+                    step.raw_set("run", body.run.clone()).map_err(lua_err)?;
+                    step.raw_set("budget", body.budget.clone())
+                        .map_err(lua_err)?;
+                    if let Some(words) = &body.words {
+                        step.raw_set("words", words.clone()).map_err(lua_err)?;
+                    }
+                }
+            }
+            Source::Script(path) => {
+                let source = std::fs::read_to_string(path).map_err(|e| bad(path, e))?;
+                let f = crate::runtime::script_function_in(lua, path, &source, false)?;
+                step.raw_set("run", f).map_err(lua_err)?;
+                step.raw_set("script", path.display().to_string())
+                    .map_err(lua_err)?;
+            }
+        }
+        steps.raw_set(i + 1, step).map_err(lua_err)?;
+    }
+    Ok(steps)
+}
+
+/// A task run in progress: what has run, what is running, and the driver, for `task.run`.
+struct Invocation {
+    catalog: Rc<Catalog>,
     record: Option<Rc<ScriptRun>>,
-    current: RefCell<Option<(String, Instant)>>,
+    running: RefCell<HashMap<String, Instant>>,
+    done: RefCell<HashSet<String>>,
     announce: bool,
+    jobs: usize,
+    run_steps: RefCell<Option<Function>>,
+}
+
+impl Invocation {
+    fn settle(&self, name: &str, status: &str) {
+        let started = self.running.borrow_mut().remove(name);
+        if let (Some(record), Some(at)) = (&self.record, started) {
+            record.task(name, status, at.elapsed().as_millis() as u64);
+        }
+    }
+}
+
+/// The help text of a task.
+pub fn help(catalog: &Catalog, task: &Task) -> String {
+    let mut out = String::new();
+    if !task.description.is_empty() {
+        out.push_str(&task.description);
+        out.push_str("\n\n");
+    }
+    match &task.source {
+        Source::Script(_) => out.push_str(&format!(
+            "Usage: timon {} [ARGS]...\n\nA script: its words are in arg and ...\n",
+            task.name
+        )),
+        Source::File(_) => {
+            out.push_str(&format!(
+                "Usage: timon {} [OPTIONS] [WORDS]...\n\n",
+                task.name
+            ));
+            out.push_str(&task.options.help());
+            out.push_str("\nThe other words, and every word after --, are in opts.args.\n");
+        }
+    }
+    let mut notes = Vec::new();
+    if !task.depends.is_empty() {
+        notes.push(format!("Runs after: {}", task.depends.join(", ")));
+    }
+    if !task.aliases.is_empty() {
+        notes.push(format!("Also: {}", task.aliases.join(", ")));
+    }
+    if let Some(q) = &task.confirm {
+        notes.push(format!("Asks: {q}"));
+    }
+    if !task.platforms.is_empty() {
+        notes.push(format!("Runs on: {}", task.platforms.join(", ")));
+    }
+    if catalog.hidden_by_builtin(task) {
+        notes.push(format!(
+            "A timon command has this name: run it as timon task {}",
+            task.name
+        ));
+    }
+    notes.push(format!(
+        "From: {} ({})",
+        task.layer.name(),
+        task.source.path().display()
+    ));
+    out.push('\n');
+    for n in notes {
+        out.push_str(&n);
+        out.push('\n');
+    }
+    out
 }
 
 /// Runs the task `name` after its dependencies, with `words` for the task itself. A script
 /// on its own runs as `timon run` always has.
 pub async fn run(
     rt: &Runtime,
-    catalog: &Catalog,
+    catalog: Rc<Catalog>,
     name: &str,
     words: &[String],
-    yes: bool,
+    how: How,
 ) -> Result<MultiValue, Failure> {
+    let lua = rt.lua();
+    let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
     let task = catalog.find(name)?;
-    let Source::File(file) = &task.source else {
-        let path = task.source.path();
-        return rt
-            .run_named_script(path, words, &task.name, Some(task.layer.name()))
-            .await;
+    let given = match &task.source {
+        Source::Script(path) if !how.dry_run => {
+            return rt
+                .run_named_script(path, words, &task.name, Some(task.layer.name()))
+                .await;
+        }
+        Source::Script(_) => {
+            let mut m = Map::new();
+            m.insert("args".into(), Json::from(words.to_vec()));
+            m
+        }
+        Source::File(_) => {
+            let parsed = task.options.parse(words).map_err(|e| {
+                Error::new(e.kind, format!("task \"{}\": {}", task.name, e.message)).with_hint_opt(
+                    e.hint
+                        .or_else(|| Some(format!("timon {} --help lists its options", task.name))),
+                )
+            })?;
+            if parsed.help {
+                let text = help(&catalog, task);
+                return Ok(MultiValue::from_iter([Value::String(
+                    lua.create_string(text.trim_end()).map_err(lua_err)?,
+                )]));
+            }
+            let mut values = parsed.values;
+            values.insert("args".into(), Json::from(parsed.rest));
+            values
+        }
     };
-    let args = task_args(&task.name, words)?;
-    let plan = catalog.plan(&task.name);
-    if let Some(t) = plan.iter().find(|t| !t.available()) {
+    let planned = levels(&catalog, &task.name, &HashSet::new());
+    if how.dry_run {
+        let plan: Vec<Json> = planned
+            .iter()
+            .map(|(t, level)| {
+                serde_json::json!({
+                    "name": t.name,
+                    "level": level,
+                    "runs": runs(&catalog, t),
+                    "opts": step_opts(t, &task.name, &given).ok(),
+                    "confirm": t.confirm,
+                    "available": t.available(),
+                })
+            })
+            .collect();
+        let out = serde_json::json!({ "task": task.name, "jobs": how.jobs, "plan": plan });
+        return Ok(MultiValue::from_iter([crate::modules::json::decode(
+            lua, &out,
+        )
+        .map_err(lua_err)?]));
+    }
+    if let Some((t, _)) = planned.iter().find(|(t, _)| !t.available()) {
         return Err(Error::new(
             "platform",
             format!(
@@ -818,93 +1122,162 @@ pub async fn run(
         .with_hint(format!("this system is {}", std::env::consts::OS))
         .into());
     }
-    confirm(&plan, yes)?;
-    let lua = rt.lua();
-    let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
-    let steps = lua.create_table().map_err(lua_err)?;
-    for (i, t) in plan.iter().enumerate() {
-        let step = lua.create_table().map_err(lua_err)?;
-        step.raw_set("name", t.name.as_str()).map_err(lua_err)?;
-        step.raw_set("depends", t.depends.clone())
-            .map_err(lua_err)?;
-        match &t.source {
-            Source::File(_) => {
-                if let Some(body) = catalog.bodies.get(&t.name) {
-                    step.raw_set("run", body.run.clone()).map_err(lua_err)?;
-                    step.raw_set("budget", body.budget.clone())
-                        .map_err(lua_err)?;
-                }
-            }
-            Source::Script(path) => {
-                let source = std::fs::read_to_string(path).map_err(|e| bad(path, e))?;
-                let f = rt.script_function(path, &source, false)?;
-                step.raw_set("run", f).map_err(lua_err)?;
-                step.raw_set("script", path.display().to_string())
-                    .map_err(lua_err)?;
-            }
-        }
-        steps.raw_set(i + 1, step).map_err(lua_err)?;
-    }
+    let tasks: Vec<&Task> = planned.iter().map(|(t, _)| *t).collect();
+    confirm(&tasks, how.yes)?;
+    let built = steps(lua, &catalog, &planned, &task.name, &given, how.jobs)?;
+    let file = task.source.path();
     let source = std::fs::read_to_string(file).map_err(|e| bad(file, e))?;
-    let names: Vec<&str> = plan.iter().map(|t| t.name.as_str()).collect();
+    let names: Vec<&str> = tasks.iter().map(|t| t.name.as_str()).collect();
+    let args: Vec<String> = match given.get("args") {
+        Some(Json::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
     let record = rt.begin_script(
         file,
         &args,
         &task.name,
         Some(task.layer.name()),
         &source,
-        Some(serde_json::json!({ "kind": "task", "plan": names })),
+        Some(serde_json::json!({ "kind": "task", "plan": names, "jobs": how.jobs })),
     )?;
     let progress = lua
         .app_data_ref::<Progress>()
         .map(|p| *p)
         .unwrap_or_default();
-    let state = Rc::new(Progressing {
+    let invocation = Rc::new(Invocation {
+        catalog: catalog.clone(),
         record: record.clone(),
-        current: RefCell::new(None),
-        announce: plan.len() > 1 && matches!(progress, Progress::Text),
+        running: RefCell::default(),
+        done: RefCell::default(),
+        announce: planned.len() > 1 && matches!(progress, Progress::Text),
+        jobs: how.jobs,
+        run_steps: RefCell::new(None),
     });
     let started = {
-        let state = state.clone();
+        let inv = invocation.clone();
         lua.create_function(move |_, name: String| {
-            if state.announce {
+            if inv.announce {
                 eprintln!("timon: task {name}");
             }
-            *state.current.borrow_mut() = Some((name, Instant::now()));
+            inv.running.borrow_mut().insert(name, Instant::now());
             Ok(())
         })
         .map_err(lua_err)?
     };
     let finished = {
-        let state = state.clone();
+        let inv = invocation.clone();
         lua.create_function(move |_, name: String| {
-            let started = state.current.borrow_mut().take();
-            if let (Some(record), Some((_, at))) = (&state.record, started) {
-                record.task(&name, "ok", at.elapsed().as_millis() as u64);
-            }
+            inv.settle(&name, "ok");
+            inv.done.borrow_mut().insert(name);
             Ok(())
         })
         .map_err(lua_err)?
     };
-    let join = lua
-        .create_function(|_, words: Vec<String>| Ok(shell_words::join(words)))
+    let failed = {
+        let inv = invocation.clone();
+        lua.create_function(move |_, (name, err): (String, Value)| {
+            let kind = match &err {
+                Value::Table(t) => t.raw_get::<Option<String>>("kind")?,
+                _ => None,
+            };
+            let status = if kind.as_deref() == Some("cancelled") {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            inv.settle(&name, status);
+            Ok(())
+        })
+        .map_err(lua_err)?
+    };
+    let xrun: Function = lua
+        .named_registry_value(crate::runtime::RUN)
         .map_err(lua_err)?;
-    let driver: mlua::Function = lua
+    let run_steps: Function = lua
         .load(TASK_DRIVER)
         .set_name(INTERNAL_CHUNK)
-        .call((steps, started, finished, join))
+        .call((started, finished, failed, xrun, how.jobs))
         .map_err(lua_err)?;
-    let words = lua.create_sequence_from(args).map_err(lua_err)?;
+    *invocation.run_steps.borrow_mut() = Some(run_steps.clone());
+    lua.set_app_data(invocation.clone());
     let result = rt
-        .call(driver, MultiValue::from_iter([Value::Table(words)]))
+        .call(run_steps, MultiValue::from_iter([Value::Table(built)]))
         .await;
-    if result.is_err()
-        && let (Some(record), Some((name, at))) = (&state.record, state.current.borrow_mut().take())
-    {
-        record.task(&name, "failed", at.elapsed().as_millis() as u64);
+    lua.remove_app_data::<Rc<Invocation>>();
+    let left: Vec<String> = invocation.running.borrow().keys().cloned().collect();
+    for name in left {
+        invocation.settle(&name, "cancelled");
     }
     rt.finish_script(record, &result);
     result
+}
+
+pub const TASK_DOC: Module = Module {
+    name: "task",
+    summary: "Tasks from inside a task: run another one with its options.",
+    functions: &[Func::new(
+        "run",
+        "task.run(name, opts) -> ...",
+        "Runs a task from inside a task's run: its dependencies that have not run in this invocation, then the task, with opts checked against its options and their defaults filled in (opts.args for its words). Returns what the task returns. It does not ask confirm questions.",
+        "-- in tasks.lua\nrelease = {\n  run = function(opts, deps)\n    task.run(\"check\")\n    return task.run(\"publish\", { channel = \"stable\" })\n  end,\n}",
+    )],
+};
+
+/// Builds the steps of `task.run(name, opts)` and returns them with the driver.
+fn build(lua: &Lua, (name, opts): (String, Option<Table>)) -> mlua::Result<(Table, Function)> {
+    let inv = lua
+        .app_data_ref::<Rc<Invocation>>()
+        .map(|i| i.clone())
+        .ok_or_else(|| {
+            Error::new("bad_call", "task.run works inside a task's run")
+                .with_hint("run a task from the shell with timon NAME")
+        })?;
+    let task = inv.catalog.find(&name)?;
+    let path = format!("task.run(\"{}\")", task.name);
+    let given = match opts {
+        Some(t) => task.options.check(&t, &path)?,
+        None => task.options.check(&lua.create_table()?, &path)?,
+    };
+    let planned = levels(&inv.catalog, &task.name, &inv.done.borrow());
+    if let Some((t, _)) = planned.iter().find(|(t, _)| !t.available()) {
+        return Err(Error::new(
+            "platform",
+            format!(
+                "task \"{}\" runs only on {}",
+                t.name,
+                t.platforms.join(", ")
+            ),
+        )
+        .into());
+    }
+    let built = steps(lua, &inv.catalog, &planned, &task.name, &given, inv.jobs)
+        .map_err(|f| mlua::Error::from(f.error))?;
+    let run_steps = inv
+        .run_steps
+        .borrow()
+        .clone()
+        .ok_or_else(|| Error::new("internal", "the task driver is gone"))?;
+    Ok((built, run_steps))
+}
+
+const TASK_RUN: &str = r#"
+local build = ...
+return function(name, opts)
+  local steps, run_steps = build(name, opts)
+  return run_steps(steps)
+end
+"#;
+
+pub(crate) fn install(installer: &crate::modules::Installer) -> mlua::Result<()> {
+    let lua = installer.lua();
+    let table = installer.module(&TASK_DOC)?;
+    let build = installer.wrap(lua.create_function(build)?)?;
+    let f: Function = lua.load(TASK_RUN).set_name(INTERNAL_CHUNK).call(build)?;
+    installer.lua_function(&TASK_DOC, Some(&table), "run", f)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -919,18 +1292,6 @@ mod tests {
         for bad in ["", "-x", "a b", "x.lua", "dir/x", "_x"] {
             assert!(!valid_name(bad), "{bad}");
         }
-    }
-
-    #[test]
-    fn words_before_a_double_dash_cannot_look_like_options() {
-        let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            task_args("t", &words(&["a", "-", "--", "--release", "--"])).unwrap(),
-            ["a", "-", "--release", "--"]
-        );
-        let err = task_args("t", &words(&["--release"])).unwrap_err();
-        assert_eq!(err.kind, "usage");
-        assert!(err.hint.unwrap().contains("timon t -- --release"));
     }
 
     #[test]

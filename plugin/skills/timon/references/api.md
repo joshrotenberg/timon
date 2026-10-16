@@ -582,6 +582,49 @@ sleep("200ms")
 server:kill()
 ```
 
+## cli
+
+Command-line options for scripts, declared the way task options are: a type string such as "integer?", or { type, default, short, doc }. Flags follow babashka.cli: --key value, --key=value, --flag and --no-flag, a repeated flag for a list, -k for a short name, -- to stop.
+
+### `cli.parse(words, options) -> opts, rest`
+
+Parses words (arg, in a script) against the declared options. opts has every option: given, defaulted, false or an empty list; rest has the other words in order, and every word after --. An unknown flag, a bad value or a missing required option raises usage, with did-you-mean; usage ends a run with exit code 2.
+
+```lua
+local opts, rest = cli.parse({ "--port", "9000", "-v", "notes.txt" }, {
+  port = "integer?",
+  verbose = { type = "boolean", short = "v" },
+  mode = { type = '"fast" | "full"', default = "fast" },
+})
+return opts.port, opts.verbose, opts.mode, rest[1]  -- 9000, true, fast, notes.txt
+```
+
+### `cli.help(options) -> string`
+
+The Options section of a help text for declared options: flags, types, docs and defaults.
+
+```lua
+print(cli.help({ base = { type = "string", default = "main", doc = "the branch" } }))
+```
+
+## task
+
+Tasks from inside a task: run another one with its options.
+
+### `task.run(name, opts) -> ...`
+
+Runs a task from inside a task's run: its dependencies that have not run in this invocation, then the task, with opts checked against its options and their defaults filled in (opts.args for its words). Returns what the task returns. It does not ask confirm questions.
+
+```lua
+-- in tasks.lua
+release = {
+  run = function(opts, deps)
+    task.run("check")
+    return task.run("publish", { channel = "stable" })
+  end,
+}
+```
+
 ## schema
 
 Shapes for structured data. Values: schema.string, schema.int, schema.number, schema.bool, schema.any. Every object field is required unless optional; s:describe(text) documents a field. A contract is a named schema in contracts/.

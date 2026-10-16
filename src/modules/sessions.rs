@@ -386,6 +386,7 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
         Some(&module),
         "summarize",
         lua.create_async_function(|lua, (id, opts): (String, Option<Table>)| async move {
+            crate::tasks::refuse_while_loading(&lua, "sessions.summarize")?;
             summarize(lua, id, opts).await
         })?,
     )?;

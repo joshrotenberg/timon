@@ -21,6 +21,20 @@ return out
 timon double.lua 1 2 3   # [2,4,6]
 ```
 
+Flags, typed the way task options are:
+
+```lua
+local opts, rest = cli.parse({ "--port", "9000", "-v", "notes.txt" }, {
+  port = "integer?",
+  verbose = { type = "boolean", short = "v" },
+  mode = { type = '"fast" | "full"', default = "fast", doc = "how hard to try" },
+})
+return opts.port, opts.verbose, opts.mode, rest[1]  -- 9000, true, fast, notes.txt
+```
+
+In a script, `cli.parse(arg, options)`. An unknown flag or a bad value raises `usage` with
+did-you-mean, which exits 2; `cli.help(options)` is the text for a `--help`.
+
 ## Named scripts and layers
 
 A named script is a task: `timon NAME` runs it. The same layout works for you and for a

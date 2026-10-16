@@ -36,6 +36,8 @@ timon skill show timon --ref api    # every function with an example
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs`, `path` | files, directories, path names |
 | `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
+| `cli` | `parse` a script's flags against typed options, as tasks declare them; `help` |
+| `task` | `run` another task from inside a task |
 | `par` | `map`, `all`, `race`: concurrent work |
 | `log`, `pp` | messages and pretty-printing on stderr |
 | globals | `help`, `try`, `scope`, `spawn`, `sleep` |

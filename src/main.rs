@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use mlua::MultiValue;
@@ -38,6 +39,13 @@ struct Cli {
     /// Answer yes to every confirm question of the tasks that run
     #[arg(long, global = true)]
     yes: bool,
+    /// Most of a task's independent dependencies running at once
+    #[arg(long, short = 'j', global = true, value_name = "N", default_value_t = 1,
+          value_parser = clap::value_parser!(u16).range(1..))]
+    jobs: u16,
+    /// Print a task's plan instead of running it
+    #[arg(long, global = true)]
+    dry_run: bool,
 }
 
 // Built once per process from the command line, so a large variant costs nothing.
@@ -369,7 +377,11 @@ async fn run(cli: Cli) -> ExitCode {
         Ok(layers) => layers,
         Err(err) => return fail(&err.into()),
     };
-    let yes = cli.yes;
+    let how = timon::tasks::How {
+        yes: cli.yes,
+        jobs: cli.jobs as usize,
+        dry_run: cli.dry_run,
+    };
     match cli.command {
         Command::Scripts { json } => return scripts(&layers, json),
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
@@ -421,10 +433,10 @@ async fn run(cli: Cli) -> ExitCode {
     let result = match command {
         Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
         Command::Task { name, args } => match catalog(&rt, &layers) {
-            Ok(catalog) => timon::tasks::run(&rt, &catalog, &name, &args, yes).await,
+            Ok(catalog) => timon::tasks::run(&rt, catalog, &name, &args, how).await,
             Err(failure) => Err(failure),
         },
-        Command::Script(argv) => external(&rt, &layers, argv, yes).await,
+        Command::Script(argv) => external(&rt, &layers, argv, how).await,
         Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
         Command::Scripts { .. }
         | Command::Tasks { .. }
@@ -491,8 +503,8 @@ fn builtins() -> Vec<String> {
     names
 }
 
-fn catalog(rt: &Runtime, layers: &Layers) -> Result<timon::tasks::Catalog, Failure> {
-    timon::tasks::Catalog::load(rt, layers, &builtins())
+fn catalog(rt: &Runtime, layers: &Layers) -> Result<Rc<timon::tasks::Catalog>, Failure> {
+    timon::tasks::Catalog::load(rt, layers, &builtins()).map(Rc::new)
 }
 
 /// `timon NAME [WORDS]` or `timon FILE [ARGS]`: a path runs as a script, a name as a task.
@@ -500,7 +512,7 @@ async fn external(
     rt: &Runtime,
     layers: &Layers,
     argv: Vec<OsString>,
-    yes: bool,
+    how: timon::tasks::How,
 ) -> Result<MultiValue, Failure> {
     let mut argv = argv.into_iter();
     let first = argv.next().unwrap_or_default();
@@ -512,7 +524,7 @@ async fn external(
     let name = first.to_string_lossy().into_owned();
     let catalog = catalog(rt, layers)?;
     if catalog.resolve(&name).is_some() {
-        return timon::tasks::run(rt, &catalog, &name, &words, yes).await;
+        return timon::tasks::run(rt, catalog, &name, &words, how).await;
     }
     if path.is_file() {
         return rt.run_script(&path, &words).await;

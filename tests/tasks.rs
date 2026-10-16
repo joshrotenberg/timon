@@ -216,11 +216,15 @@ fn words_reach_the_task_and_a_command_task_appends_them() {
     let o = s.timon(&["show", "--c"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(
-        err(&o).contains("task \"show\" takes no options, got \"--c\""),
+        err(&o).contains("task \"show\": unknown option --c"),
         "{}",
         err(&o)
     );
-    assert!(err(&o).contains("timon show -- --c"), "{}", err(&o));
+    assert!(
+        err(&o).contains("it takes no options; put words that start with - after --"),
+        "{}",
+        err(&o)
+    );
     assert_eq!(s.ok(&["task", "show", "x"]), "x\n");
     assert_eq!(
         s.ok(&["run", "show", "y"]),
@@ -363,6 +367,10 @@ fn a_tasks_file_is_checked_when_it_loads() {
             "agent.ask('hi')\nreturn {}",
             "an agent run cannot run while tasks load",
         ),
+        (
+            "sessions.summarize('x')\nreturn {}",
+            "sessions.summarize cannot run while tasks load",
+        ),
     ];
     for (source, expected) in cases {
         s.project_tasks(source);
@@ -485,10 +493,19 @@ fn the_skill_examples_load_as_tasks_files() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["check", "drop-db", "fmt", "lint", "review", "test"]);
+    assert_eq!(
+        names,
+        [
+            "check", "drop-db", "fmt", "lint", "release", "review", "test"
+        ]
+    );
+    let plan = s.json(&["--dry-run", "release"]);
+    assert_eq!(plan["plan"][0]["name"], "release");
+    let help = s.ok(&["review", "--help"]);
+    assert!(help.contains("-b, --base <string>"), "{help}");
     let listing = s.ok(&["tasks"]);
     assert!(
-        listing.contains("check   project  Every gate (also c)"),
+        listing.contains("check    project  Every gate (also c)"),
         "{listing}"
     );
     assert!(!listing.contains("drop-db"), "{listing}");
@@ -499,4 +516,249 @@ fn the_skill_examples_load_as_tasks_files() {
         &block(";; .timon/tasks.fnl"),
     );
     assert_eq!(s.ok(&["hello", "there"]), "hello there\n");
+}
+
+#[test]
+fn typed_options_parse_from_flags_and_print_help() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        r#"return {
+           review = {
+             description = "Review the diff",
+             options = {
+               base = { type = "string", default = "main", short = "b", doc = "the branch" },
+               model = '("sonnet" | "opus")?',
+               tags = "string[]",
+               verbose = "boolean",
+               turns = "integer?",
+             },
+             run = function(opts, deps) return json.encode(opts) end,
+           },
+           needs = { options = { id = "integer" }, run = function(opts) return opts.id end },
+         }"#,
+    );
+    s.trust();
+    assert_eq!(
+        s.ok(&["review"]),
+        "{\"args\":[],\"base\":\"main\",\"tags\":[],\"verbose\":false}\n"
+    );
+    assert_eq!(
+        s.ok(&[
+            "review",
+            "-b",
+            "dev",
+            "--model=opus",
+            "--tags",
+            "x",
+            "--tags",
+            "y",
+            "--verbose",
+            "--turns",
+            "3",
+            "w",
+            "--",
+            "--raw",
+        ]),
+        "{\"args\":[\"w\",\"--raw\"],\"base\":\"dev\",\"model\":\"opus\",\"tags\":[\"x\",\"y\"],\"turns\":3,\"verbose\":true}\n"
+    );
+    let help = s.ok(&["review", "--help"]);
+    assert!(
+        help.starts_with("Review the diff\n\nUsage: timon review [OPTIONS] [WORDS]...\n"),
+        "{help}"
+    );
+    assert!(help.contains("  -b, --base <string>"), "{help}");
+    assert!(help.contains("the branch [default: \"main\"]"), "{help}");
+    for (args, expected, hint) in [
+        (
+            &["review", "--modle", "opus"][..],
+            "task \"review\": unknown option --modle",
+            "did you mean --model?",
+        ),
+        (
+            &["review", "--model", "gpt"],
+            "must be one of \"sonnet\", \"opus\", got \"gpt\"",
+            "timon review --help",
+        ),
+        (
+            &["review", "--turns", "x"],
+            "--turns must be an integer, got \"x\"",
+            "",
+        ),
+        (&["needs"], "task \"needs\": missing --id", "--id <integer>"),
+    ] {
+        let o = s.timon(args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(err(&o).contains(expected), "{args:?}: {}", err(&o));
+        assert!(err(&o).contains(hint), "{args:?}: {}", err(&o));
+    }
+    let list = s.json(&["tasks", "--json"]);
+    let review = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "review")
+        .unwrap();
+    assert_eq!(review["options"][0]["flag"], "--base");
+    assert_eq!(review["options"][0]["short"], "-b");
+}
+
+#[test]
+fn jobs_run_independent_dependencies_together() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "local log = {}
+         local function step(name)
+           return function()
+             log[#log + 1] = name .. '+'
+             sleep('200ms')
+             log[#log + 1] = name .. '-'
+             return name
+           end
+         end
+         return {
+           a = { run = step('a') },
+           b = { run = step('b') },
+           c = { depends = { 'a' }, run = step('c') },
+           all = { depends = { 'a', 'b', 'c' }, run = function() return table.concat(log, ' ') end },
+           loud = { depends = { 'x', 'y' }, run = 'true' },
+           x = { run = 'echo from-x' },
+           y = { run = 'echo from-y' },
+         }",
+    );
+    s.trust();
+    assert_eq!(s.ok(&["all"]), "a+ a- b+ b- c+ c-\n");
+    assert_eq!(s.ok(&["--jobs", "2", "all"]), "a+ b+ a- b- c+ c-\n");
+    let out = s.ok(&["-j", "2", "loud"]);
+    assert!(
+        out.contains("[x] from-x\n") && out.contains("[y] from-y\n"),
+        "{out}"
+    );
+    let run = s.last_run();
+    assert_eq!(run["request"]["jobs"], 2);
+}
+
+#[test]
+fn a_dry_run_shows_the_plan_and_runs_nothing() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "return {
+           build = { run = 'touch built' },
+           ship = {
+             depends = { 'build' },
+             confirm = 'Ship it?',
+             options = { channel = { type = '\"beta\" | \"stable\"', default = 'beta' } },
+             run = function() error('ran') end,
+           },
+         }",
+    );
+    s.trust();
+    let plan = s.json(&["--dry-run", "ship", "--channel", "stable"]);
+    assert_eq!(plan["task"], "ship");
+    assert_eq!(plan["plan"][0]["name"], "build");
+    assert_eq!(plan["plan"][0]["runs"], "touch built");
+    assert_eq!(plan["plan"][1]["level"], 2);
+    assert_eq!(plan["plan"][1]["runs"], "function");
+    assert_eq!(plan["plan"][1]["opts"]["channel"], "stable");
+    assert_eq!(plan["plan"][1]["confirm"], "Ship it?");
+    assert!(!s.project().join("built").exists());
+    assert_eq!(
+        s.json(&["runs", "--scripts", "--json"]),
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn task_run_calls_a_task_with_its_options_inside_the_same_run() {
+    let s = Sandbox::new();
+    s.write(
+        s.project().join(".timon/scripts/notes.lua"),
+        "-- Notes\nreturn 'notes ' .. tostring(arg[1])",
+    );
+    s.project_tasks(
+        "local count = 0
+         return {
+           prep = function() count = count + 1; return 'prepared ' .. count end,
+           publish = {
+             depends = { 'prep' },
+             options = { channel = { type = '\"beta\" | \"stable\"', default = 'beta' } },
+             run = function(opts, deps) return deps.prep .. ' to ' .. opts.channel end,
+           },
+           release = {
+             depends = { 'prep' },
+             run = function(opts, deps)
+               local a = task.run('publish', { channel = 'stable' })
+               local b = task.run('notes', { args = { '7' } })
+               return a .. '; ' .. b
+             end,
+           },
+           typo = function() return task.run('publish', { chanel = 'x' }) end,
+         }",
+    );
+    s.trust();
+    assert_eq!(
+        s.ok(&["release"]),
+        "prepared 1 to stable; notes 7\n",
+        "prep ran once, as release's dependency"
+    );
+    let names: Vec<String> = s.last_run()["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["prep", "publish", "notes", "release"]);
+    let o = s.timon(&["typo"]);
+    assert!(
+        err(&o).contains("unknown option \"chanel\" to task.run(\"publish\")"),
+        "{}",
+        err(&o)
+    );
+    assert!(err(&o).contains("did you mean \"channel\"?"), "{}", err(&o));
+    let o = s.timon(&["eval", "task.run('prep')"]);
+    assert!(
+        err(&o).contains("task.run works inside a task's run"),
+        "{}",
+        err(&o)
+    );
+}
+
+#[test]
+fn command_tasks_take_words_not_shell_text() {
+    let s = Sandbox::new();
+    s.project_tasks("return { each = 'printf %s.' }");
+    s.trust();
+    assert_eq!(s.ok(&["each", "--", "a b", "$HOME", "*"]), "a b.$HOME.*.");
+    s.project_tasks("return { tee = 'cargo test | tee log' }");
+    let o = s.timon(&["tasks"]);
+    assert!(
+        err(&o).contains("the command of task \"tee\" uses shell syntax (|)"),
+        "{}",
+        err(&o)
+    );
+    s.project_tasks(
+        "return { a = { options = { id = 'integer' }, run = 'true' }, b = { depends = { 'a' }, run = 'true' } }",
+    );
+    let o = s.timon(&["b"]);
+    assert!(
+        err(&o).contains("task \"a\" is a dependency, so it runs with its defaults"),
+        "{}",
+        err(&o)
+    );
+}
+
+#[test]
+fn scripts_parse_their_words_with_cli_parse() {
+    let s = Sandbox::new();
+    s.write(
+        s.project().join(".timon/scripts/serve.lua"),
+        "-- Serve\nlocal opts, rest = cli.parse(arg, { port = 'integer?', verbose = { type = 'boolean', short = 'v' } })\nreturn json.encode({ port = opts.port, verbose = opts.verbose, rest = rest })",
+    );
+    s.trust();
+    assert_eq!(
+        s.ok(&["serve", "--port", "9000", "-v", "x"]),
+        "{\"port\":9000,\"rest\":[\"x\"],\"verbose\":true}\n"
+    );
+    let o = s.timon(&["serve", "--prot", "1"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("did you mean --port?"), "{}", err(&o));
 }

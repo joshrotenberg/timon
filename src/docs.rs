@@ -103,6 +103,8 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::concurrency::DOC,
         &modules::proc::SH_DOC,
         &modules::proc::PROC_DOC,
+        &modules::cli::CLI_DOC,
+        &crate::tasks::TASK_DOC,
         &modules::schema::DOC,
         &modules::agent::DOC,
         &modules::sessions::DOC,
