@@ -54,7 +54,11 @@ fn fennel_errors_are_tables_too() {
     let failure = fennel("(error {:kind :fennel_kind :message \"from fennel\"})").unwrap_err();
     assert_eq!(failure.error.kind, "fennel_kind");
     let failure = fennel("(prnt 1)").unwrap_err();
-    assert_eq!(failure.error.kind, "undefined_global");
+    assert_eq!(failure.error.kind, "syntax");
+    assert_eq!(
+        failure.error.hint.as_deref(),
+        Some("did you mean \"print\"?")
+    );
 }
 
 #[test]
@@ -98,4 +102,26 @@ fn require_finds_fennel_modules() {
     )
     .unwrap();
     assert_eq!(script(&main, &[]).unwrap(), ["42"]);
+}
+
+#[test]
+fn a_typo_in_a_branch_that_never_runs_fails_at_compile_time() {
+    let failure = fennel("(if false (agnet.run {}) :fine)").unwrap_err();
+    assert_eq!(failure.error.kind, "syntax");
+    assert!(
+        failure.error.message.contains("unknown identifier"),
+        "{failure}"
+    );
+    assert!(failure.error.message.contains("agnet"), "{failure}");
+}
+
+#[test]
+fn declared_and_earlier_globals_still_compile() {
+    assert_eq!(fennel("(global counter 1) (+ counter 1)").unwrap(), ["2"]);
+    let out = block_on(async |rt| {
+        rt.eval("shared = 41", "=eval").await?;
+        rt.eval_fennel("(+ shared 1)", "=eval").await.map(render)
+    })
+    .unwrap();
+    assert_eq!(out, ["42"]);
 }
