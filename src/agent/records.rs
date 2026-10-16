@@ -244,6 +244,7 @@ impl Store {
             "agent": agent,
             "access": request.access.name(),
             "status": record.status.name(),
+            "session": record.session,
             "ms": record.ms,
             "usd": record.usage.usd,
             "output_tokens": record.usage.output_tokens,
@@ -271,6 +272,16 @@ impl Store {
         entries.reverse();
         entries.truncate(limit);
         Ok(entries)
+    }
+
+    /// The provider session ids of every recorded run, so sessions timon started can be told
+    /// apart from a person's.
+    pub fn sessions(&self) -> std::collections::HashSet<String> {
+        self.latest()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| e["session"].as_str().map(str::to_owned))
+            .collect()
     }
 
     /// One run's request and result. `id` may be an unambiguous prefix.

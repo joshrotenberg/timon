@@ -14,6 +14,7 @@ pub mod options;
 pub mod plugin;
 pub mod redact;
 pub mod runtime;
+pub mod sessions;
 mod settings;
 pub mod skills;
 pub mod suggest;
