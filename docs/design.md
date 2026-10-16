@@ -906,9 +906,11 @@ are libraries for exactly this, not sibling tools.
 2. **Binary size.** `json.query` uses jpx-core with every extension. Release binaries on macOS
    arm64: 2.47 MB without jpx-core, 2.84 MB with jpx-core and no extensions, 8.61 MB with all
    of them. Revisit when jpx-core splits its extensions into finer features.
-   Measured 2026-10-16 on macOS arm64: 13.60 MB before `http` and `gh`, 17.95 MB with reqwest
-   and rustls on aws-lc-rs. rustls with the ring provider, or a smaller client, are the
-   candidates if size matters.
+   Measured 2026-10-16 on macOS arm64, clean release builds: 13.60 MB before `http` and `gh`;
+   18.04 MB with reqwest, HTTP/2 and rustls on aws-lc-rs; 16.67 MB with rustls on ring; 16.05 MB
+   on ring without HTTP/2, which is what ships (#96). The rest of the HTTP stack (hyper, rustls,
+   the platform verifier) is about 2.5 MB; a smaller client is the next candidate if size
+   matters.
 3. **GitHub auth.** Decided and built (#90): `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token`
    when `gh` is installed, otherwise `not_authenticated` with the fix. The `gh` fallback is a
    soft runtime dependency.

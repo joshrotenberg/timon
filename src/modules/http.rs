@@ -109,6 +109,12 @@ fn client(lua: &Lua) -> Result<Rc<reqwest::Client>, Error> {
     if let Some(c) = lua.app_data_ref::<Rc<reqwest::Client>>() {
         return Ok(c.clone());
     }
+    // rustls on ring rather than aws-lc-rs: the same TLS 1.2 and 1.3, 1.4 MB less binary
+    // (#96). The first install wins, so a provider installed earlier stays.
+    static PROVIDER: std::sync::Once = std::sync::Once::new();
+    PROVIDER.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     let client = reqwest::Client::builder()
         .user_agent(concat!("timon/", env!("CARGO_PKG_VERSION")))
         .build()
