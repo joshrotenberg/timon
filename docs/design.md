@@ -53,7 +53,7 @@ Fennel comes with it, stock. All the effort goes into the APIs.
 ```
 timon (one binary)
 ├─ runtime     Lua 5.4 (mlua, vendored, async) and fennel.lua (pinned, stock)
-│              eval, scripts, REPL, help(), errors, spawn/par, json, str, tbl, fs
+│              eval, scripts, REPL, help(), errors, scope/spawn/par, json, str, tbl, fs
 ├─ agent       Claude and Codex runs: run, ask, spawn; contracts; agent definitions
 ├─ supervisor  concurrency caps, budgets, cancellation, run records
 ├─ sessions    every Claude Code and Codex session: list, show, transcript, search
@@ -92,13 +92,46 @@ These hold for every module, so an agent that has used one module can guess the 
 - **JSON round-trips.** `json.null` stands for null. Decoded arrays carry a marker so they encode
   as arrays even when empty; `json.array{}` and `json.object{}` make empty ones explicitly. An
   array with holes is an encode error, not a silent object.
+- **Options are strict.** Every function that takes an options table declares its keys and their
+  types, and checks them before doing anything. An unknown key raises `bad_option` with the
+  closest known key, so a typo fails before a paid run starts:
+
+  ```
+  bad_option: unknown option "promt" to agent.run; did you mean "prompt"?
+  ```
+
+  A value of the wrong type raises with the expected type. Definition files (`agents/*.lua` and
+  the rest) are checked against the same declarations.
+- **Globals are strict.** Reading a global that does not exist raises `undefined_global` with
+  the closest known name, so `agnet.run` fails on its own line instead of later on a nil. A
+  script may define globals only at the top level of its main chunk; `rawget(_G, name)` tests for
+  one without raising.
 - **Everything is cancellable.** Any call that waits can be cancelled from outside, and a
   cancelled call raises `cancelled`.
 - **Documented at run time.** `help(agent)` lists a module and `help(agent.run)` prints one
-  function's signature, options and an example. The same text generates the LuaLS stubs and the
-  reference sections of the skills.
+  function's signature, options and an example. The option declarations behind strict options
+  are the same source, and they also generate the LuaLS stubs and the reference sections of the
+  skills, so the checks, the help, the stubs and the skills cannot drift apart.
 
 ## Runtime
+
+### Lua version
+
+Lua 5.4, through mlua with the interpreter compiled in. Luau was considered and set aside:
+
+| | Lua 5.4 | Luau |
+|---|---|---|
+| Fennel | a supported target | not a supported target; no `_ENV` |
+| Types | LuaLS annotations and stubs, plus strict options and globals at run time | annotations parse, but mlua's Luau build (`luau0-src`) ships no type checker, so nothing checks them unless timon builds Luau's analysis library in |
+| Numbers | 64-bit integers and floats | floats only; integers above 2^53 lose precision |
+| Cleanup | `<close>` | none; `scope(fn)` only |
+| Sandbox | custom environments and hooks | read-only globals, safe environments, interrupts |
+| Evidence | validated by the due and finocchio spikes | not tried |
+
+The only reason to revisit is real type checking compiled into the binary (`timon check`), and
+only if Fennel keeps working. Without the checker, Luau's types are not worth the move. mlua
+selects the Lua version with a cargo feature, and nothing essential in timon depends on a
+5.4-only feature, so the door stays open.
 
 ### Evaluating code
 
@@ -137,23 +170,46 @@ Calls that wait (an agent run, a search, a tool call) are async Rust functions. 
 a Lua coroutine on a tokio runtime, so those calls read as ordinary sequential code and yield
 underneath.
 
-```lua
-local h = spawn(agent.run, { prompt = "Summarize CHANGELOG.md" })   -- any function
-local other = spawn(function() return sessions.search{ query = "changelog" } end)
-local summary = h:await()
-h:cancel()                                   -- idempotent
+Concurrency is structured, and `scope` is its primary form. Work runs inside a scope, the scope
+does not end until every child has finished, and a failure cancels the siblings:
 
-local first, i = par.any{ h1, h2 }           -- first to finish; the rest keep running
-local all = par.all{ h1, h2 }                -- raises on the first failure, cancels the rest
-local out = par.map(items, fn, { limit = 4 })
-local out = par.map(items, fn, { limit = 4, settle = true })  -- { ok, value | error } per item
+```lua
+local review, history = scope(function(s)
+  local r = s:spawn(agent.run, { agent = "reviewer", prompt = "Review PR 12" })
+  local h = s:spawn(sessions.search, { query = "PR 12", since = "30d" })
+  return r:await(), h:await()
+end)
+```
+
+- `scope(fn)` calls `fn(s)` and returns what `fn` returns, after every child spawned on `s` has
+  finished. Nothing outlives its scope, so nothing leaks.
+- If `fn` or any child raises, the scope cancels the remaining children, waits for them to
+  stop, and raises the first error. A cancelled agent run is recorded as `cancelled`.
+- `s:spawn(f, ...)` starts `f(...)` as a child and returns a handle: `h:await()` returns its
+  values or raises its error, `h:cancel()` is idempotent, and `h:done()` does not wait.
+- `s:cancel()` cancels every child still running, for example once one result is enough.
+- A script's main chunk is a scope, and the global `spawn(f, ...)` spawns on the innermost
+  active scope. A script that spawns without awaiting still waits for its children before it
+  exits, and Ctrl-C cancels them all.
+
+The `par` helpers are scopes underneath:
+
+```lua
+local out = par.map(items, fn, { limit = 4 })                  -- input order; an error cancels the rest
+local out = par.map(items, fn, { limit = 4, settle = true })   -- { ok, value | error } per item
+local a, b = par.all(f1, f2)                                   -- every result; an error cancels the rest
+local first, i = par.race(f1, f2)                              -- the first to finish; the rest are cancelled
 sleep("2s")
 ```
 
-Concurrency is structured. `local h <close> = spawn(...)` cancels `h` when the scope exits
-unless it finished, and Fennel's `with-open` does the same. When a script ends, any handle still
-running is cancelled and reported on stderr, never leaked. One Lua state runs per invocation on
-one thread; long CPU work in Lua blocks other coroutines, while waiting does not.
+`local s <close> = scope()` is Lua 5.4 shorthand for the function form: when `s` goes out of
+scope it waits for its children, or cancels them if the block is leaving with an error. It is a
+convenience only. Nothing in timon requires it, so code written with `scope(fn)` runs unchanged
+if the runtime ever moves off 5.4 (see Lua version). Fennel uses the function form,
+`(scope (fn [s] ...))`.
+
+One Lua state runs per invocation on one thread. Long CPU work in Lua blocks other coroutines,
+while waiting does not.
 
 ### Fennel
 
@@ -178,7 +234,7 @@ equivalents where they help.
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt` (`"PR ${n}"` templates); also installed as string methods, so `s:trim()` works |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs` | `read`, `write`, `exists`, `ls`, `glob`, `mkdir`, `tmpdir`, `cwd`, `home`; `path.join`, `path.base`, `path.dir`, `path.ext` |
-| globals | `help`, `try`, `spawn`, `par`, `sleep`, `pp` (pretty-print to stderr), `log.info/warn/error` |
+| globals | `help`, `try`, `scope`, `spawn`, `par`, `sleep`, `pp` (pretty-print to stderr), `log.info/warn/error` |
 
 The stock Lua standard library stays intact.
 
@@ -379,13 +435,13 @@ crates:tools()                                   -- { { name, description, input
 crates:call("get_crate_info", { name = "mlua" }) -- the structured content, or the text
 crates:resources()                               -- { { uri, name, mime_type } }
 crates:read("crates://mlua/readme")
-crates:close()                                   -- also on scope exit with <close>
+crates:close()                                   -- also when the opening scope ends
 ```
 
 - `call` raises when the tool reports an error, with the server's message in the error; `try`
   catches it.
-- Connections belong to the supervisor, like agent processes: a script's servers stop when the
-  script ends.
+- A connection belongs to the scope that opened it, like spawned work: it closes when that scope
+  ends, and the supervisor stops the server process.
 - `mcp.servers()` lists the configured entries.
 - The CLI door: `timon mcp tools crates`, `timon mcp call crates get_crate_info name=mlua`.
 
@@ -606,7 +662,7 @@ store, durable queues and workers, and schedules.
 | Phase | Delivers | Done when |
 |---|---|---|
 | 0 | This design and a crate that evaluates plain Lua | merged |
-| 1 | Runtime: eval, scripts, REPL, Fennel, `help`, errors, `json`, `str`, `tbl`, `fs`, `spawn`/`par`; directories and layers; `timon skill`; the plugin with the `timon` skill | a Claude Code session uses `timon eval` through the plugin for a day of real work |
+| 1 | Runtime: eval, scripts, REPL, Fennel, `help`, errors, strict options and globals, `json`, `str`, `tbl`, `fs`, `scope`/`spawn`/`par`; directories and layers; `timon skill`; the plugin with the `timon` skill | a Claude Code session uses `timon eval` through the plugin for a day of real work |
 | 2 | `agent`: run, ask, spawn, continue; supervisor; contracts and `schema`; agents; run records; `timon agent run`, `timon runs` | a fan-out review over three PRs and an author, review, follow-up cycle run as scripts; Ctrl-C leaves no child process |
 | 3 | `sessions`: list, show, transcript, search, current, summarize; the index; `timon sessions` | the same hit sets as trovador for a fixed list of queries on one archive snapshot |
 | 4 | Toolbox and MCP: git, gh, json.query, http, sh, proc, sqlite; the `mcp` client and `timon serve` | after the discussion above |
@@ -635,8 +691,8 @@ are libraries for exactly this, not sibling tools.
 
 ## Open questions
 
-1. **Lua 5.4 or 5.5.** mlua 0.12.2 supports both. 5.4 is what the spikes validated and what
-   Fennel targets; 5.5 needs a Fennel compatibility check first.
+1. **Lua 5.5.** mlua 0.12.2 supports it. It needs a Fennel compatibility check before it is
+   worth considering. Luau is settled for now (see Lua version).
 2. **JMESPath.** jpx-core's 470+ functions or the plain `jmespath` crate, weighed against binary
    size.
 3. **GitHub auth.** `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token` when `gh` is installed,
