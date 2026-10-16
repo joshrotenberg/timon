@@ -4,6 +4,7 @@
 mod claude;
 mod codex;
 pub mod records;
+pub mod worktree;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -197,6 +198,8 @@ pub struct Record {
     pub usage: Usage,
     pub ms: u64,
     pub events: Option<Vec<Json>>,
+    /// `{ path, branch, kept }` when the run used a worktree.
+    pub worktree: Option<Json>,
 }
 
 impl Record {
@@ -224,6 +227,7 @@ impl Record {
             },
             "ms": self.ms,
             "events": self.events,
+            "worktree": self.worktree,
         })
     }
 }
@@ -271,6 +275,11 @@ pub fn check(request: &Request) -> Result<(), Error> {
 
 /// Runs one turn and returns its record. It never fails: how the run ended is in the record.
 pub async fn run(request: &Request) -> Record {
+    run_as(request, new_id()).await
+}
+
+/// [`run`] with a chosen record id, for callers that need it before the run starts.
+pub async fn run_as(request: &Request, id: String) -> Record {
     let started = Instant::now();
     let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let binary = binary(request.provider);
@@ -279,7 +288,7 @@ pub async fn run(request: &Request) -> Record {
         Provider::Codex => codex::run(request, binary.as_deref()).await,
     };
     let mut record = Record {
-        id: new_id(),
+        id,
         started_at,
         status: Status::Ok,
         answer: None,
@@ -291,6 +300,7 @@ pub async fn run(request: &Request) -> Record {
         usage: Usage::default(),
         ms: started.elapsed().as_millis() as u64,
         events: None,
+        worktree: None,
     };
     match outcome {
         Ok(answer) => {

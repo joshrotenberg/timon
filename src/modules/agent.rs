@@ -44,6 +44,7 @@ pub const DOC: Module = Module {
             Opt::new("resume", Ty::String, "a session id timon started, to continue"),
             Opt::new("fork", Ty::String, "a session id to branch from (claude)"),
             Opt::new("native", Ty::Table, "extra command-line arguments for the provider"),
+            Opt::new("worktree", Ty::Boolean, "run in a new git worktree; kept only if the run changed it"),
         ]),
         Func::new(
             "ask",
@@ -340,7 +341,9 @@ fn record_table(lua: &Lua, record: &Record) -> mlua::Result<Table> {
 
 async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     options::check("agent.run", &spec)?;
-    let request = request(&lua, &merged(&lua, &spec)?)?;
+    let fields = merged(&lua, &spec)?;
+    let request = request(&lua, &fields)?;
+    let wants_worktree = fields.raw_get::<Option<bool>>("worktree")?.unwrap_or(false);
     agent::check(&request)?;
     let permits = permits(&lua)?;
     let _permit = permits
@@ -348,9 +351,32 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
         .await
         .map_err(|_| Error::new("internal", "the run queue closed"))?;
     start_run(&lua)?;
-    let record = agent::run(&request).await;
+    let id = agent::new_id();
+    let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
+    let mut request = request;
+    let worktree = if wants_worktree {
+        let cwd = match &request.cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::env::current_dir()
+                .map_err(|e| Error::new("io", format!("cannot read the working directory: {e}")))?,
+        };
+        let state_dir = state
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let wt = agent::worktree::Worktree::create(&cwd, &state_dir, &id)?;
+        request.cwd = Some(wt.path.clone());
+        Some(wt)
+    } else {
+        None
+    };
+    let mut record = agent::run_as(&request, id).await;
+    if let Some(wt) = &worktree {
+        let kept = wt.finish().unwrap_or(true);
+        record.worktree = Some(wt.to_json(kept));
+    }
     spent(&lua, record.usage.usd);
-    if let Some(state) = lua.named_registry_value::<Option<String>>(STATE_DIR)? {
+    if let Some(state) = state {
         let agent = spec.raw_get::<Option<String>>("agent")?;
         if let Err(err) = agent::records::Store::new(std::path::Path::new(&state)).save(
             &request,

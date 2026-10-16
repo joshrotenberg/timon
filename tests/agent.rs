@@ -508,3 +508,88 @@ fn max_usd_from_settings_stops_the_next_run() {
     );
     assert!(!s.logs().join("claude-2.json").exists());
 }
+
+// Worktrees (#23)
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_owned()
+}
+
+fn repo(s: &Sandbox) -> PathBuf {
+    let repo = s.root().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
+    repo
+}
+
+#[test]
+fn a_clean_worktree_is_removed_with_its_branch() {
+    let s = Sandbox::new();
+    let repo = repo(&s);
+    let r = s.json(
+        &format!(
+            "agent.run{{ prompt = 'look', worktree = true, cwd = '{}' }}",
+            repo.display()
+        ),
+        &[],
+    );
+    let wt = &r["worktree"];
+    assert_eq!(wt["kept"], false);
+    let path = PathBuf::from(wt["path"].as_str().unwrap());
+    assert!(path.starts_with(s.root().join("timon/state/worktrees")));
+    assert!(!path.exists());
+    let ran_in: String = serde_json::from_value(s.call("claude", 0)["cwd"].clone()).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(path.parent().unwrap()).unwrap(),
+        std::fs::canonicalize(PathBuf::from(&ran_in).parent().unwrap()).unwrap()
+    );
+    assert!(git(&repo, &["branch", "--list", "timon/*"]).is_empty());
+}
+
+#[test]
+fn a_changed_worktree_is_kept() {
+    let s = Sandbox::new();
+    let repo = repo(&s);
+    let r = s.json(
+        &format!(
+            "agent.run{{ prompt = 'edit', access = 'write', worktree = true, cwd = '{}' }}",
+            repo.display()
+        ),
+        &[("FAKE_TOUCH", "README.md")],
+    );
+    let wt = &r["worktree"];
+    assert_eq!(wt["kept"], true);
+    let path = PathBuf::from(wt["path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "changed by the fake\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "hello\n"
+    );
+    let branch = wt["branch"].as_str().unwrap();
+    assert!(git(&repo, &["branch", "--list", branch]).contains(branch));
+}
+
+#[test]
+fn worktree_outside_a_repository_is_an_error() {
+    let s = Sandbox::new();
+    let o = s.timon("agent.run{ prompt = 'x', worktree = true }", &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("needs a git repository"));
+}

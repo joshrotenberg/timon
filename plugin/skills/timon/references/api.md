@@ -559,6 +559,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `resume` | string | a session id timon started, to continue |
 | `fork` | string | a session id to branch from (claude) |
 | `native` | table | extra command-line arguments for the provider |
+| `worktree` | boolean | run in a new git worktree; kept only if the run changed it |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
