@@ -646,6 +646,53 @@ fn live_1_a_fan_out_of_eight_at_concurrency_four() {
 
 #[test]
 #[ignore = "live: spends tokens"]
+fn live_1_resume_reuses_what_succeeded() {
+    // A script whose third run fails with max_turns until a file exists. The turn budget is
+    // not part of the request key, so the resume reuses the first two and reruns the third.
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "steps.lua",
+        &format!(
+            "local turns = fs.exists('allow') and 6 or 1
+             local a = agent.run{{ {CLAUDE}, prompt = 'Reply with the word one.' }}
+             local b = agent.run{{ {CLAUDE}, prompt = 'Reply with the word two.' }}
+             local c = agent.run{{ {CLAUDE}, budget = {{ turns = turns }},
+               prompt = 'Read README.md, then reply with its first line.' }}
+             return {{ a.status, b.status, c.status }}"
+        ),
+    );
+    let first = live.timon(&["--max-usd", MAX_USD, "steps.lua"], &[]);
+    assert!(first.status.success(), "{}", err(&first));
+    assert_eq!(out(&first).trim(), r#"["ok","ok","failed"]"#);
+    let scripts = live.json(&["runs", "--scripts", "--json"], &[]);
+    let id = scripts[0]["id"].as_str().unwrap().to_owned();
+
+    live.write("allow", "");
+    let second = live.timon(&["--max-usd", MAX_USD, "--resume", &id, "steps.lua"], &[]);
+    assert!(second.status.success(), "{}", err(&second));
+    assert_eq!(out(&second).trim(), r#"["ok","ok","ok"]"#);
+    let shown = live.json(
+        &[
+            "runs",
+            "show",
+            live.json(&["runs", "--scripts", "--json"], &[])[0]["id"]
+                .as_str()
+                .unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(shown["result"]["cached"], 2, "{shown}");
+    assert_eq!(
+        live.runs().len(),
+        4,
+        "three runs, then only the third again"
+    );
+    live.costs("resume");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
 fn live_1_events_from_both_providers() {
     require_live!();
     let live = Live::new();

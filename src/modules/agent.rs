@@ -13,6 +13,7 @@ use crate::layers::Kind;
 use crate::modules::{Installer, concurrency, fail_function, json as json_module, schema};
 use crate::options;
 use crate::runtime::{INTERNAL_CHUNK, SETTINGS};
+use crate::scripts::ScriptRun;
 use crate::value;
 
 const DEFAULT_CONCURRENCY: usize = 4;
@@ -48,6 +49,7 @@ pub const DOC: Module = Module {
             Opt::new("events", "boolean", "add record.events: the agent's text, reasoning, tool calls and tool results"),
             Opt::new("label", "string", "a short name for progress lines and the record"),
             Opt::new("phase", "string", "the workflow phase; default: the calling task's phase()"),
+            Opt::new("idempotent", "boolean", "safe to reuse on resume even with write access"),
         ]),
         Func::new(
             "ask",
@@ -70,6 +72,7 @@ pub const DOC: Module = Module {
         .with_options(&[
             Opt::new("since", "string | number", "a duration back from now, such as \"1d\" or \"2h\""),
             Opt::new("limit", "integer", "most entries to return (default 20)"),
+            Opt::new("parent", "string", "only the runs of this script run"),
         ]),
         Func::new(
             "continue",
@@ -401,7 +404,13 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
         }
         req.budget = b;
     }
+    req.idempotent = fields
+        .raw_get::<Option<bool>>("idempotent")?
+        .unwrap_or(false);
     let output: Value = fields.raw_get("output")?;
+    if let Value::String(name) = &output {
+        req.contract = Some(name.to_string_lossy());
+    }
     if !output.is_nil() {
         req.output = Some(schema::resolve(lua, &output)?);
     }
@@ -409,6 +418,27 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
 }
 
 /// The record as a Lua table: JSON nulls become nil, and the answer keeps its JSON shape.
+/// An earlier run's stored record, marked `cached`, for a resumed script. Its text is the
+/// redacted text the record kept.
+fn cached_record(lua: &Lua, runs: &std::path::Path, id: &str) -> mlua::Result<Option<Table>> {
+    let Ok(text) = std::fs::read_to_string(runs.join(id).join("result.json")) else {
+        return Ok(None);
+    };
+    let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(None);
+    };
+    json["cached"] = serde_json::Value::Bool(true);
+    let Value::Table(t) = value::from_json(lua, &json)? else {
+        return Ok(None);
+    };
+    for key in ["answer", "events"] {
+        if !json[key].is_null() {
+            t.raw_set(key, json_module::decode(lua, &json[key])?)?;
+        }
+    }
+    Ok(Some(t))
+}
+
 fn record_table(lua: &Lua, record: &Record) -> mlua::Result<Table> {
     let Value::Table(t) = value::from_json(lua, &record.to_json())? else {
         return Err(Error::new("internal", "a record did not convert to a table").into());
@@ -480,6 +510,23 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     let request = request(&lua, &fields)?;
     let wants_worktree = fields.raw_get::<Option<bool>>("worktree")?.unwrap_or(false);
     agent::check(&request)?;
+    // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
+    let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());
+    let mut request = request;
+    if let Some(script) = &script {
+        request.parent = Some(script.id.clone());
+        let key = script.key(&request.hash());
+        if let Some(earlier) = script.cached(&key).map(str::to_owned)
+            && let Some(table) = cached_record(&lua, script.runs_dir(), &earlier)?
+        {
+            script.add(&serde_json::json!({
+                "id": earlier, "key": key, "status": "ok", "cached": true,
+            }));
+            remember_spec(&lua, &table, &spec)?;
+            return Ok(table);
+        }
+        request.key = Some(key);
+    }
     let permits = permits(&lua)?;
     let _permit = permits
         .acquire()
@@ -489,7 +536,6 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     budget.start_run()?;
     let id = agent::new_id();
     let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
-    let mut request = request;
     // No single Claude run may spend more than any enclosing budget has left.
     if request.provider == Provider::Claude
         && let Some(left) = budget.usd_left()
@@ -554,6 +600,13 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     let mut record = agent::run_as(&request, id, on_spawn).await;
     settle.finish(&mut record);
     budget.spent(record.usage.usd.unwrap_or(0.0));
+    if let Some(script) = &script {
+        script.add(&serde_json::json!({
+            "id": record.id, "key": request.key, "status": record.status.name(),
+            "usd": record.usage.usd, "input_tokens": record.usage.input_tokens,
+            "output_tokens": record.usage.output_tokens, "cached": false,
+        }));
+    }
     let table = record_table(&lua, &record)?;
     remember_spec(&lua, &table, &spec)?;
     Ok(table)
@@ -623,7 +676,9 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             };
             let mut since = None;
             let mut limit = 20usize;
+            let mut parent: Option<String> = None;
             if let Some(opts) = &opts {
+                parent = opts.raw_get("parent")?;
                 let s: Value = opts.raw_get("since")?;
                 if !s.is_nil() {
                     let back = chrono::Duration::from_std(concurrency::duration(&s)?)
@@ -634,8 +689,11 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
                     limit = n.max(0) as usize;
                 }
             }
-            let entries =
-                agent::records::Store::new(std::path::Path::new(&state)).list(since, limit)?;
+            let entries = agent::records::Store::new(std::path::Path::new(&state)).list_in(
+                since,
+                parent.as_deref(),
+                limit,
+            )?;
             json_module::decode(lua, &serde_json::Value::Array(entries))
         })?,
     )?;

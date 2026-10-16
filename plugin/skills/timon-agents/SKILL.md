@@ -221,6 +221,10 @@ local recent = agent.runs{ since = "1d", limit = 5 }
 return tbl.map(recent, function(r) return r.status .. " " .. r.prompt end)
 ```
 
+In a script run, each agent run records its script as `parent`
+(`agent.runs{ parent = id }`), and `idempotent = true` lets a resumed script reuse a run that
+could write. The `timon-scripting` skill covers script runs and resume.
+
 ```sh
 timon runs --since 1d
 timon runs show r_1a2b3c       # the request and result; a prefix of the id works

@@ -591,6 +591,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `events` | `boolean` | add record.events: the agent's text, reasoning, tool calls and tool results |
 | `label` | `string` | a short name for progress lines and the record |
 | `phase` | `string` | the workflow phase; default: the calling task's phase() |
+| `idempotent` | `boolean` | safe to reuse on resume even with write access |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -624,6 +625,7 @@ Recorded runs, newest first: id, started_at, provider, model, agent, status, ms,
 |---|---|---|
 | `since` | `string \| number` | a duration back from now, such as "1d" or "2h" |
 | `limit` | `integer` | most entries to return (default 20) |
+| `parent` | `string` | only the runs of this script run |
 
 ```lua
 for _, r in ipairs(agent.runs{ since = "1d" }) do print(r.id, r.status, r.prompt) end

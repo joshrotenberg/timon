@@ -110,6 +110,14 @@ pub struct Request {
     pub label: Option<String>,
     /// The workflow phase the run belongs to; never sent to the provider.
     pub phase: Option<String>,
+    /// The script run this run belongs to.
+    pub parent: Option<String>,
+    /// Its request key within the script run, for resume.
+    pub key: Option<String>,
+    /// Safe to reuse on resume even though it can write.
+    pub idempotent: bool,
+    /// The name of the output contract, when `output` named one.
+    pub contract: Option<String>,
 }
 
 impl Request {
@@ -134,7 +142,34 @@ impl Request {
             "events": self.events,
             "label": self.label,
             "phase": self.phase,
+            "parent": self.parent,
+            "key": self.key,
+            "idempotent": self.idempotent,
+            "contract": self.contract,
         })
+    }
+
+    /// The sha256 of what decides a run's answer: provider, model, effort, access, tools,
+    /// system prompt, working directory, prompt, output schema, session and native arguments.
+    /// Timeout, budget, events, label and phase are left out.
+    pub fn hash(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let cwd = self.cwd.clone().or_else(|| std::env::current_dir().ok());
+        let identity = json!({
+            "provider": self.provider.name(),
+            "model": self.model,
+            "effort": self.effort,
+            "access": self.access.name(),
+            "tools": self.tools,
+            "system": self.system,
+            "cwd": cwd,
+            "prompt": self.prompt,
+            "output": self.output.as_ref().map(|s| s.json_schema()),
+            "resume": self.resume,
+            "fork": self.fork,
+            "native": self.native,
+        });
+        hex::encode(Sha256::digest(identity.to_string().as_bytes()))
     }
 
     pub fn new(provider: Provider, prompt: impl Into<String>) -> Self {
@@ -157,6 +192,10 @@ impl Request {
             ephemeral: false,
             label: None,
             phase: None,
+            parent: None,
+            key: None,
+            idempotent: false,
+            contract: None,
         }
     }
 }

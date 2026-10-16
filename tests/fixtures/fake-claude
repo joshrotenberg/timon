@@ -13,6 +13,7 @@ FAKE_TOUCH: a file (relative to the working directory) to write, as an edit
 FAKE_RUNNING_DIR: a marker per running process; the count seen at start goes to ../seen-PID
 With --output-format stream-json, a Read tool call and its result come before the result line.
 FAKE_REPLAY: a recorded stream-json file to print instead (see recorded/README.md)
+FAKE_FAIL_ON: fail (as is_error) when the prompt contains this text
 """
 import json, os, sys, time
 
@@ -58,6 +59,8 @@ if "--resume" in args:
 if "--fork-session" in args:
     session = "claude-forked-1"
 mode = os.environ.get("FAKE_MODE", "ok")
+if os.environ.get("FAKE_FAIL_ON") and os.environ["FAKE_FAIL_ON"] in prompt:
+    mode = "is_error"
 result = {
     "type": "result",
     "subtype": "success",

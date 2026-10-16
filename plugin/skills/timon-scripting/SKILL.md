@@ -42,6 +42,44 @@ timon defs                # layers, settings, scripts, lib directories
 A project's `.timon/` loads only after a person reviews it and runs `timon trust`. Do not trust a
 project on someone's behalf.
 
+## Script runs and resume
+
+A script that runs agents can describe itself. It returns `run` and its metadata instead of
+its result. `budget` applies to `run` like a scope budget:
+
+```lua fragment
+-- .timon/scripts/review.lua
+-- Review each file named on the command line, then summarize.
+return {
+  description = "Review files, then summarize",
+  phases = { "review", "summary" },
+  budget = { runs = 10, usd = 1 },
+  run = function(...)
+    phase("review")
+    local reviews = par.map({ ... }, function(file)
+      return agent.run{ prompt = "Review " .. file, label = file, output = "review" }
+    end)
+    phase("summary")
+    return agent.ask("Summarize: " .. json.encode(reviews))
+  end,
+}
+```
+
+Every `timon run NAME` and `timon FILE` is recorded, with its arguments, the sha256 of its
+source and its totals. Its agent runs point to it with `parent`:
+
+```sh
+timon run review src/a.rs src/b.rs
+timon runs --scripts                 # script runs: status, runs, cached, cost
+timon runs show s_1a2b               # one script run: request, result, agent runs
+timon --resume s_1a2b run review src/a.rs src/b.rs
+```
+
+`--resume` runs the script again. An agent run with the same request as one that succeeded in
+the earlier run returns that record with `cached = true`, and spends nothing. Read-only runs
+are reused. Runs with write access are reused only with `idempotent = true`, or in a worktree
+nothing has changed since. A cached record's text is the redacted text the record kept.
+
 ## Shared code in lib/
 
 ```lua
