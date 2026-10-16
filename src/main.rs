@@ -523,13 +523,21 @@ async fn run(cli: Cli) -> ExitCode {
                 out_json,
                 stream,
             };
+            // With an input or output flag, a file is evaluated like CODE: its value is printed
+            // the way the flag says, and no script run is recorded.
             return match (code, file) {
-                (Some(code), None) => eval_io(&rt, &code, fnl, io).await,
-                _ => fail(
-                    &Error::new("usage", "the input flags take the code as an argument")
-                        .with_hint("timon eval -i 'return #input' < file")
-                        .into(),
-                ),
+                (Some(code), None) => eval_io(&rt, &code, "=eval", fnl, io).await,
+                (None, Some(path)) => match std::fs::read_to_string(&path) {
+                    Ok(source) => {
+                        let fennel = fnl || path.extension().is_some_and(|e| e == "fnl");
+                        let name = format!("@{}", path.display());
+                        eval_io(&rt, &source, &name, fennel, io).await
+                    }
+                    Err(e) => fail(
+                        &Error::new("io", format!("cannot read {}: {e}", path.display())).into(),
+                    ),
+                },
+                _ => fail(&Error::new("usage", "give CODE or -f FILE").into()),
             };
         }
         Command::Eval {
@@ -667,14 +675,20 @@ struct EvalIo {
 }
 
 /// `timon eval` with input bound from stdin or output printed as lines.
-async fn eval_io(rt: &Runtime, code: &str, fnl: bool, io: EvalIo) -> ExitCode {
-    match eval_io_inner(rt, code, fnl, io).await {
+async fn eval_io(rt: &Runtime, code: &str, name: &str, fnl: bool, io: EvalIo) -> ExitCode {
+    match eval_io_inner(rt, code, name, fnl, io).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => fail(&failure),
     }
 }
 
-async fn eval_io_inner(rt: &Runtime, code: &str, fnl: bool, io: EvalIo) -> Result<(), Failure> {
+async fn eval_io_inner(
+    rt: &Runtime,
+    code: &str,
+    name: &str,
+    fnl: bool,
+    io: EvalIo,
+) -> Result<(), Failure> {
     use std::io::BufRead;
     if code == "-" && (io.in_lines || io.in_json) {
         return Err(Error::new(
@@ -687,7 +701,7 @@ async fn eval_io_inner(rt: &Runtime, code: &str, fnl: bool, io: EvalIo) -> Resul
     if io.stream && !(io.in_lines || io.in_json) {
         return Err(Error::new("usage", "--stream needs -i or -I").into());
     }
-    let f = rt.compile_eval(code, "=eval", fnl)?;
+    let f = rt.compile_eval(code, name, fnl)?;
     let io_err =
         |e: std::io::Error| Failure::from(Error::new("io", format!("cannot read stdin: {e}")));
     let json_err =
