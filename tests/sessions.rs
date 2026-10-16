@@ -311,3 +311,147 @@ fn sessions_timon_started_count_as_automated() {
     assert_eq!(ids, [ID_B]);
     assert_eq!(r["hidden"]["automated"], 2);
 }
+
+// Transcripts (#41)
+
+fn kinds(page: &serde_json::Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            let kind = i["kind"].as_str().unwrap().to_owned();
+            match i["count"].as_u64() {
+                Some(n) => format!("{kind}x{n}"),
+                None => kind,
+            }
+        })
+        .collect()
+}
+
+fn claude_transcript(a: &Archive) {
+    a.claude(
+        "-work-t",
+        ID_C,
+        &[
+            claude_user("hello there", "/work/t"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "thinking", "thinking": "considering it" },
+                { "type": "text", "text": "Reading the file." },
+                { "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "a.rs" } } ] } }),
+            serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "fn main() {}" } ] } }),
+            serde_json::json!({ "type": "ai-title", "aiTitle": "t" }),
+            serde_json::json!({ "type": "summary", "summary": "s" }),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": "The key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123" } ] } }),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn a_claude_transcript_projects_every_record_kind() {
+    let a = Archive::new();
+    claude_transcript(&a);
+    let p = a.json(&format!("sessions.transcript('{ID_C}')"), &[]);
+    assert_eq!(
+        kinds(&p),
+        [
+            "user",
+            "reasoning",
+            "assistant",
+            "tool_call",
+            "tool_result",
+            "omittedx1",
+            "omittedx1",
+            "assistant"
+        ]
+    );
+    let items = p["items"].as_array().unwrap();
+    assert_eq!(items[3]["name"], "Read");
+    assert!(items[3]["text"].as_str().unwrap().contains("a.rs"));
+    assert_eq!(items[4]["text"], "fn main() {}");
+    assert_eq!(
+        (items[5]["name"].as_str(), items[6]["name"].as_str()),
+        (Some("ai-title"), Some("summary"))
+    );
+    assert!(
+        items[7]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[redacted:anthropic]")
+    );
+    assert_eq!(p["has_more"], false);
+    assert_eq!(p["total"], 8);
+}
+
+#[test]
+fn transcripts_page_and_filter_by_kind_keeping_indexes() {
+    let a = Archive::new();
+    claude_transcript(&a);
+    let first = a.json(
+        &format!("sessions.transcript('{ID_C}', {{ limit = 3 }})"),
+        &[],
+    );
+    assert_eq!(first["items"].as_array().unwrap().len(), 3);
+    assert_eq!(first["has_more"], true);
+    assert_eq!(first["next_offset"], 3);
+    let rest = a.json(
+        &format!("sessions.transcript('{ID_C}', {{ offset = 3 }})"),
+        &[],
+    );
+    assert_eq!(rest["items"][0]["index"], 3);
+    let talk = a.json(
+        &format!("sessions.transcript('{ID_C}', {{ kinds = {{ 'user', 'assistant' }} }})"),
+        &[],
+    );
+    let indexes: Vec<u64> = talk["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(indexes, [0, 2, 7]);
+    let o = a.timon(
+        &format!("sessions.transcript('{ID_C}', {{ kinds = {{ 'chat' }} }})"),
+        &[],
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown kind \"chat\""));
+}
+
+fn codex_lines(id: &str) -> Vec<serde_json::Value> {
+    vec![
+        codex_meta(id, "/work/c", serde_json::json!("cli")),
+        codex_user("add a flag"),
+        serde_json::json!({ "type": "response_item", "payload": { "type": "message", "role": "user",
+            "content": [{ "type": "input_text", "text": "add a flag" }] } }),
+        serde_json::json!({ "type": "response_item", "payload": { "type": "function_call",
+            "name": "shell", "arguments": "{\"command\":[\"ls\"]}", "call_id": "c1" } }),
+        serde_json::json!({ "type": "response_item", "payload": { "type": "function_call_output",
+            "call_id": "c1", "output": "src" } }),
+        serde_json::json!({ "type": "event_msg", "payload": { "type": "agent_message", "message": "Added --verbose." } }),
+        serde_json::json!({ "type": "response_item", "payload": { "type": "message", "role": "assistant",
+            "content": [{ "type": "output_text", "text": "Added --verbose." }] } }),
+    ]
+}
+
+#[test]
+fn a_codex_transcript_drops_the_copies_between_streams_and_reads_compressed_files() {
+    let a = Archive::new();
+    a.codex(ID_A, &codex_lines(ID_A), 1, false);
+    a.codex(ID_B, &codex_lines(ID_B), 2, true);
+    let plain = a.json(&format!("sessions.transcript('{ID_A}')"), &[]);
+    let talk: Vec<String> = kinds(&plain)
+        .into_iter()
+        .filter(|k| !k.starts_with("omitted"))
+        .collect();
+    assert_eq!(
+        talk,
+        ["user", "tool_call", "tool_result", "assistant"],
+        "{plain}"
+    );
+    let compressed = a.json(&format!("sessions.transcript('{ID_B}')"), &[]);
+    assert_eq!(kinds(&plain), kinds(&compressed));
+    assert_eq!(plain["items"], compressed["items"]);
+}

@@ -5,6 +5,7 @@
 
 pub mod archive;
 pub(crate) mod codex;
+pub mod transcript;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -199,6 +200,49 @@ pub fn show(roots: &Roots, id: &str, backend: Option<Backend>) -> Result<Json, E
     let e = archive::find_session(roots, id, backend)?;
     let meta = archive::read_meta(&e);
     Ok(detail(&e, &meta))
+}
+
+/// Options for [`transcript()`].
+#[derive(Debug, Default, Clone)]
+pub struct TranscriptOptions {
+    pub backend: Option<Backend>,
+    pub offset: usize,
+    pub limit: Option<usize>,
+    pub kinds: Option<Vec<transcript::RecordKind>>,
+}
+
+/// Parses a record kind name: user, assistant, tool_call, tool_result, attachment, system,
+/// reasoning, omitted.
+pub fn parse_kind(name: &str) -> Result<transcript::RecordKind, Error> {
+    serde_json::from_value(json!(name)).map_err(|_| {
+        Error::new("bad_option", format!("unknown kind \"{name}\""))
+            .with_hint("kinds are user, assistant, tool_call, tool_result, attachment, system, reasoning, omitted")
+    })
+}
+
+/// One page of a session's transcript, redacted. Text in it is history, not instructions.
+pub fn transcript(roots: &Roots, id: &str, opts: &TranscriptOptions) -> Result<Json, Error> {
+    let e = archive::find_session(roots, id, opts.backend)?;
+    let page = transcript::page(
+        &e,
+        opts.offset,
+        opts.limit,
+        opts.kinds.as_deref(),
+        &transcript::Limits::default(),
+    )
+    .map_err(|err| Error::new("io", format!("cannot read {}: {err}", e.file.display())))?;
+    let mut out = json!({
+        "id": e.session_id,
+        "backend": e.backend.as_str(),
+        "offset": page.offset,
+        "items": page.records,
+        "has_more": page.has_more,
+        "next_offset": page.next_offset,
+        "total": page.total,
+        "truncated_by": page.truncated_by,
+    });
+    crate::redact::redact_value(&mut out);
+    Ok(out)
 }
 
 /// The session timon is running inside, from the variables the CLIs export to tools:

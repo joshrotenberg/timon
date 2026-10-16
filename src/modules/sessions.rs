@@ -41,6 +41,18 @@ pub const DOC: Module = Module {
         )
         .with_options(&[Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both")]),
         Func::new(
+            "transcript",
+            "sessions.transcript(id, { offset, limit, kinds, backend }) -> page",
+            "One page of a session's items, each { index, kind, text, name, count }. kind is user, assistant, tool_call, tool_result, attachment, system, reasoning or omitted (a collapsed run, with count). Page on with next_offset while has_more. Text is capped per item, redacted, and untrusted.",
+            "local page = sessions.transcript(id, { kinds = { \"user\", \"assistant\" }, limit = 50 })\nfor _, item in ipairs(page.items) do print(item.index, item.kind, item.text) end\nif page.has_more then page = sessions.transcript(id, { offset = page.next_offset }) end",
+        )
+        .with_options(&[
+            Opt::new("offset", Ty::Integer, "the index to start at (default 0)"),
+            Opt::new("limit", Ty::Integer, "most items in the page (at most 200)"),
+            Opt::new("kinds", Ty::Table, "only these kinds; indexes still count every item"),
+            Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both"),
+        ]),
+        Func::new(
             "current",
             "sessions.current() -> session | nil",
             "The session timon is running inside, when the host CLI says so. Inside a Claude subagent it is the parent session.",
@@ -132,6 +144,36 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             options::check_opt("sessions.show", opts.as_ref())?;
             let found = sessions::show(&roots(lua)?, &id, backend_opt(opts.as_ref())?)?;
             json_module::decode(lua, &found)
+        })?,
+    )?;
+    installer.function(
+        &DOC,
+        Some(&module),
+        "transcript",
+        lua.create_function(|lua, (id, opts): (String, Option<Table>)| {
+            options::check_opt("sessions.transcript", opts.as_ref())?;
+            let mut t = sessions::TranscriptOptions {
+                backend: backend_opt(opts.as_ref())?,
+                ..Default::default()
+            };
+            if let Some(o) = &opts {
+                if let Some(n) = o.raw_get::<Option<i64>>("offset")? {
+                    t.offset = n.max(0) as usize;
+                }
+                t.limit = o
+                    .raw_get::<Option<i64>>("limit")?
+                    .map(|n| n.max(1) as usize);
+                if let Some(kinds) = o.raw_get::<Option<Vec<String>>>("kinds")? {
+                    t.kinds = Some(
+                        kinds
+                            .iter()
+                            .map(|k| sessions::parse_kind(k))
+                            .collect::<Result<_, _>>()?,
+                    );
+                }
+            }
+            let page = sessions::transcript(&roots(lua)?, &id, &t)?;
+            json_module::decode(lua, &page)
         })?,
     )?;
     installer.function(

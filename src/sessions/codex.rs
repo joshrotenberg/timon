@@ -50,8 +50,6 @@ pub(crate) struct ForkBoundary {
     pub scanned: u64,
     // Issue #35: a copied parent's terminal event cannot prove the child finished,
     // so its readable fallback must never become an index checkpoint.
-    // Read by the transcript projection.
-    #[allow(dead_code)]
     pub display_fallback: bool,
 }
 

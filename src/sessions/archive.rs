@@ -40,6 +40,19 @@ pub(crate) fn open_buffered(path: &Path) -> std::io::Result<BufReader<Box<dyn Re
     Ok(BufReader::new(open(path)?))
 }
 
+/// The text from byte `offset` on: a seek for a plain file, a skip for a compressed one.
+pub(crate) fn open_at(path: &Path, offset: u64) -> std::io::Result<BufReader<Box<dyn Read>>> {
+    if is_compressed(path) {
+        let mut text = open(path)?;
+        std::io::copy(&mut (&mut text).take(offset), &mut std::io::sink())?;
+        return Ok(BufReader::new(text));
+    }
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    Ok(BufReader::new(Box::new(file)))
+}
+
 pub(crate) fn is_compressed(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "zst")
 }
