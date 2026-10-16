@@ -3,10 +3,15 @@
 Status: design. Nothing here is implemented unless it says so. `README.md` is canonical for what
 exists; this document is canonical for direction.
 
-timon (Venetian for rudder) is a task runner in one self-contained binary, in the style of
-babashka and voga. Tasks and scripts are written in Lua or Fennel, over a toolbox for the work
-around a codebase: files, JSON, processes, git, HTTP, GitHub and SQLite. Everything timon does is
-a task: its own commands are built-in tasks, declared the same way as a project's.
+timon (Venetian for rudder) is babashka for Lua and Fennel, with native agent tools: a task
+runner and scripting toolbox for repository work in one self-contained binary, with coding-agent
+and session APIs that are first class but optional. Tasks and scripts are written in Lua or
+Fennel, over a toolbox for the work around a codebase: files, JSON, processes, git, HTTP, GitHub
+and SQLite. Everything timon does is a task: its own commands are listed and described the way a
+project's tasks are, from one declaration each.
+
+It should be worth using with no agent involved, and need no bespoke harness when an agent
+becomes one step of a task.
 
 Agents are first class among them. Running Claude and Codex as subagents, reading every past
 session and calling any MCP server are modules any task can use, with the same records, budgets
@@ -34,17 +39,21 @@ and session work that voga and babagent called out to. All the effort goes into 
 
 ### Prior art
 
-Checked 2026-10-16. No tool found combines a scripting-language task runner with built-in
-agent and session APIs:
+Checked 2026-10-16 against the tools below. Each overlaps with timon; none of them, as checked,
+puts a scripting-language task runner, its toolbox, and agent and session APIs with shared
+records and limits in one binary. That combination is the target, not a claim that the parts
+are new:
 
 | Tool | What it is | How timon differs |
 |---|---|---|
-| babashka tasks | Clojure task runner, the model for voga | Lua and Fennel; agents, sessions and contracts built in |
-| Flick, tal | small Lua task runners (`flick.lua` returns shell strings or Lua functions) | a full toolbox, records, budgets and agents |
+| babashka tasks | Clojure task runner and toolbox, the model for voga and timon | Lua and Fennel; agents, sessions and contracts built in |
+| just, Task, mise | command runners: the bar for how little an ordinary task takes | a programming language and toolbox behind the same ease |
+| Lark, Lune, Flick, tal | Lua task runners and a Luau runtime | stock Lua and Fennel, a full toolbox, records, limits and agents |
 | Dagger | a container-based workflow engine with Go, Python and TypeScript SDKs and LLMs as a core type | no containers or engine; drives the Claude Code and Codex CLIs with their sessions; one binary |
 | Subtask, ai-dispatch | CLIs that dispatch Claude Code and Codex subagents | general tasks first; agents are one module |
 
-The feature-by-feature matrix, with the gaps it shows, is in [prior-art.md](prior-art.md).
+The harder alternative is babashka plus a small agent library. The feature-by-feature matrix,
+the decisions it shaped and what is still open are in [prior-art.md](prior-art.md).
 
 ## Rules
 
@@ -74,9 +83,13 @@ The feature-by-feature matrix, with the gaps it shows, is in [prior-art.md](prio
     (`limits.concurrency = 4`), features and their cost are chosen for the small case. The same
     holds for the runner: what our own repositories need comes first.
 11. **Everything is a task.** A task is a name, a description, typed options and a function.
-    timon's own commands are built-in tasks declared that way, so `timon tasks`, `--help`,
-    strict options and run records work the same for a built-in and for a project's task. A
-    task needs no agent; agents are a module like any other, first class but optional.
+    timon's own commands are described the same way, from one declaration each, so
+    `timon tasks --all --json`, `--help`, strict options and completion work alike for a
+    built-in and for a project's task. A task needs no agent; agents are a module like any
+    other, first class but optional.
+12. **Discovery does not perform the task.** Listing, help, completion and `--dry-run` run no
+    programs, start no agents and spend nothing. Loading a tasks file executes Lua, so this is
+    enforced while it loads, not left to convention.
 
 ## Shape
 
