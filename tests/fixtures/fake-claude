@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A fake `claude -p` for tests. Never contacts a model.
 
-FAKE_MODE: ok (default), auth (replays recorded/claude-not-logged-in.*), max_turns, is_error
+FAKE_MODE: ok (default), auth (replays recorded/claude-not-logged-in.*), unknown_model, max_turns, is_error
 FAKE_TEXT: the result text (default: "echo: " + the prompt)
 FAKE_STRUCTURED: JSON for structured_output
 FAKE_AUTO_ANSWER: with --json-schema and no FAKE_STRUCTURED, answer with the smallest valid value
@@ -12,6 +12,7 @@ FAKE_LOG_DIR: append {args, prompt, cwd} as claude-N.json
 FAKE_TOUCH: a file (relative to the working directory) to write, as an edit
 FAKE_RUNNING_DIR: a marker per running process; the count seen at start goes to ../seen-PID
 With --output-format stream-json, a Read tool call and its result come before the result line.
+FAKE_REPLAY: a recorded stream-json file to print instead (see recorded/README.md)
 """
 import json, os, sys, time
 
@@ -74,6 +75,17 @@ elif os.environ.get("FAKE_AUTO_ANSWER") and "--json-schema" in args:
     result["structured_output"] = example(json.loads(args[args.index("--json-schema") + 1]))
 
 stream = "--output-format" in args and args[args.index("--output-format") + 1] == "stream-json"
+if os.environ.get("FAKE_REPLAY"):
+    # Replays recorded stream-json output; in json mode, only its result line.
+    with open(os.environ["FAKE_REPLAY"]) as f:
+        lines = [l for l in f.read().splitlines() if l.strip()]
+    print("\n".join(lines) if stream else lines[-1], flush=True)
+    sys.exit(0)
+if mode == "unknown_model":
+    # What Claude Code 2.1.301 does with a model it does not know: a tagged line on stderr, exit 1.
+    model = args[args.index("--model") + 1] if "--model" in args else "?"
+    sys.stderr.write("[claude-code:unrecognized_model] " + json.dumps({"model": model, "query_source": "sdk"}) + "\n")
+    sys.exit(1)
 if mode == "auth":
     # Replays what Claude Code 2.1.301 prints when not logged in: the result on stdout, exit 1.
     recorded = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recorded",

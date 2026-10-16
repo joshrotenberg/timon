@@ -203,16 +203,28 @@ pub(super) async fn run(
 }
 
 fn turn_failed(event: &JsonLineEvent) -> Error {
-    let message = event
+    let raw = event
         .turn_failure_message()
         .unwrap_or("the codex turn failed")
         .to_owned();
+    // The message is often the API's error JSON; its own message is the readable part.
+    let message = serde_json::from_str::<Json>(&raw)
+        .ok()
+        .and_then(|j| j["error"]["message"].as_str().map(str::to_owned))
+        .unwrap_or(raw);
     let schema = event
         .turn_failure_api_error()
         .and_then(|api| api.code)
         .is_some_and(|code| code == "invalid_json_schema");
+    let lower = message.to_lowercase();
     if schema {
         Error::new("bad_schema", message).with_hint("codex rejected the output schema")
+    } else if lower.contains("model")
+        && ["not supported", "does not exist", "not found"]
+            .iter()
+            .any(|s| lower.contains(s))
+    {
+        Error::new("unknown_model", message).with_hint("use a model this Codex login can run")
     } else {
         Error::new("turn_failed", message)
     }

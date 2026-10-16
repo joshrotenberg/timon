@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """A fake `codex exec` for tests. Never contacts a model.
 
-FAKE_MODE: ok (default), auth, turn_failed
+FAKE_MODE: ok (default), auth, turn_failed, unknown_model
 FAKE_TEXT: the final message (default: "echo: " + the prompt)
 FAKE_STRUCTURED: written as the final message instead, as codex does with a schema
 FAKE_AUTO_ANSWER: with --output-schema and no FAKE_STRUCTURED, answer with the smallest valid value
 FAKE_SESSION: the thread id (default: codex-thread-1)
 FAKE_DELAY, FAKE_PID_FILE, FAKE_LOG_DIR: as for fake-claude (files codex-N.json)
+FAKE_REPLAY: a recorded exec --json file to print instead (see recorded/README.md)
 """
 import json, os, sys, time
 
@@ -47,6 +48,21 @@ if "resume" in args:
 mode = os.environ.get("FAKE_MODE", "ok")
 emit = lambda event: print(json.dumps(event), flush=True)
 
+if os.environ.get("FAKE_REPLAY"):
+    # Replays recorded exec --json output, and writes its last message as codex would.
+    last = ""
+    with open(os.environ["FAKE_REPLAY"]) as f:
+        for line in f.read().splitlines():
+            if not line.strip():
+                continue
+            print(line, flush=True)
+            item = json.loads(line).get("item") or {}
+            if item.get("type") == "agent_message":
+                last = item.get("text", "")
+    if "--output-last-message" in args:
+        with open(args[args.index("--output-last-message") + 1], "w") as f:
+            f.write(last)
+    sys.exit(0)
 if mode == "auth":
     sys.stderr.write("unexpected status 401 Unauthorized: Missing bearer or basic authentication\n")
     sys.exit(1)
@@ -57,6 +73,12 @@ emit({"type": "item.started", "item": {"id": "i1", "type": "command_execution", 
                                        "aggregated_output": "", "exit_code": None, "status": "in_progress"}})
 emit({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bash -lc ls",
                                          "aggregated_output": "README.md\n", "exit_code": 0, "status": "completed"}})
+if mode == "unknown_model":
+    # What Codex 0.162.0 with a ChatGPT login reports for a model it cannot run.
+    inner = {"type": "error", "status": 400, "error": {"type": "invalid_request_error",
+             "message": "The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account."}}
+    emit({"type": "turn.failed", "error": {"message": json.dumps(inner)}})
+    sys.exit(1)
 if mode == "turn_failed":
     inner = {"error": {"type": "invalid_request_error", "code": "invalid_json_schema",
                        "message": "Invalid schema for response_format"}, "status": 400}
