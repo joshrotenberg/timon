@@ -28,19 +28,24 @@ Test names carry their phase (`live_0_`, `live_1_` and so on), so a phase runs o
 | Phase | Proves | Cost |
 |---|---|---|
 | 0 | CLI versions against the wrappers' tested ranges; not logged in is `not_logged_in` on both providers | none |
-| 1 | contracts, access levels, sessions, events, failure classification, cancellation, limits, records, on both providers | about $0.15 |
-| 2 | timon-started sessions in the archives, transcripts, real summaries | about $0.02 |
+| 1 | contracts, access levels, sessions, events, failure classification, cancellation, limits, records, on both providers | $0.01 of Claude usage; Codex reports none |
+| 2 | timon-started sessions in the archives, transcripts, real summaries | $0.001 |
 | 3 | the dogfood agents in `.timon/` | about $0.50 |
 | 4 | timon as a plugin (#46) | |
 
 ## Recorded output
 
 When a live test finds a difference from the fake CLIs, the real output is saved, with paths
-replaced, under `tests/fixtures/recorded/`. The fakes replay it, so a regression test covers
-the bug without a live run.
+replaced, under `tests/fixtures/recorded/`. The fakes replay it (`FAKE_REPLAY`, or a mode
+built from it), so a regression test covers the bug without a live run.
+
+`live_1_record_raw_streams` puts a shim in front of each CLI and runs timon through it, so it
+records the exact arguments timon passes and the raw output, under `target/tmp/live-recorded/`.
 
 ## Results
 
 | Date | Phase | Claude Code | Codex | Result |
 |---|---|---|---|---|
 | 2026-10-16 | 0 | 2.1.301 (tested range) | 0.162.0 (newer than codex-wrapper 0.4.4's tested 0.147.0) | pass, after two fixes: Claude's not-logged-in message was its raw result JSON, and in stream mode it was classified as `provider_failed`; Codex messages kept a tracing prefix |
+| 2026-10-16 | 1 | 2.1.301 | 0.162.0 | 13 of 13 pass in 156 s. Fixed: an unknown model is now `unknown_model` with a readable message on both providers. Found: a killed timon leaves its provider running (#63) |
+| 2026-10-16 | 2 | 2.1.301 | 0.162.0 | pass in 162 s, most of it scanning 6,600 real sessions with a debug build |
