@@ -172,6 +172,24 @@ fn mark(lua: &Lua, t: Option<Table>, key: &str) -> mlua::Result<Table> {
     Ok(t)
 }
 
+/// Converts a module's result to Lua with array and object markers, leaving out fields whose
+/// value is null, so a missing value reads as nil rather than `json.null`.
+pub(crate) fn decode_result(lua: &Lua, json: &serde_json::Value) -> mlua::Result<Value> {
+    fn lean(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(m) => serde_json::Value::Object(
+                m.iter()
+                    .filter(|(_, v)| !v.is_null())
+                    .map(|(k, v)| (k.clone(), lean(v)))
+                    .collect(),
+            ),
+            serde_json::Value::Array(a) => serde_json::Value::Array(a.iter().map(lean).collect()),
+            other => other.clone(),
+        }
+    }
+    decode(lua, &lean(json))
+}
+
 /// Converts JSON to Lua with array and object markers and `json.null`.
 pub(crate) fn decode(lua: &Lua, json: &serde_json::Value) -> mlua::Result<Value> {
     Ok(match json {

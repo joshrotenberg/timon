@@ -407,6 +407,218 @@ The extension without the dot, or "".
 path.ext("review.lua")  --> "lua"
 ```
 
+## git
+
+The git program, with its output as data. Each call takes cwd; a failure raises git_failed with git's stderr.
+
+### `git.root({ cwd }) -> path`
+
+The repository's top directory.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local root = git.root()
+```
+
+### `git.branch({ cwd }) -> name | nil`
+
+The current branch, or nil on a detached HEAD.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local b = git.branch() or "(detached)"
+```
+
+### `git.rev(ref, { cwd }) -> sha`
+
+The full commit id a ref names: HEAD, a branch, a tag, HEAD~2.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local head = git.rev("HEAD")
+```
+
+### `git.status({ cwd }) -> { branch, upstream, ahead, behind, clean, files }`
+
+The working tree's state. Each file is { path, index, worktree, kind, from }: index and worktree are what changed in each (modified, added, deleted, renamed, copied, type_changed, unmerged) or nil; kind is changed, renamed, copied, conflict or untracked; from is a rename's old path.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local s = git.status()
+if not s.clean then
+  for _, f in ipairs(s.files) do print(f.kind, f.path) end
+end
+```
+
+### `git.log({ n, paths, since, range, cwd }) -> { { sha, short, author, email, date, subject, body } }`
+
+Commits, newest first. date is ISO 8601.
+
+| Option | Type | |
+|---|---|---|
+| `n` | `integer` | most commits |
+| `paths` | `string[]` | only commits that touch these paths |
+| `since` | `string` | a date or a duration git understands: "2 weeks ago", "2026-10-01" |
+| `range` | `string` | a revision range such as "v0.1.0..HEAD" |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+for _, c in ipairs(git.log{ n = 5, paths = { "src" } }) do print(c.short, c.subject) end
+```
+
+### `git.diff({ base, staged, stat, paths, cwd }) -> text | { { path, added, removed } }`
+
+The diff of the working tree (or the index with staged) against base (default: the index, or HEAD with staged). With stat, a list of files with the lines added and removed; a binary file has nil counts.
+
+| Option | Type | |
+|---|---|---|
+| `base` | `string` | a ref to diff against |
+| `staged` | `boolean` | the staged changes |
+| `stat` | `boolean` | a list of files and line counts instead of text |
+| `paths` | `string[]` | only these paths |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local files = git.diff{ base = "main", stat = true }
+print(#files .. " files changed")
+```
+
+### `git.tags({ pattern, cwd }) -> { name }`
+
+Tag names, highest version first.
+
+| Option | Type | |
+|---|---|---|
+| `pattern` | `string` | a glob such as "v*" |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local latest = git.tags{ pattern = "v*" }[1]
+```
+
+### `git.tag(name, { message, ref, cwd })`
+
+Creates a tag: annotated with message, lightweight without, at ref (default HEAD).
+
+| Option | Type | |
+|---|---|---|
+| `message` | `string` | the annotation; makes an annotated tag |
+| `ref` | `string` | what to tag (default HEAD) |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+git.tag("v0.2.0", { message = "timon 0.2.0" })
+```
+
+### `git.add(paths, { cwd })`
+
+Stages paths: a string or a list.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+git.add{ "Cargo.toml", "CHANGELOG.md" }
+```
+
+### `git.commit({ message, all, paths, allow_empty, cwd }) -> sha`
+
+Commits and returns the new commit's id. all stages tracked changes first; paths commits only those.
+
+| Option | Type | |
+|---|---|---|
+| `message` | `string` | the commit message (required) |
+| `all` | `boolean` | stage every tracked change first |
+| `paths` | `string[]` | commit only these paths |
+| `allow_empty` | `boolean` | commit even with nothing to commit |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local sha = git.commit{ message = "chore: release 0.2.0", all = true }
+```
+
+### `git.push({ remote, ref, tags, set_upstream, cwd })`
+
+Pushes to remote (default origin). ref is a branch or tag (default: git's choice); tags also pushes annotated tags that point into what is pushed.
+
+| Option | Type | |
+|---|---|---|
+| `remote` | `string` | the remote (default origin) |
+| `ref` | `string` | the branch or tag to push |
+| `tags` | `boolean` | push annotated tags that point into what is pushed (--follow-tags) |
+| `set_upstream` | `boolean` | make the remote branch the upstream |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+git.push{ ref = "main", tags = true }
+```
+
+### `git.worktree_add({ path, branch, base, cwd }) -> path`
+
+Adds a worktree at path, on a new branch when branch is given, starting from base (default HEAD).
+
+| Option | Type | |
+|---|---|---|
+| `path` | `string` | where the worktree goes (required) |
+| `branch` | `string` | a new branch for it |
+| `base` | `string` | the commit to start from |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local dir = git.worktree_add{ path = fs.tmpdir() .. "/wt", branch = "try-it" }
+```
+
+### `git.worktrees({ cwd }) -> { { path, head, branch } }`
+
+The repository's worktrees, the main one first. branch is nil when detached.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+for _, w in ipairs(git.worktrees()) do print(w.path, w.branch) end
+```
+
+### `git.worktree_remove(path, { force, cwd })`
+
+Removes a worktree; force removes one with changes.
+
+| Option | Type | |
+|---|---|---|
+| `force` | `boolean` | remove it even with changes |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+git.worktree_remove(dir, { force = true })
+```
+
+### `git.run(args, { cwd, input }) -> stdout`
+
+Runs git with these arguments and returns stdout without its last newline, for anything the other functions do not cover.
+
+| Option | Type | |
+|---|---|---|
+| `input` | `string` | text for stdin |
+| `cwd` | `string` | the repository directory (default: the working directory) |
+
+```lua
+local subject = git.run{ "log", "-1", "--format=%s" }
+```
+
 ## log
 
 Messages on stderr, so stdout stays parseable.

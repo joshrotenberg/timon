@@ -37,6 +37,7 @@ timon skill show timon --ref api    # every function with an example
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt`; also string methods: `s:trim()` |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs`, `path` | files, directories, path names |
+| `git` | `status`, `log`, `diff`, `tags`, `branch`, `rev`, `add`, `commit`, `tag`, `push`, worktrees, `run`: git's output as data |
 | `toml`, `yaml`, `csv` | `decode`, `encode`; `toml.set` and `toml.edit` change one value and keep the rest of the file |
 | `markdown`, `term` | `headings` and `code` blocks with line numbers; `tty`, `color`, `width` |
 | `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
