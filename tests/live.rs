@@ -543,6 +543,35 @@ fn live_1_continue_fork_and_resume() {
 
 #[test]
 #[ignore = "live: spends tokens"]
+fn live_1_continue_in_the_kept_worktree() {
+    // agent.continue keeps access and runs in the kept worktree (#58), where the provider
+    // finds the session it started.
+    require_live!();
+    let live = Live::new();
+    for (name, p) in BOTH {
+        let r = live.eval(&format!(
+            "local first = agent.run{{ {p}, access = 'write', worktree = true, prompt = 'Create a file named note.txt in the current directory containing exactly the word hello. Do nothing else.' }}
+             local again = agent.continue(first, 'Add a second line to note.txt containing exactly the word world. Do nothing else.')
+             return {{ first = first, again = again }}"
+        ));
+        assert_eq!(r["first"]["status"], "ok", "{name}: {r}");
+        assert_eq!(r["again"]["status"], "ok", "{name}: {r}");
+        let path = PathBuf::from(r["first"]["worktree"]["path"].as_str().unwrap());
+        let note = std::fs::read_to_string(path.join("note.txt")).unwrap();
+        assert!(
+            note.contains("hello") && note.contains("world"),
+            "{name}: {note:?}"
+        );
+        assert!(
+            !live.work().join("note.txt").exists(),
+            "{name} wrote outside the worktree"
+        );
+    }
+    live.costs("continue in the worktree");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
 fn live_1_events_from_both_providers() {
     require_live!();
     let live = Live::new();

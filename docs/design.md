@@ -204,8 +204,16 @@ local out = par.map(items, fn, { limit = 4 })                  -- input order; a
 local out = par.map(items, fn, { limit = 4, settle = true })   -- { ok, value | error } per item
 local a, b = par.all(f1, f2)                                   -- every result; an error cancels the rest
 local first, i = par.race(f1, f2)                              -- the first to finish; the rest are cancelled
+local i = par.first(tasks)                                     -- which task finished first; cancels nothing
 sleep("2s")
 ```
+
+- `phase(name)` names what the current task is doing. Tasks inherit the phase of the task that
+  spawned them, and `s:spawn` takes the phase of the scope's function, so siblings never
+  overwrite each other's. Agent runs record their task's phase, and `--progress text|json`
+  prints a line on stderr when each run starts and ends (on by default only on a terminal).
+- Each task is identified by its own coroutine, which Lua passes in (`coroutine.running()`):
+  inside a callback, mlua's `current_thread` does not name the calling coroutine.
 
 `local s <close> = scope()` is Lua 5.4 shorthand for the function form: when `s` goes out of
 scope it waits for its children, or cancels them if the block is leaving with an error. It is a
@@ -314,7 +322,7 @@ verdict are separate: a review that requests changes is `status = "ok"`.
 local verdict = agent.ask{ prompt = "Is this safe?", output = "yes_no" }   -- answer, or raises
 local text = agent.ask("Summarize docs/design.md in five bullets")        -- text, or raises
 local h = agent.spawn{ prompt = "...", provider = "codex" }               -- spawn(agent.run, spec)
-local r2 = agent.continue(r, "Now fix the findings you listed")           -- resume r.session
+local r2 = agent.continue(r, "Now fix the findings you listed")           -- resume r.session, same request
 ```
 
 `agent.ask` raises an `agent_failed` error whose `data` is the run record.

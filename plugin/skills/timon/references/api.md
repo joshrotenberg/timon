@@ -55,6 +55,16 @@ local h = spawn(fs.read, "big.json")
 local text = h:await()
 ```
 
+### `phase(name) -> previous | phase() -> current`
+
+Names the phase of the current task: agent runs started in it record the phase and show it in progress lines. Tasks inherit the phase of the task that spawned them; s:spawn takes the phase of the scope's function. phase(nil) clears it.
+
+```lua
+phase("review")
+local reviews = par.map(prs, review_one)
+phase("verify")
+```
+
 ### `sleep(duration)`
 
 Waits without blocking other tasks. A number is seconds; a string takes ms, s, m or h.
@@ -461,6 +471,18 @@ local answer, i = par.race(
 )
 ```
 
+### `par.first(tasks) -> i`
+
+Waits until one of tasks has finished and returns its position. Unlike par.race it cancels nothing, so the rest keep running: remove the finished task and call it again to take results as they arrive. A task that raises fails its scope as usual.
+
+```lua
+local tasks = tbl.map(prs, function(pr) return agent.spawn{ prompt = "Review PR " .. pr } end)
+while #tasks > 0 do
+  local r = table.remove(tasks, par.first(tasks)):await()
+  print(r.status, r.text)
+end
+```
+
 ## schema
 
 Shapes for structured data. Values: schema.string, schema.int, schema.number, schema.bool, schema.any. Every object field is required unless optional; s:describe(text) documents a field. A contract is a named schema in contracts/.
@@ -562,6 +584,8 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `worktree` | `boolean` | run in a new git worktree; kept only if the run changed it |
 | `ephemeral` | `boolean` | leave no session behind for the provider to resume |
 | `events` | `boolean` | add record.events: the agent's text, reasoning, tool calls and tool results |
+| `label` | `string` | a short name for progress lines and the record |
+| `phase` | `string` | the workflow phase; default: the calling task's phase() |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -602,7 +626,7 @@ for _, r in ipairs(agent.runs{ since = "1d" }) do print(r.id, r.status, r.prompt
 
 ### `agent.continue(record, prompt, spec) -> record`
 
-Resumes record's session with a new prompt, on the same provider. spec adds or overrides fields.
+Resumes record's session with a new prompt. It starts from the call that made record (provider, model, effort, access, output, tools, system, cwd, and the kept worktree as cwd), and spec overrides any of them. A record not made in this process carries only its provider.
 
 ```lua
 local r = agent.run{ prompt = "List the failing tests" }

@@ -136,6 +136,11 @@ impl Runtime {
     }
 
     /// Limits from the command line, which win over `init.lua`'s `limits`.
+    /// How agent runs report progress on stderr.
+    pub fn set_progress(&self, progress: crate::modules::agent::Progress) {
+        self.lua.set_app_data(progress);
+    }
+
     pub fn set_limits(&self, max_runs: Option<u64>, max_usd: Option<f64>) {
         self.lua
             .set_app_data(crate::modules::agent::Overrides { max_runs, max_usd });

@@ -50,17 +50,33 @@ pub const DOC: Module = Module {
             "Runs the functions concurrently, returns the first result to finish and its position, and cancels the others.",
             "local answer, i = par.race(\n  function() return agent.ask{ provider = \"claude\", prompt = q } end,\n  function() return agent.ask{ provider = \"codex\", prompt = q } end\n)",
         ),
+        Func::new(
+            "first",
+            "par.first(tasks) -> i",
+            "Waits until one of tasks has finished and returns its position. Unlike par.race it cancels nothing, so the rest keep running: remove the finished task and call it again to take results as they arrive. A task that raises fails its scope as usual.",
+            "local tasks = tbl.map(prs, function(pr) return agent.spawn{ prompt = \"Review PR \" .. pr } end)\nwhile #tasks > 0 do\n  local r = table.remove(tasks, par.first(tasks)):await()\n  print(r.status, r.text)\nend",
+        ),
     ],
 };
 
-/// A spawned task's scope, and its thread once the task has entered.
-type Pending = (Weak<ScopeInner>, Option<usize>);
+/// A spawned task before and while it runs.
+struct Pending {
+    scope: Weak<ScopeInner>,
+    /// Its Lua thread, once the task has entered.
+    thread: Option<usize>,
+    /// The phase it starts with, inherited from whoever spawned it.
+    phase: Option<String>,
+    /// Whether it runs the scope's function, rather than a task spawned on the scope.
+    body: bool,
+}
 
 /// Per-runtime state, kept in Lua app data.
 struct State {
     /// The scope each running task's Lua thread belongs to, for the global `spawn`.
     threads: RefCell<HashMap<usize, Weak<ScopeInner>>>,
-    /// Tasks that have been spawned: their scope, and their thread once the task has entered.
+    /// The phase of each running task's Lua thread, set by `phase(name)` or inherited.
+    phases: RefCell<HashMap<usize, String>>,
+    /// Tasks that have been spawned and not yet ended.
     tokens: RefCell<HashMap<u64, Pending>>,
     next_token: Cell<u64>,
     /// Notified whenever any task finishes.
@@ -73,22 +89,79 @@ const TASK_MAIN: &str = "timon.task_main";
 /// The first thing a task runs: it records its own thread for the global `spawn`, then calls
 /// the task's function. Tasks run through `Function::call_async`, so mlua recycles their
 /// threads and, when a task is cancelled, closes its pending to-be-closed variables.
+///
+/// The thread comes from `coroutine.running()`: inside a callback, `Lua::current_thread`
+/// does not name the coroutine that called it, so every task looked like the same thread.
 const TASK_MAIN_SOURCE: &str = r#"
-local enter = ...
+local enter, running = ...
 return function(token, f, ...)
-  enter(token)
+  enter(token, (running()))
   return f(...)
 end
 "#;
 
-/// Records the calling thread as belonging to the scope a task was spawned on.
-fn enter(lua: &Lua, token: u64) -> mlua::Result<()> {
-    let key = lua.current_thread().to_pointer() as usize;
+/// The global `spawn`: it passes its caller's coroutine, which picks the scope.
+const SPAWN_SOURCE: &str = r#"
+local spawn_from, running, fail = ...
+local type = type
+return function(f, ...)
+  if type(f) ~= "function" then
+    error(fail("bad_argument",
+      "bad argument #1 to spawn: expected a function, got a " .. type(f)), 2)
+  end
+  return spawn_from((running()), f, ...)
+end
+"#;
+
+fn thread_key(thread: &mlua::Thread) -> usize {
+    Value::Thread(thread.clone()).to_pointer() as usize
+}
+
+fn phase_of_key(lua: &Lua, key: usize) -> Option<String> {
+    lua.app_data_ref::<State>()
+        .and_then(|state| state.phases.borrow().get(&key).cloned())
+}
+
+/// Registry key of a function returning the calling task's phase, for modules written in Lua.
+pub(crate) const PHASE_OF: &str = "timon.phase_of";
+
+/// `scope`, `phase` and the phase reader pass their caller's coroutine, as `spawn` does.
+const PHASE_SOURCE: &str = r##"
+local scope_from, phase_set, phase_get, running = ...
+local function scope(f)
+  return scope_from((running()), f)
+end
+local function phase(...)
+  if select("#", ...) == 0 then
+    return phase_get((running()))
+  end
+  return phase_set((running()), ...)
+end
+local function phase_of()
+  return phase_get((running()))
+end
+return scope, phase, phase_of
+"##;
+
+/// Records `thread` as belonging to the scope a task was spawned on.
+fn enter(lua: &Lua, (token, thread): (u64, mlua::Thread)) -> mlua::Result<()> {
+    let key = thread_key(&thread);
     if let Some(state) = lua.app_data_ref::<State>() {
         let mut tokens = state.tokens.borrow_mut();
-        if let Some((scope, thread)) = tokens.get_mut(&token) {
-            *thread = Some(key);
-            state.threads.borrow_mut().insert(key, scope.clone());
+        if let Some(pending) = tokens.get_mut(&token) {
+            pending.thread = Some(key);
+            state
+                .threads
+                .borrow_mut()
+                .insert(key, pending.scope.clone());
+            if let Some(phase) = &pending.phase {
+                state.phases.borrow_mut().insert(key, phase.clone());
+            }
+            if pending.body
+                && let Some(scope) = pending.scope.upgrade()
+            {
+                scope.body_thread.set(Some(key));
+            }
         }
     }
     Ok(())
@@ -141,9 +214,22 @@ struct ScopeInner {
     children: RefCell<Vec<Rc<TaskInner>>>,
     first_error: RefCell<Option<Value>>,
     ended: Cell<bool>,
+    /// The phase of the task that made the scope.
+    phase: RefCell<Option<String>>,
+    /// The thread running the scope's function, once it has entered.
+    body_thread: Cell<Option<usize>>,
 }
 
 impl ScopeInner {
+    /// The phase a task spawned on this scope with `s:spawn` starts with: the current phase of
+    /// the scope's function, or the phase the scope was made in.
+    fn spawn_phase(&self, lua: &Lua) -> Option<String> {
+        self.body_thread
+            .get()
+            .and_then(|key| phase_of_key(lua, key))
+            .or_else(|| self.phase.borrow().clone())
+    }
+
     fn failure(&self) -> Option<Value> {
         self.first_error.borrow().clone()
     }
@@ -197,9 +283,12 @@ impl Drop for Registration {
     fn drop(&mut self) {
         if let Some(lua) = self.lua.try_upgrade()
             && let Some(state) = lua.app_data_ref::<State>()
-            && let Some((_, Some(key))) = state.tokens.borrow_mut().remove(&self.token)
+            && let Some(Pending {
+                thread: Some(key), ..
+            }) = state.tokens.borrow_mut().remove(&self.token)
         {
             state.threads.borrow_mut().remove(&key);
+            state.phases.borrow_mut().remove(&key);
         }
     }
 }
@@ -212,6 +301,7 @@ fn spawn_task(
     f: Function,
     args: MultiValue,
     child: bool,
+    phase: Option<String>,
 ) -> mlua::Result<Rc<TaskInner>> {
     if child && scope.ended.get() {
         return Err(
@@ -226,10 +316,15 @@ fn spawn_task(
         Some(state) => {
             let token = state.next_token.get();
             state.next_token.set(token + 1);
-            state
-                .tokens
-                .borrow_mut()
-                .insert(token, (Rc::downgrade(scope), None));
+            state.tokens.borrow_mut().insert(
+                token,
+                Pending {
+                    scope: Rc::downgrade(scope),
+                    thread: None,
+                    phase,
+                    body: !child,
+                },
+            );
             token
         }
         None => 0,
@@ -330,7 +425,8 @@ async fn scope_run(
         body: None,
         done: false,
     };
-    let body = spawn_task(lua, &scope, f, args, false).map_err(|e| {
+    let phase = scope.phase.borrow().clone();
+    let body = spawn_task(lua, &scope, f, args, false, phase).map_err(|e| {
         error::normalize(lua, Value::Error(Box::new(e)))
             .map(Value::Table)
             .unwrap_or(Value::Nil)
@@ -385,7 +481,8 @@ struct ScopeHandle(Rc<ScopeInner>);
 impl UserData for ScopeHandle {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("spawn", |lua, this, (f, args): (Function, MultiValue)| {
-            Ok(TaskHandle(spawn_task(lua, &this.0, f, args, true)?))
+            let phase = this.0.spawn_phase(lua);
+            Ok(TaskHandle(spawn_task(lua, &this.0, f, args, true, phase)?))
         });
         methods.add_method("cancel", |_, this, ()| {
             this.0.cancel_children();
@@ -486,22 +583,23 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     let lua = installer.lua();
     lua.set_app_data(State {
         threads: RefCell::new(HashMap::new()),
+        phases: RefCell::new(HashMap::new()),
         tokens: RefCell::new(HashMap::new()),
         next_token: Cell::new(1),
         changed: Rc::new(Notify::new()),
     });
+    let coroutine: Table = lua.globals().raw_get("coroutine")?;
+    let running: Function = coroutine.raw_get("running")?;
     let task_main: Function = lua
         .load(TASK_MAIN_SOURCE)
         .set_name(INTERNAL_CHUNK)
-        .call(lua.create_function(enter)?)?;
+        .call((lua.create_function(enter)?, running.clone()))?;
     lua.set_named_registry_value(TASK_MAIN, task_main)?;
 
-    let scope = installer.function(
-        &GLOBALS_DOC,
-        None,
-        "scope",
-        lua.create_async_function(|lua, f: Option<Function>| async move {
+    let scope_from = installer.wrap(lua.create_async_function(
+        |lua, (thread, f): (mlua::Thread, Option<Function>)| async move {
             let inner = Rc::new(ScopeInner::default());
+            *inner.phase.borrow_mut() = phase_of_key(&lua, thread_key(&thread));
             let handle = lua.create_userdata(ScopeHandle(inner.clone()))?;
             let Some(f) = f else {
                 return Ok(MultiValue::from_iter([Value::UserData(handle)]));
@@ -514,14 +612,11 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             )
             .await
             .map_err(|err| error::raise(&lua, err))
-        })?,
-    )?;
-    installer.function(
-        &GLOBALS_DOC,
-        None,
-        "spawn",
-        lua.create_function(|lua, (f, args): (Function, MultiValue)| {
-            let key = lua.current_thread().to_pointer() as usize;
+        },
+    )?)?;
+    let spawn_from = installer.wrap(lua.create_function(
+        |lua, (thread, f, args): (mlua::Thread, Function, MultiValue)| {
+            let key = thread_key(&thread);
             let scope = lua
                 .app_data_ref::<State>()
                 .and_then(|state| state.threads.borrow().get(&key).and_then(Weak::upgrade));
@@ -530,9 +625,49 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
                     .with_hint("call s:spawn on a scope from scope(function(s) ... end)")
                     .into());
             };
-            Ok(TaskHandle(spawn_task(lua, &scope, f, args, true)?))
-        })?,
-    )?;
+            let phase = phase_of_key(lua, key);
+            Ok(TaskHandle(spawn_task(lua, &scope, f, args, true, phase)?))
+        },
+    )?)?;
+    let spawn: Function = lua.load(SPAWN_SOURCE).set_name(INTERNAL_CHUNK).call((
+        spawn_from,
+        running.clone(),
+        fail_function(lua)?,
+    ))?;
+    installer.lua_function(&GLOBALS_DOC, None, "spawn", spawn)?;
+    let phase_set = installer.wrap(lua.create_function(
+        |lua, (thread, name): (mlua::Thread, Value)| {
+            let name = match name {
+                Value::Nil => None,
+                Value::String(s) => Some(s.to_string_lossy()),
+                other => {
+                    return Err(Error::new(
+                        "bad_argument",
+                        format!("phase takes a name or nil, not a {}", other.type_name()),
+                    )
+                    .into());
+                }
+            };
+            let key = thread_key(&thread);
+            let Some(state) = lua.app_data_ref::<State>() else {
+                return Ok(None);
+            };
+            let mut phases = state.phases.borrow_mut();
+            Ok(match name {
+                Some(name) => phases.insert(key, name),
+                None => phases.remove(&key),
+            })
+        },
+    )?)?;
+    let phase_get = lua
+        .create_function(|lua, thread: mlua::Thread| Ok(phase_of_key(lua, thread_key(&thread))))?;
+    let (scope, phase, phase_of): (Function, Function, Function) = lua
+        .load(PHASE_SOURCE)
+        .set_name(INTERNAL_CHUNK)
+        .call((scope_from, phase_set, phase_get, running))?;
+    installer.lua_function(&GLOBALS_DOC, None, "scope", scope.clone())?;
+    installer.lua_function(&GLOBALS_DOC, None, "phase", phase)?;
+    lua.set_named_registry_value(PHASE_OF, phase_of)?;
     installer.function(
         &GLOBALS_DOC,
         None,
@@ -548,10 +683,26 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     })?;
     let first = lua.create_async_function(|lua, handles: Table| async move {
         let notify = changed(&lua);
+        let not_a_task = || {
+            Error::new(
+                "bad_argument",
+                "par.first takes a list of tasks, from spawn, s:spawn or agent.spawn",
+            )
+        };
         let tasks: Vec<Rc<TaskInner>> = handles
-            .sequence_values::<mlua::AnyUserData>()
-            .map(|h| Ok(h?.borrow::<TaskHandle>()?.0.clone()))
+            .sequence_values::<Value>()
+            .map(|h| match h? {
+                Value::UserData(ud) => Ok(ud
+                    .borrow::<TaskHandle>()
+                    .map_err(|_| not_a_task())?
+                    .0
+                    .clone()),
+                _ => Err(not_a_task().into()),
+            })
             .collect::<mlua::Result<_>>()?;
+        if tasks.is_empty() {
+            return Err(Error::new("bad_argument", "par.first needs at least one task").into());
+        }
         loop {
             if let Some(i) = tasks.iter().position(|t| t.finished()) {
                 return Ok(i + 1);
