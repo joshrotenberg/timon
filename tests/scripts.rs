@@ -120,9 +120,16 @@ fn a_script_run_records_its_runs_and_their_totals() {
     );
     assert_eq!(shown["runs"].as_array().unwrap().len(), 3);
     let id = result["id"].as_str().unwrap();
+    let here = serde_json::json!(s.work().canonicalize().unwrap());
+    assert_eq!(
+        s.json(&["runs", "--scripts", "--json"])[0]["cwd"],
+        here,
+        "the index line has the directory the script ran in"
+    );
     let runs = s.json(&["eval", &format!("return agent.runs{{ parent = '{id}' }}")]);
     let runs = runs.as_array().unwrap();
     assert_eq!(runs.len(), 3);
+    assert!(runs.iter().all(|r| r["cwd"] == here), "{runs:?}");
     assert!(
         runs.iter()
             .all(|r| r["parent"] == id && r["contract"] == "yes_no"),
