@@ -136,3 +136,13 @@ fn help_prints_through_eval() {
     let output = timon(&["eval", "help(str.split)"], None);
     assert!(stdout(&output).starts_with("str.split(s, sep) -> array\n"));
 }
+
+#[test]
+fn eval_fnl_and_fennel_scripts() {
+    let output = timon(&["eval", "--fnl", "(+ 40 2)"], None);
+    assert_eq!(stdout(&output), "42\n");
+    let (_dir, path) = script("args.fnl", "(let [[a] [...]] (.. a \"!\"))");
+    let output = timon(&[&path, "hi"], None);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "hi!\n");
+}

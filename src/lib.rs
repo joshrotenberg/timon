@@ -4,6 +4,7 @@
 
 pub mod docs;
 pub mod error;
+mod fennel;
 pub mod modules;
 pub mod options;
 pub mod runtime;

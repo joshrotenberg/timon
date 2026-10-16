@@ -14,6 +14,9 @@ pub(crate) const INTERNAL_CHUNK: &str = "=[timon]";
 /// traceback.
 pub(crate) const RUN: &str = "timon.run";
 
+/// Registry key of the strict environment user chunks run in.
+pub(crate) const ENV: &str = "timon.env";
+
 /// Lua glue: the host-function wrapper, `try`, and the top-level runner.
 ///
 /// `wrap` calls a host function under `pcall` and re-raises its error as an error table at the
@@ -78,6 +81,8 @@ impl Runtime {
         lua.globals().set("try", try_fn)?;
         lua.set_named_registry_value(RUN, &run)?;
         let env = strict::environment(&lua)?;
+        lua.set_named_registry_value(ENV, &env)?;
+        crate::fennel::install_searcher(&lua)?;
         Ok(Self { lua, env, wrap })
     }
 
@@ -130,7 +135,15 @@ impl Runtime {
         self.call(f, MultiValue::new()).await
     }
 
-    /// Runs a script file with `args` as the `arg` table and as `...`.
+    /// Evaluates Fennel source the way `timon eval --fnl` does.
+    pub async fn eval_fennel(&self, source: &str, name: &str) -> Result<MultiValue, Failure> {
+        let lua_source = crate::fennel::compile(&self.lua, source, name)?;
+        let f = self.compile(&lua_source, name, false)?;
+        self.call(f, MultiValue::new()).await
+    }
+
+    /// Runs a script file with `args` as the `arg` table and as `...`. A `.fnl` file is
+    /// compiled as Fennel first.
     pub async fn run_script(&self, path: &Path, args: &[String]) -> Result<MultiValue, Failure> {
         let source = std::fs::read_to_string(path).map_err(|e| {
             Failure::from(Error::new(
@@ -138,11 +151,13 @@ impl Runtime {
                 format!("cannot read {}: {e}", path.display()),
             ))
         })?;
-        let f = self.compile(
-            &strip_shebang(&source),
-            &format!("@{}", path.display()),
-            false,
-        )?;
+        let name = format!("@{}", path.display());
+        let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
+            crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(&source), &name)?
+        } else {
+            strip_shebang(&source).into_owned()
+        };
+        let f = self.compile(&lua_source, &name, false)?;
         let script_args = || -> mlua::Result<MultiValue> {
             let arg = self.lua.create_table()?;
             arg.raw_set(0, path.display().to_string())?;
