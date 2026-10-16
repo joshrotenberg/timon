@@ -11,6 +11,7 @@ pub mod modules;
 pub mod options;
 pub mod runtime;
 mod settings;
+pub mod skills;
 pub mod suggest;
 pub mod value;
 

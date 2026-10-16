@@ -61,8 +61,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// List and read skills: built in, user and project
+    #[command(subcommand)]
+    Skill(SkillCommand),
     #[command(external_subcommand)]
     Script(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// List the skills in reach
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a skill, or one of its references
+    Show {
+        name: String,
+        /// The reference to print instead of SKILL.md
+        #[arg(long = "ref", value_name = "REF")]
+        reference: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -97,6 +116,7 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Scripts { json } => return scripts(&layers, json),
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
         Command::Defs { json } => return defs(&layers, json),
+        Command::Skill(command) => return skill(&layers, command),
         Command::Eval { .. } | Command::Run { .. } | Command::Script(_) => {}
     }
     // The runtime must outlive the values it returns, which refer into its Lua state.
@@ -111,9 +131,10 @@ async fn run(cli: Cli) -> ExitCode {
             Err(err) => Err(err.into()),
         },
         Command::Script(argv) => script(&rt, argv).await,
-        Command::Scripts { .. } | Command::Trust { .. } | Command::Defs { .. } => {
-            Ok(MultiValue::new())
-        }
+        Command::Scripts { .. }
+        | Command::Trust { .. }
+        | Command::Defs { .. }
+        | Command::Skill(_) => Ok(MultiValue::new()),
     };
     match result {
         Ok(values) => print(&values),
@@ -211,6 +232,62 @@ fn scripts(layers: &Layers, json: bool) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+fn skill(layers: &Layers, command: SkillCommand) -> ExitCode {
+    match command {
+        SkillCommand::List { json } => {
+            let skills = timon::skills::list(layers);
+            if json {
+                let list: Vec<serde_json::Value> = skills
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "name": s.name,
+                            "layer": s.layer.name(),
+                            "description": s.description,
+                            "references": s.references(),
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::Value::Array(list));
+            } else {
+                let width = skills.iter().map(|s| s.name.len()).max().unwrap_or(0);
+                for s in &skills {
+                    println!("{:width$}  {:7}  {}", s.name, s.layer.name(), s.description);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        SkillCommand::Show { name, reference } => {
+            let text = timon::skills::find(layers, &name).and_then(|skill| match reference {
+                Some(r) => skill.reference(&r),
+                None => skill.text().map(|text| {
+                    let refs = skill.references();
+                    if refs.is_empty() {
+                        text
+                    } else {
+                        format!(
+                            "{}\n\nReferences: {} (timon skill show {} --ref NAME)\n",
+                            text.trim_end(),
+                            refs.join(", "),
+                            skill.name
+                        )
+                    }
+                }),
+            });
+            match text {
+                Ok(text) => {
+                    print!("{text}");
+                    if !text.ends_with('\n') {
+                        println!();
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(err) => fail(&err.into()),
+            }
+        }
+    }
 }
 
 fn trust(layers: &Layers, dir: Option<PathBuf>, revoke: bool) -> ExitCode {

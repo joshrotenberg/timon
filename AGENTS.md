@@ -14,7 +14,9 @@ Read the design's Rules and API conventions before adding or changing an API.
 - No em dashes, no AI attribution, conventional-commit prefixes.
 - Keep `README.md` and the design's phase table current in the same PR as the change.
 - Keep the README and docs tight and terse. Every skill has concrete, runnable examples:
-  agents learn the API from examples first.
+  agents learn the API from examples first. Built-in skills live in `skills/`; every block
+  tagged `lua` or `fennel` is run by `tests/skills.rs`, so tag one that needs outside context
+  (script arguments, a user's module) `lua fragment`.
 
 ## Cadence
 
