@@ -440,36 +440,44 @@ async fn await_task(lua: &Lua, task: &TaskInner) -> mlua::Result<MultiValue> {
 
 /// Parses a duration: a number of seconds, or a string such as "250ms", "2s", "1.5m", "1h".
 pub(crate) fn duration(value: &Value) -> Result<Duration, Error> {
-    let bad = || {
-        Error::new(
-            "bad_argument",
-            "a duration is a number of seconds or a string like \"250ms\" or \"2s\"",
-        )
-    };
     let seconds = match value {
         Value::Integer(i) => *i as f64,
         Value::Number(n) => *n,
-        Value::String(s) => {
-            let s = s.to_string_lossy();
-            let s = s.trim();
-            let split = s
-                .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-                .unwrap_or(s.len());
-            let (number, unit) = s.split_at(split);
-            let n: f64 = number.parse().map_err(|_| bad())?;
-            let scale = match unit.trim() {
-                "ms" => 0.001,
-                "" | "s" => 1.0,
-                "m" => 60.0,
-                "h" => 3600.0,
-                _ => return Err(bad()),
-            };
-            n * scale
-        }
-        _ => return Err(bad()),
+        Value::String(s) => return parse_duration(&s.to_string_lossy()),
+        _ => return Err(bad_duration()),
     };
     if !seconds.is_finite() || seconds < 0.0 {
-        return Err(bad());
+        return Err(bad_duration());
+    }
+    Ok(Duration::from_secs_f64(seconds))
+}
+
+fn bad_duration() -> Error {
+    Error::new(
+        "bad_argument",
+        "a duration is a number of seconds or a string like \"250ms\", \"2s\" or \"1d\"",
+    )
+}
+
+/// Parses "250ms", "2s", "1.5m", "1h", "1d", or a bare number of seconds.
+pub fn parse_duration(text: &str) -> Result<Duration, Error> {
+    let s = text.trim();
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
+    let (number, unit) = s.split_at(split);
+    let n: f64 = number.parse().map_err(|_| bad_duration())?;
+    let scale = match unit.trim() {
+        "ms" => 0.001,
+        "" | "s" => 1.0,
+        "m" => 60.0,
+        "h" => 3600.0,
+        "d" => 86400.0,
+        _ => return Err(bad_duration()),
+    };
+    let seconds = n * scale;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(bad_duration());
     }
     Ok(Duration::from_secs_f64(seconds))
 }

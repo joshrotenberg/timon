@@ -365,9 +365,9 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   tokens only, so a USD budget counts Claude runs and says so.
 - **Cancellation.** Ctrl-C, a cancelled handle or an ended script stops the run's process group
   with a grace period, then kills it. Every outcome is recorded, including `cancelled`.
-- **Run records.** Each run writes its request, events and result to storage:
-  `timon runs`, `timon runs show ID`, `agent.runs{ since = "1d" }`. Secrets are redacted before
-  anything is written.
+- **Run records.** Each run writes `request.json` and `result.json` under `state/runs/<id>/`
+  and a line in `state/runs/index.jsonl`: `timon runs`, `timon runs show ID`,
+  `agent.runs{ since = "1d" }`. Secrets are redacted before anything is written.
 - **Worktrees.** `worktree = true` creates a worktree in the state directory on a
   `timon/<run id>` branch, runs there, and removes the worktree if it is clean. A dirty one is
   kept and its path is in the record.
@@ -566,9 +566,9 @@ beside one.
 
 ```
 ~/.local/state/timon/        $XDG_STATE_HOME/timon
-├── timon.db                 run records, summaries (WAL mode)
 ├── trusted                  trusted project roots, one per line
-├── runs/<id>/               request.json, events.jsonl, result.json per agent run
+├── runs/index.jsonl         one line per agent run
+├── runs/<id>/               request.json, result.json per agent run
 └── worktrees/<id>/          worktrees for `worktree = true` runs
 ~/.cache/timon/              $XDG_CACHE_HOME/timon
 └── sessions.db              the session index; safe to delete, rebuilt on the next call

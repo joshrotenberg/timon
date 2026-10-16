@@ -1559,6 +1559,7 @@ dependencies = [
 name = "timon"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "claude-wrapper",
  "codex-wrapper",
@@ -1566,6 +1567,7 @@ dependencies = [
  "include_dir",
  "jpx-core",
  "mlua",
+ "regex",
  "serde_json",
  "tempfile",
  "tokio",

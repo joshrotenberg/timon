@@ -12,6 +12,7 @@ pub mod layers;
 pub mod modules;
 pub mod options;
 pub mod plugin;
+pub mod redact;
 pub mod runtime;
 mod settings;
 pub mod skills;

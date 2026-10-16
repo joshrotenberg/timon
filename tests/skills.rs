@@ -2,9 +2,6 @@
 
 use std::path::Path;
 use std::process::{Command, Output};
-use std::time::Duration;
-
-use timon::Runtime;
 
 /// Fenced blocks tagged exactly `lua` or `fennel`. Blocks tagged `lua fragment` need context a
 /// standalone run does not have, such as script arguments or a user's module.
@@ -33,37 +30,52 @@ fn runnable_blocks(markdown: &str) -> Vec<(String, String)> {
     blocks
 }
 
+/// Every runnable example runs through the binary in a sandbox, with fake providers that
+/// answer any output schema, so agent examples run without a model.
 #[test]
 fn every_runnable_skill_example_runs() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    use std::io::Write;
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let mut ran = 0;
     for skill in timon::skills::builtin() {
         let text = skill.text().unwrap();
         for (lang, code) in runnable_blocks(&text) {
-            let result = tokio::task::LocalSet::new().block_on(&rt, async {
-                let runtime = Runtime::new().unwrap();
-                let run = async {
-                    if lang == "fennel" {
-                        runtime.eval_fennel(&code, "=example").await
-                    } else {
-                        runtime.eval(&code, "=example").await
-                    }
-                };
-                tokio::time::timeout(Duration::from_secs(10), run)
-                    .await
-                    .map(|r| r.map(|_| ()))
-            });
-            match result {
-                Ok(Ok(())) => ran += 1,
-                Ok(Err(failure)) => panic!("{} example failed:\n{code}\n{failure}", skill.name),
-                Err(_) => panic!("{} example timed out:\n{code}", skill.name),
+            let sandbox = tempfile::tempdir().unwrap();
+            let mut args = vec!["eval"];
+            if lang == "fennel" {
+                args.push("--fnl");
             }
+            args.push("-");
+            let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))
+                .args(&args)
+                .current_dir(sandbox.path())
+                .env("TIMON_HOME", sandbox.path().join("timon"))
+                .env("HOME", sandbox.path())
+                .env("TIMON_CLAUDE_BIN", fixtures.join("fake-claude"))
+                .env("TIMON_CODEX_BIN", fixtures.join("fake-codex"))
+                .env("FAKE_AUTO_ANSWER", "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(code.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "{} example failed:\n{code}\n{}",
+                skill.name,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            ran += 1;
         }
     }
-    assert!(ran >= 10, "only {ran} examples ran");
+    assert!(ran >= 18, "only {ran} examples ran");
 }
 
 fn timon(root: &Path, cwd: &Path, args: &[&str]) -> Output {

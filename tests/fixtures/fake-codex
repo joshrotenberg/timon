@@ -4,10 +4,23 @@
 FAKE_MODE: ok (default), auth, turn_failed
 FAKE_TEXT: the final message (default: "echo: " + the prompt)
 FAKE_STRUCTURED: written as the final message instead, as codex does with a schema
+FAKE_AUTO_ANSWER: with --output-schema and no FAKE_STRUCTURED, answer with the smallest valid value
 FAKE_SESSION: the thread id (default: codex-thread-1)
 FAKE_DELAY, FAKE_PID_FILE, FAKE_LOG_DIR: as for fake-claude (files codex-N.json)
 """
 import json, os, sys, time
+
+
+def example(schema):
+    """The smallest value matching a JSON Schema timon generates, for FAKE_AUTO_ANSWER."""
+    if "anyOf" in schema:
+        return example([s for s in schema["anyOf"] if s.get("type") != "null"][0])
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    if kind == "object":
+        return {k: example(v) for k, v in schema.get("properties", {}).items()}
+    return {"array": [], "string": "example", "integer": 1, "number": 1.5, "boolean": True}.get(kind)
 
 args = sys.argv[1:]
 prompt = sys.stdin.read()
@@ -46,6 +59,8 @@ if mode == "turn_failed":
     sys.exit(1)
 text = os.environ.get("FAKE_TEXT", "echo: " + prompt)
 final = os.environ.get("FAKE_STRUCTURED", text)
+if "FAKE_STRUCTURED" not in os.environ and os.environ.get("FAKE_AUTO_ANSWER") and schema:
+    final = json.dumps(example(schema))
 emit({"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": final}})
 emit({"type": "turn.completed", "usage": {"input_tokens": 200, "cached_input_tokens": 0, "output_tokens": 40}})
 if "--output-last-message" in args:

@@ -12,7 +12,7 @@ Design: [docs/design.md](docs/design.md).
 |---|---|---|
 | 0 | Design, crate | done |
 | 1 | Runtime, directories, skills, plugin | done (REPL left) |
-| 2 | `agent`: Claude and Codex runs, contracts, supervisor | in progress |
+| 2 | `agent`: runs, contracts, records, budgets, worktrees | done (events left) |
 | 3 | `sessions`: list, read and search every session | planned |
 | 4 | Toolbox, MCP client and server | to discuss |
 

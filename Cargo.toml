@@ -17,13 +17,15 @@ name = "timon"
 path = "src/main.rs"
 
 [dependencies]
-claude-wrapper = "=0.14.4"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.7", features = ["derive"] }
+claude-wrapper = "=0.14.4"
 codex-wrapper = "=0.4.4"
 glob = "0.3.4"
 include_dir = "0.7.4"
 jpx-core = "0.3.1"
 mlua = { version = "=0.12.2", default-features = false, features = ["lua54", "vendored", "async", "serde"] }
+regex = "1.13.1"
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["rt", "macros", "time", "signal", "sync"] }

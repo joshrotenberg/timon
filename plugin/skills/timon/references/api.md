@@ -559,6 +559,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `resume` | string | a session id timon started, to continue |
 | `fork` | string | a session id to branch from (claude) |
 | `native` | table | extra command-line arguments for the provider |
+| `worktree` | boolean | run in a new git worktree; kept only if the run changed it |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -582,6 +583,19 @@ Starts agent.run(spec) as a task on the innermost scope; task:await() returns th
 local a = agent.spawn{ prompt = "Summarize README.md" }
 local b = agent.spawn{ prompt = "Summarize CHANGELOG.md", provider = "codex" }
 local ra, rb = a:await(), b:await()
+```
+
+### `agent.runs{ since, limit } -> array`
+
+Recorded runs, newest first: id, started_at, provider, model, agent, status, ms, usd, output_tokens and the start of the prompt. timon runs show ID has the full request and result.
+
+| Option | Type | |
+|---|---|---|
+| `since` | any | a duration back from now, such as "1d" or "2h" |
+| `limit` | integer | most entries to return (default 20) |
+
+```lua
+for _, r in ipairs(agent.runs{ since = "1d" }) do print(r.id, r.status, r.prompt) end
 ```
 
 ### `agent.continue(record, prompt, spec) -> record`

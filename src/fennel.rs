@@ -32,9 +32,58 @@ pub(crate) fn compile(lua: &Lua, source: &str, name: &str) -> Result<String, Err
     let opts = lua.create_table()?;
     opts.set("filename", name.trim_start_matches(['=', '@']))?;
     opts.set("correlate", true)?;
-    compile
-        .call::<String>((source, opts))
-        .map_err(|err| Error::new("syntax", message(&err)))
+    opts.set("allowedGlobals", allowed_globals(lua)?)?;
+    // No terminal escape codes around the failing form: errors go to agents and pipes too.
+    opts.set("error-pinpoint", false)?;
+    compile.call::<String>((source, opts)).map_err(|err| {
+        let message = message(&err);
+        let error = Error::new("syntax", message.clone());
+        match unknown_identifier(&message).and_then(|name| suggestion(lua, name)) {
+            Some(close) => error.with_hint(format!("did you mean \"{close}\"?")),
+            None => error,
+        }
+    })
+}
+
+/// The name in a Fennel `unknown identifier: NAME` error.
+fn unknown_identifier(message: &str) -> Option<&str> {
+    let rest = &message[message.find("unknown identifier: ")? + "unknown identifier: ".len()..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '\n')
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+    // `agnet.run` is reported as the whole symbol; the global is its first part.
+    Some(name.split(['.', ':']).next().unwrap_or(name)).filter(|n| !n.is_empty())
+}
+
+fn suggestion(lua: &Lua, name: &str) -> Option<String> {
+    let names: Vec<String> = lua
+        .globals()
+        .pairs::<Value, Value>()
+        .filter_map(|pair| match pair {
+            Ok((Value::String(k), _)) => Some(k.to_string_lossy()),
+            _ => None,
+        })
+        .collect();
+    crate::suggest::closest(name, names.iter().map(String::as_str)).map(str::to_owned)
+}
+
+/// The globals Fennel code may reference: every global defined now, plus `arg`, which a
+/// script gets after it compiles. Without an explicit list, `compileString` checks nothing, and
+/// a typo in a branch that never runs would go unnoticed.
+fn allowed_globals(lua: &Lua) -> mlua::Result<Table> {
+    let mut names: Vec<String> = lua
+        .globals()
+        .pairs::<Value, Value>()
+        .filter_map(|pair| match pair {
+            Ok((Value::String(k), _)) => Some(k.to_string_lossy()),
+            _ => None,
+        })
+        .collect();
+    names.push("arg".to_owned());
+    names.sort();
+    names.dedup();
+    lua.create_sequence_from(names)
 }
 
 /// Fennel raises plain strings; drop the Lua traceback mlua appends.

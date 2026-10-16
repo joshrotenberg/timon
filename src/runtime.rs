@@ -116,9 +116,19 @@ impl Runtime {
             crate::modules::agent::AGENT_DIRS,
             self.lua.create_sequence_from(agent_dirs)?,
         )?;
+        self.lua.set_named_registry_value(
+            crate::modules::agent::STATE_DIR,
+            layers.dirs.state.display().to_string(),
+        )?;
         let settings = crate::settings::load(&self.lua, &layers.init_files())?;
         self.lua.set_named_registry_value(SETTINGS, settings)?;
         Ok(())
+    }
+
+    /// Limits from the command line, which win over `init.lua`'s `limits`.
+    pub fn set_limits(&self, max_runs: Option<u64>, max_usd: Option<f64>) {
+        self.lua
+            .set_app_data(crate::modules::agent::Overrides { max_runs, max_usd });
     }
 
     /// The merged settings, as JSON.
