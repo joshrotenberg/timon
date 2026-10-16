@@ -314,13 +314,23 @@ fn spec(
 
 /// Stops a process group when dropped, unless disarmed: a cancelled or timed-out run leaves
 /// nothing behind. Without a group, only the process.
-struct Stopper {
+pub(crate) struct Stopper {
     pid: Option<u32>,
     group: bool,
     armed: Cell<bool>,
 }
 
 impl Stopper {
+    /// Stops the process group `pid` leads when dropped, for modules that start their own
+    /// processes, such as an MCP server.
+    pub(crate) fn for_group(pid: Option<u32>) -> Self {
+        Self {
+            pid,
+            group: true,
+            armed: Cell::new(true),
+        }
+    }
+
     fn signal(&self, sig: i32) {
         #[cfg(unix)]
         if let Some(pid) = self.pid {

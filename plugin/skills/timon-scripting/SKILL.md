@@ -46,6 +46,7 @@ project:
 ├── tasks.lua         tasks with dependencies (the timon-tasks skill)
 ├── scripts/NAME.lua  timon NAME [ARGS]
 ├── lib/NAME.lua      require "NAME"
+├── mcp/NAME.lua      an MCP server: mcp.connect("NAME")
 └── skills/NAME/      SKILL.md, references/
 ```
 
@@ -57,6 +58,25 @@ timon defs                # layers, settings, scripts, lib directories
 
 A project's `.timon/` loads only after a person reviews it and runs `timon trust`. Do not trust a
 project on someone's behalf.
+
+## MCP servers
+
+MCP servers are timon's pods: programs whose tools a script calls.
+
+```lua fragment
+-- .timon/mcp/crates.lua
+return { description = "crates.io", command = { "cratesio-mcp" } }
+```
+
+```lua fragment
+local crates = mcp.connect("crates")      -- or mcp.connect{ command = { "npx", "-y", "..." } }
+for _, t in ipairs(crates:tools()) do print(t.name, t.description) end
+local info = crates:call("get_crate_info", { name = "mlua" })   -- structured content, or text
+```
+
+A tool that reports an error raises `mcp_tool_failed`. The server stops when the scope that
+connected ends. From the shell: `timon mcp servers`, `timon mcp tools crates`,
+`timon mcp call crates get_crate_info name=mlua`.
 
 ## Script runs and resume
 

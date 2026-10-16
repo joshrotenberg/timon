@@ -617,12 +617,11 @@ timon is an MCP client and an MCP server, both through tower-mcp.
 
 ### Client
 
-Any MCP server's tools become Lua calls:
+Built (#100), on tower-mcp 0.24's stdio client. Any MCP server's tools become Lua calls:
 
 ```lua
-local crates = mcp.connect("crates")             -- an entry in mcp/, by name
+local crates = mcp.connect("crates")             -- mcp/crates.lua in a layer
 local files = mcp.connect{ command = { "npx", "-y", "@modelcontextprotocol/server-filesystem", "." } }
-local remote = mcp.connect{ url = "https://example.com/mcp", headers = { ... } }
 
 crates:tools()                                   -- { { name, description, input_schema } }
 crates:call("get_crate_info", { name = "mlua" }) -- the structured content, or the text
@@ -631,12 +630,17 @@ crates:read("crates://mlua/readme")
 crates:close()                                   -- also when the opening scope ends
 ```
 
-- `call` raises when the tool reports an error, with the server's message in the error; `try`
-  catches it.
-- A connection belongs to the scope that opened it, like spawned work: it closes when that scope
-  ends, and the supervisor stops the server process.
-- `mcp.servers()` lists the configured entries.
-- The CLI door: `timon mcp tools crates`, `timon mcp call crates get_crate_info name=mlua`.
+- `call` raises `mcp_tool_failed` when the tool reports an error, with the server's text in the
+  message and its content in `data`; protocol failures raise `mcp_failed`.
+- The server runs in its own process group. A connection belongs to the scope that opened it,
+  like `proc.spawn`: when that scope ends, the server's group stops. Starting and initializing
+  time out (default 30s).
+- `mcp/NAME.lua` is a definition file, `{ description, command, env, cwd }`, loaded without
+  effects; `mcp.servers()` lists them, a project's hiding a user's of the same name.
+- `mcp.connect` is refused while tasks load (rule 12).
+- The CLI door: `timon mcp servers`, `timon mcp tools crates`,
+  `timon mcp call crates get_crate_info name=mlua`.
+- Not yet: HTTP servers (`url`), whose client brings its own TLS stack.
 
 ### Server
 
@@ -929,9 +933,9 @@ are libraries for exactly this, not sibling tools.
    of them. Revisit when jpx-core splits its extensions into finer features.
    Measured 2026-10-16 on macOS arm64, clean release builds: 13.60 MB before `http` and `gh`;
    18.04 MB with reqwest, HTTP/2 and rustls on aws-lc-rs; 16.67 MB with rustls on ring; 16.05 MB
-   on ring without HTTP/2, which is what ships (#96). The rest of the HTTP stack (hyper, rustls,
-   the platform verifier) is about 2.5 MB; a smaller client is the next candidate if size
-   matters.
+   on ring without HTTP/2 (#96). The rest of the HTTP stack (hyper, rustls, the platform
+   verifier) is about 2.5 MB; a smaller client is the next candidate if size matters. The MCP
+   client (tower-mcp 0.24, #100) adds about 2 MB: 18.04 MB.
 3. **GitHub auth.** Decided and built (#90): `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token`
    when `gh` is installed, otherwise `not_authenticated` with the fix. The `gh` fallback is a
    soft runtime dependency.

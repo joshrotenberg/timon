@@ -109,6 +109,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::proc::PROC_DOC,
         &modules::cli::CLI_DOC,
         &modules::flow::DOC,
+        &modules::mcp::DOC,
         &modules::formats::TOML_DOC,
         &modules::formats::YAML_DOC,
         &modules::formats::CSV_DOC,

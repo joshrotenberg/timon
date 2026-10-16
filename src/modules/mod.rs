@@ -11,6 +11,7 @@ pub mod git;
 pub mod http;
 pub mod json;
 pub mod log;
+pub mod mcp;
 pub mod proc;
 pub mod schema;
 pub mod sessions;
@@ -218,6 +219,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     agent::install(&installer)?;
     sessions::install(&installer)?;
     flow::install(&installer)?;
+    mcp::install(&installer)?;
     Ok(())
 }
 
