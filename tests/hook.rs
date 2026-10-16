@@ -464,3 +464,82 @@ fn the_plugin_runs_timon_hook_for_both_hosts() {
         assert!(matcher.split('|').any(|t| t == tool), "{matcher}");
     }
 }
+
+impl Sandbox {
+    /// Runs the plugin's shim with a bare environment: no timon on PATH or in cargo's bin
+    /// directory unless `timon_bin` names one.
+    fn shim(&self, args: &[&str], stdin: &str, timon_bin: Option<&Path>) -> std::process::Output {
+        let shim = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/bin/timon");
+        let mut cmd = Command::new(shim);
+        cmd.args(args)
+            .env_clear()
+            .current_dir(self.project())
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.home())
+            .env("CARGO_HOME", self.dir.path().join("cargo"))
+            .env("TIMON_HOME", self.dir.path().join("timon"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(bin) = timon_bin {
+            cmd.env("TIMON_BIN", bin);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+}
+
+fn message(o: &std::process::Output) -> String {
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let out: Json = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&o.stdout)));
+    out["systemMessage"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn the_plugin_shim_never_lets_a_hook_block_the_host() {
+    let s = Sandbox::new();
+    s.file(".timon/tasks.lua", "return { check = 'true' }\n");
+    s.trust();
+    let input = start(A).to_string();
+
+    let real = Path::new(env!("CARGO_BIN_EXE_timon"));
+    let o = s.shim(&["hook"], &input, Some(real));
+    assert_eq!(o.status.code(), Some(0));
+    let out: Json = serde_json::from_slice(&o.stdout).unwrap();
+    assert!(context(&out).ends_with("- check: true"), "{out}");
+
+    let old = s.dir.path().join("old-timon");
+    std::fs::write(
+        &old,
+        "#!/bin/sh\necho 'timon: usage: unknown command or task \"hook\"' >&2\nexit 2\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let m = message(&s.shim(&["hook"], &input, Some(&old)));
+    assert!(m.contains("exited 2, so the hook did nothing"), "{m}");
+    assert!(m.contains("cargo install --locked --git"), "{m}");
+
+    let m = message(&s.shim(&["hook"], &input, None));
+    assert!(m.contains("timon is not installed"), "{m}");
+    let o = s.shim(&["tasks"], "", None);
+    assert_eq!(
+        o.status.code(),
+        Some(127),
+        "other commands keep their exit codes"
+    );
+    let o = s.shim(&["nosuchtask"], "", Some(real));
+    assert_eq!(o.status.code(), Some(2));
+}

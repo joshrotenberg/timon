@@ -7,8 +7,10 @@ description: Use when writing timon scripts to keep - named scripts in ~/.config
 
 Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
 line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
-as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
-of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+as one single-quoted argument, which may span lines and cannot contain `'`: use `"` for Lua
+strings, and put code whose text needs an apostrophe in a file run with `timon eval -f FILE`.
+Read files with `fs.read` in Lua instead of piping them in, and skip `$?`: a failure prints
+`timon: kind: message` and exits nonzero.
 
 ## Scripts
 
