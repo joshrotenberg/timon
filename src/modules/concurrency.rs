@@ -50,6 +50,12 @@ pub const DOC: Module = Module {
             "Runs the functions concurrently, returns the first result to finish and its position, and cancels the others.",
             "local answer, i = par.race(\n  function() return agent.ask{ provider = \"claude\", prompt = q } end,\n  function() return agent.ask{ provider = \"codex\", prompt = q } end\n)",
         ),
+        Func::new(
+            "first",
+            "par.first(tasks) -> i",
+            "Waits until one of tasks has finished and returns its position. Unlike par.race it cancels nothing, so the rest keep running: remove the finished task and call it again to take results as they arrive. A task that raises fails its scope as usual.",
+            "local tasks = tbl.map(prs, function(pr) return agent.spawn{ prompt = \"Review PR \" .. pr } end)\nwhile #tasks > 0 do\n  local r = table.remove(tasks, par.first(tasks)):await()\n  print(r.status, r.text)\nend",
+        ),
     ],
 };
 
@@ -73,17 +79,37 @@ const TASK_MAIN: &str = "timon.task_main";
 /// The first thing a task runs: it records its own thread for the global `spawn`, then calls
 /// the task's function. Tasks run through `Function::call_async`, so mlua recycles their
 /// threads and, when a task is cancelled, closes its pending to-be-closed variables.
+///
+/// The thread comes from `coroutine.running()`: inside a callback, `Lua::current_thread`
+/// does not name the coroutine that called it, so every task looked like the same thread.
 const TASK_MAIN_SOURCE: &str = r#"
-local enter = ...
+local enter, running = ...
 return function(token, f, ...)
-  enter(token)
+  enter(token, (running()))
   return f(...)
 end
 "#;
 
-/// Records the calling thread as belonging to the scope a task was spawned on.
-fn enter(lua: &Lua, token: u64) -> mlua::Result<()> {
-    let key = lua.current_thread().to_pointer() as usize;
+/// The global `spawn`: it passes its caller's coroutine, which picks the scope.
+const SPAWN_SOURCE: &str = r#"
+local spawn_from, running, fail = ...
+local type = type
+return function(f, ...)
+  if type(f) ~= "function" then
+    error(fail("bad_argument",
+      "bad argument #1 to spawn: expected a function, got a " .. type(f)), 2)
+  end
+  return spawn_from((running()), f, ...)
+end
+"#;
+
+fn thread_key(thread: &mlua::Thread) -> usize {
+    Value::Thread(thread.clone()).to_pointer() as usize
+}
+
+/// Records `thread` as belonging to the scope a task was spawned on.
+fn enter(lua: &Lua, (token, thread): (u64, mlua::Thread)) -> mlua::Result<()> {
+    let key = thread_key(&thread);
     if let Some(state) = lua.app_data_ref::<State>() {
         let mut tokens = state.tokens.borrow_mut();
         if let Some((scope, thread)) = tokens.get_mut(&token) {
@@ -490,10 +516,12 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
         next_token: Cell::new(1),
         changed: Rc::new(Notify::new()),
     });
+    let coroutine: Table = lua.globals().raw_get("coroutine")?;
+    let running: Function = coroutine.raw_get("running")?;
     let task_main: Function = lua
         .load(TASK_MAIN_SOURCE)
         .set_name(INTERNAL_CHUNK)
-        .call(lua.create_function(enter)?)?;
+        .call((lua.create_function(enter)?, running.clone()))?;
     lua.set_named_registry_value(TASK_MAIN, task_main)?;
 
     let scope = installer.function(
@@ -516,12 +544,9 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             .map_err(|err| error::raise(&lua, err))
         })?,
     )?;
-    installer.function(
-        &GLOBALS_DOC,
-        None,
-        "spawn",
-        lua.create_function(|lua, (f, args): (Function, MultiValue)| {
-            let key = lua.current_thread().to_pointer() as usize;
+    let spawn_from = installer.wrap(lua.create_function(
+        |lua, (thread, f, args): (mlua::Thread, Function, MultiValue)| {
+            let key = thread_key(&thread);
             let scope = lua
                 .app_data_ref::<State>()
                 .and_then(|state| state.threads.borrow().get(&key).and_then(Weak::upgrade));
@@ -531,8 +556,14 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
                     .into());
             };
             Ok(TaskHandle(spawn_task(lua, &scope, f, args, true)?))
-        })?,
-    )?;
+        },
+    )?)?;
+    let spawn: Function = lua.load(SPAWN_SOURCE).set_name(INTERNAL_CHUNK).call((
+        spawn_from,
+        running,
+        fail_function(lua)?,
+    ))?;
+    installer.lua_function(&GLOBALS_DOC, None, "spawn", spawn)?;
     installer.function(
         &GLOBALS_DOC,
         None,
@@ -548,10 +579,26 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     })?;
     let first = lua.create_async_function(|lua, handles: Table| async move {
         let notify = changed(&lua);
+        let not_a_task = || {
+            Error::new(
+                "bad_argument",
+                "par.first takes a list of tasks, from spawn, s:spawn or agent.spawn",
+            )
+        };
         let tasks: Vec<Rc<TaskInner>> = handles
-            .sequence_values::<mlua::AnyUserData>()
-            .map(|h| Ok(h?.borrow::<TaskHandle>()?.0.clone()))
+            .sequence_values::<Value>()
+            .map(|h| match h? {
+                Value::UserData(ud) => Ok(ud
+                    .borrow::<TaskHandle>()
+                    .map_err(|_| not_a_task())?
+                    .0
+                    .clone()),
+                _ => Err(not_a_task().into()),
+            })
             .collect::<mlua::Result<_>>()?;
+        if tasks.is_empty() {
+            return Err(Error::new("bad_argument", "par.first needs at least one task").into());
+        }
         loop {
             if let Some(i) = tasks.iter().position(|t| t.finished()) {
                 return Ok(i + 1);

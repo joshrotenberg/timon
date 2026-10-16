@@ -257,3 +257,71 @@ fn par_race_returns_the_first_and_cancels_the_rest() {
 fn sleep_rejects_bad_durations() {
     assert_eq!(fails("sleep('soon')").kind, "bad_argument");
 }
+
+#[test]
+fn first_returns_the_first_task_to_finish_and_cancels_nothing() {
+    let out = eval(
+        "local tasks = {
+           spawn(function() sleep('60ms') return 'slow' end),
+           spawn(function() sleep('5ms') return 'fast' end),
+           spawn(function() sleep('30ms') return 'middle' end),
+         }
+         local order = {}
+         while #tasks > 0 do
+           order[#order + 1] = table.remove(tasks, par.first(tasks)):await()
+         end
+         return order",
+    );
+    assert_eq!(out, [r#"["fast","middle","slow"]"#]);
+}
+
+#[test]
+fn first_counts_a_task_that_already_finished() {
+    let out = eval(
+        "local done = spawn(function() return 'done' end)
+         sleep('5ms')
+         local waiting = spawn(function() sleep('1s') end)
+         local i = par.first({ waiting, done })
+         waiting:cancel()
+         return i",
+    );
+    assert_eq!(out, ["2"]);
+}
+
+#[test]
+fn first_rejects_what_is_not_a_task() {
+    assert_eq!(fails("return par.first({ 1 })").kind, "bad_argument");
+    assert_eq!(fails("return par.first({})").kind, "bad_argument");
+}
+
+#[test]
+fn spawn_finds_its_scope_after_a_sibling_finished() {
+    // Every task once looked like the same Lua thread, so a finished task took its parent's
+    // registration with it and the next global spawn raised no_scope.
+    let out = eval(
+        "local a = spawn(function() return 1 end)
+         a:await()
+         local b = spawn(function() return 2 end)
+         return b:await()",
+    );
+    assert_eq!(out, ["2"]);
+}
+
+#[test]
+fn spawn_in_a_nested_scope_belongs_to_that_scope() {
+    let out = eval(
+        "local inner_failed = try(function()
+           scope(function()
+             spawn(function() error({ kind = 'inner', message = 'boom' }) end)
+             sleep('20ms')
+           end)
+         end)
+         local t = spawn(function() return 'outer' end)
+         return inner_failed, t:await()",
+    );
+    assert_eq!(out, ["false", "outer"]);
+    assert_eq!(
+        fails("return spawn(1)").message,
+        "bad argument #1 to spawn: expected a function, got a number"
+    );
+}

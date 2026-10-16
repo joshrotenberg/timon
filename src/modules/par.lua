@@ -73,4 +73,9 @@ function par.race(...)
   end)
 end
 
+function par.first(tasks)
+  want("par.first", tasks, "table", 1)
+  return first(tasks)
+end
+
 return par
