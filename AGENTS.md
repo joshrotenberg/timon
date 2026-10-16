@@ -10,11 +10,21 @@ Read the design's Rules and API conventions before adding or changing an API.
 
 - Branch and open a draft PR before changing anything. Never commit to `main`.
 - Before every push: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test`, and `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`.
-- Hosted CI cannot start in this private repository while the account's Actions billing is
-  blocked. The local gates above are the gates; say so in the PR when CI did not run.
+  `cargo test`, and `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`. CI runs the same gates.
 - No em dashes, no AI attribution, conventional-commit prefixes.
 - Keep `README.md` and the design's phase table current in the same PR as the change.
+- Keep the README and docs tight and terse. Every skill has concrete, runnable examples:
+  agents learn the API from examples first.
+
+## Cadence
+
+While bootstrapping:
+
+- Each unit of work is a GitHub issue with a short What, Done when and Out of scope.
+- A PR bundles a few related issues (`Closes #a. Closes #b.`), so work does not wait on one PR
+  per issue. Open it as a draft with a short plan, push, and squash-merge on green CI.
+- After each issue is implemented, report its status: Done, Next, Blockers, Decisions, and a
+  short snippet of what works now.
 
 ## Self-contained
 
