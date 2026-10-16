@@ -22,7 +22,12 @@ timon test -- --test tasks    # one gate; words after -- go to cargo test
 timon em-dash                 # fails on any em dash in our own text; also runs in cargo test
 timon recent 6h               # recent timon sessions and recorded agent runs
 timon naming-audit            # the namer agent over six areas; spends tokens (limit $2)
+timon bump --version 0.2.0    # a pull request that sets the version
+timon release                 # after it merges: check, tag, push, GitHub release (asks first)
 ```
+
+`bump` and `release` live in `.timon/lib/release.lua`; `tests/release.rs` runs them against a
+sandbox crate, a bare remote and a local GitHub API.
 
 ## Agents
 

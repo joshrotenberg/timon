@@ -19,8 +19,8 @@ Design: [docs/design.md](docs/design.md).
 | 4 | Toolbox: `sh` and `proc` | done |
 | 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
 | 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
-| 7 | Toolbox: data formats, `eval -i`/`-I`, `git`, `http`, `gh`, `sqlite` done; the release task | in progress |
-| 8 | Workflow patterns | planned |
+| 7 | Toolbox: `git`, `gh`, `http`, `sqlite`, data formats, `eval -i`/`-I`; release tasks | done |
+| 8 | Workflow patterns | next |
 | 9 | MCP client and server | planned |
 
 ## Install
