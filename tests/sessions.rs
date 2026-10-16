@@ -57,8 +57,12 @@ impl Archive {
     }
 
     fn timon(&self, code: &str, env: &[(&str, &str)]) -> Output {
+        self.cli(&["eval", code], env)
+    }
+
+    fn cli(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_timon"));
-        cmd.args(["eval", code])
+        cmd.args(args)
             .current_dir(self.dir.path())
             .env("TIMON_HOME", self.dir.path().join("timon"))
             .env("HOME", self.home());
@@ -816,4 +820,131 @@ fn a_long_session_is_summarized_in_parts_and_merged_within_budget() {
         .unwrap();
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("budget_exceeded"));
+}
+
+// The CLI door (#44)
+
+fn out(o: &Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn the_cli_lists_shows_and_finds_the_current_session() {
+    let a = fixture();
+    let o = a.cli(&["sessions", "list"], &[]);
+    let (stdout, stderr) = out(&o);
+    assert!(o.status.success(), "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(lines[0].starts_with("aaaaaaaa  claude"), "{stdout}");
+    assert!(lines[0].ends_with("/work/timon  Build fix"), "{stdout}");
+    assert!(lines[1].starts_with("bbbbbbbb  codex"), "{stdout}");
+    assert_eq!(
+        stderr.trim(),
+        "left out: 1 automated (--automated), 1 subagents (--subagents)"
+    );
+
+    let o = a.cli(
+        &[
+            "sessions",
+            "list",
+            "--backend",
+            "codex",
+            "--automated",
+            "--json",
+        ],
+        &[],
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let ids: Vec<&str> = r["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [ID_B, ID_A2]);
+
+    let (stdout, _) = out(&a.cli(&["sessions", "show", "aaaaaaaa-1111"], &[]));
+    assert!(stdout.contains("title     Build fix"), "{stdout}");
+    assert!(
+        stdout.contains("prs       https://github.com/o/r/pull/7"),
+        "{stdout}"
+    );
+    let o = a.cli(&["sessions", "show", "ffff"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("not_found"));
+
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "current"],
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    ));
+    assert!(stdout.starts_with(&format!("id        {ID_A}")), "{stdout}");
+    let o = a.cli(&["sessions", "current"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("CLAUDE_CODE_SESSION_ID"));
+}
+
+#[test]
+fn the_cli_pages_transcripts_and_searches() {
+    let a = searchable();
+    let (stdout, stderr) = out(&a.cli(&["sessions", "transcript", ID_A, "--limit", "1"], &[]));
+    assert_eq!(stdout.trim(), "[0] USER: please fix the flaky parser test");
+    assert!(stderr.contains("more with --offset 1"), "{stderr}");
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "transcript", ID_A, "--kind", "tool_call"],
+        &[],
+    ));
+    assert!(stdout.starts_with("[2] TOOL CALL: Grep("), "{stdout}");
+
+    let (stdout, stderr) = out(&a.cli(&["sessions", "search", "parser colons"], &[]));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines[0].starts_with("aaaaaaaa  claude"), "{stdout}");
+    assert!(lines[1].starts_with("  [1] assistant: "), "{stdout}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let (_, stderr) = out(&a.cli(&["sessions", "search", "quokka"], &[]));
+    assert!(stderr.contains("automated = true"), "{stderr}");
+    let (stdout, _) = out(&a.cli(
+        &["sessions", "search", "quokka", "--automated", "--json"],
+        &[],
+    ));
+    let r: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(r["returned"], 2);
+    let (stdout, stderr) = out(&a.cli(&["sessions", "search", "nowhere"], &[]));
+    assert!(
+        stdout.is_empty() && stderr.starts_with("no matches"),
+        "{stderr}"
+    );
+    let o = a.cli(&["sessions", "search", "x", "--mode", "fuzzy"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out(&o).1.contains("fuzzy"));
+}
+
+#[test]
+fn the_cli_summarizes_and_says_what_it_cost() {
+    let a = searchable();
+    let claude = fake_claude();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_TEXT", "Goal: fix the parser."),
+    ];
+    let (stdout, stderr) = out(&a.cli(&["sessions", "summarize", "aaaaaaaa"], &env));
+    assert_eq!(stdout.trim(), "Goal: fix the parser.");
+    assert_eq!(stderr.trim(), "haiku, $0.0125");
+    let (_, stderr) = out(&a.cli(&["sessions", "summarize", "aaaaaaaa"], &env));
+    assert_eq!(stderr.trim(), "haiku, cached");
+    let o = a.cli(
+        &[
+            "--max-runs",
+            "0",
+            "sessions",
+            "summarize",
+            "aaaaaaaa",
+            "--force",
+        ],
+        &env,
+    );
+    assert!(out(&o).1.contains("budget_exceeded"), "{}", out(&o).1);
 }

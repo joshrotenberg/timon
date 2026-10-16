@@ -77,7 +77,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Session tools that are not Lua calls
+    /// Find, read, search and summarize Claude Code and Codex sessions
     #[command(subcommand)]
     Sessions(SessionsCommand),
     /// List recorded agent runs, newest first, or show one
@@ -157,8 +157,117 @@ enum AgentCommand {
     },
 }
 
+/// Flags every `timon sessions` command shares.
+#[derive(clap::Args)]
+struct SessionFlags {
+    /// "claude" or "codex"
+    #[arg(long)]
+    backend: Option<String>,
+    /// Print the result as JSON
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 enum SessionsCommand {
+    /// List sessions, newest first
+    List {
+        #[command(flatten)]
+        flags: SessionFlags,
+        /// Only sessions whose directory contains this
+        #[arg(long)]
+        project: Option<String>,
+        /// A duration back (7d, 2h), a date, or an RFC 3339 time
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Include subagent sessions
+        #[arg(long)]
+        subagents: bool,
+        /// Include sessions started by timon or other automation
+        #[arg(long)]
+        automated: bool,
+    },
+    /// Show one session: where it is, its project and how to resume it
+    Show {
+        /// A session id or an unambiguous prefix
+        id: String,
+        #[command(flatten)]
+        flags: SessionFlags,
+    },
+    /// Show the session timon is running inside
+    Current {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a page of a session's transcript
+    Transcript {
+        id: String,
+        #[command(flatten)]
+        flags: SessionFlags,
+        /// The first record index
+        #[arg(long)]
+        offset: Option<i64>,
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Only these record kinds: user, assistant, tool_call, tool_result, reasoning,
+        /// attachment, system, omitted
+        #[arg(long = "kind", value_name = "KIND")]
+        kinds: Vec<String>,
+    },
+    /// Search the text of every session
+    Search {
+        query: String,
+        #[command(flatten)]
+        flags: SessionFlags,
+        /// terms (default), phrase, fts or regex
+        #[arg(long)]
+        mode: Option<String>,
+        /// Only sessions whose directory contains this
+        #[arg(long)]
+        project: Option<String>,
+        /// A duration back (7d, 2h), a date, or an RFC 3339 time
+        #[arg(long)]
+        since: Option<String>,
+        /// The same forms as --since
+        #[arg(long)]
+        until: Option<String>,
+        /// Most sessions returned
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Most matches shown per session
+        #[arg(long)]
+        per_session: Option<i64>,
+        /// relevance (default) or recent
+        #[arg(long)]
+        order: Option<String>,
+        #[arg(long)]
+        subagents: bool,
+        /// Include sessions written in the last 10 minutes
+        #[arg(long)]
+        active: bool,
+        #[arg(long)]
+        automated: bool,
+        /// Leave out this session instead of the current one
+        #[arg(long, value_name = "ID")]
+        exclude: Option<String>,
+        /// Leave out no session, not even the current one
+        #[arg(long, conflicts_with = "exclude")]
+        include_current: bool,
+    },
+    /// Summarize a session with Claude; spends tokens unless cached
+    Summarize {
+        id: String,
+        #[command(flatten)]
+        flags: SessionFlags,
+        /// The Claude model (default haiku)
+        #[arg(long)]
+        model: Option<String>,
+        /// Summarize again even when the cache is current
+        #[arg(long)]
+        force: bool,
+    },
     /// Bring the session index fully up to date, with no time limit
     Index {
         /// Delete the index and build it from nothing
@@ -249,7 +358,11 @@ async fn run(cli: Cli) -> ExitCode {
             json,
         } => return runs(&layers, command, since, limit, json),
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
-        Command::Eval { .. } | Command::Run { .. } | Command::Script(_) | Command::Agent(_) => {}
+        Command::Eval { .. }
+        | Command::Run { .. }
+        | Command::Script(_)
+        | Command::Agent(_)
+        | Command::Sessions(_) => {}
     }
     // The runtime must outlive the values it returns, which refer into its Lua state.
     let rt = match runtime(&layers) {
@@ -257,14 +370,18 @@ async fn run(cli: Cli) -> ExitCode {
         Err(failure) => return fail(&failure),
     };
     rt.set_limits(cli.max_runs, cli.max_usd);
-    let result = match cli.command {
+    let command = match cli.command {
+        Command::Sessions(command) => return sessions(&rt, command).await,
+        command => command,
+    };
+    let result = match command {
         Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
         Command::Run { name, args } => match layers.script(&name) {
             Ok(script) => rt.run_script(&script.path, &args).await,
             Err(err) => Err(err.into()),
         },
         Command::Script(argv) => script(&rt, argv).await,
-        Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, cli.command).await,
+        Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
         Command::Scripts { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
@@ -509,6 +626,167 @@ async fn agent_run(rt: &Runtime, command: Command) -> Result<MultiValue, Failure
         .map_err(|e| Failure::from(Error::from_lua(&e)))?;
     rt.call(run, MultiValue::from_iter([mlua::Value::Table(spec)]))
         .await
+}
+
+/// `timon sessions`: the same functions as Lua's `sessions`, called through the runtime so
+/// options are checked the same way and summaries spend through `agent.run`.
+async fn sessions(rt: &Runtime, command: SessionsCommand) -> ExitCode {
+    use serde_json::json;
+    use timon::sessions::text;
+    let flag = |on: bool| on.then_some(true);
+    let opts = |flags: &SessionFlags, mut more: serde_json::Value| {
+        more["backend"] = json!(flags.backend);
+        more
+    };
+    let (name, args, json, format): (&str, Vec<serde_json::Value>, bool, Format) = match command {
+        SessionsCommand::List {
+            flags,
+            project,
+            since,
+            limit,
+            subagents,
+            automated,
+        } => (
+            "list",
+            vec![opts(
+                &flags,
+                json!({ "project": project, "since": since, "limit": limit,
+                    "subagents": flag(subagents), "automated": flag(automated) }),
+            )],
+            flags.json,
+            text::list,
+        ),
+        SessionsCommand::Show { id, flags } => (
+            "show",
+            vec![json!(id), opts(&flags, json!({}))],
+            flags.json,
+            |r| (text::show(r), None),
+        ),
+        SessionsCommand::Current { json } => ("current", vec![], json, |r| (text::show(r), None)),
+        SessionsCommand::Transcript {
+            id,
+            flags,
+            offset,
+            limit,
+            kinds,
+        } => (
+            "transcript",
+            vec![
+                json!(id),
+                opts(
+                    &flags,
+                    json!({ "offset": offset, "limit": limit,
+                        "kinds": (!kinds.is_empty()).then_some(kinds) }),
+                ),
+            ],
+            flags.json,
+            text::transcript,
+        ),
+        SessionsCommand::Search {
+            query,
+            flags,
+            mode,
+            project,
+            since,
+            until,
+            limit,
+            per_session,
+            order,
+            subagents,
+            active,
+            automated,
+            exclude,
+            include_current,
+        } => (
+            "search",
+            vec![opts(
+                &flags,
+                json!({ "query": query, "mode": mode, "project": project, "since": since, "until": until,
+                        "limit": limit, "per_session": per_session, "order": order,
+                        "subagents": flag(subagents), "active": flag(active),
+                        "automated": flag(automated),
+                    "exclude": if include_current { json!(false) } else { json!(exclude) } }),
+            )],
+            flags.json,
+            text::search,
+        ),
+        SessionsCommand::Summarize {
+            id,
+            flags,
+            model,
+            force,
+        } => (
+            "summarize",
+            vec![
+                json!(id),
+                opts(&flags, json!({ "model": model, "force": flag(force) })),
+            ],
+            flags.json,
+            text::summary,
+        ),
+        SessionsCommand::Index { .. } => return ExitCode::SUCCESS,
+    };
+    let call = async {
+        let lua = rt.lua();
+        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+        let f: mlua::Function = lua
+            .globals()
+            .get::<mlua::Table>("sessions")
+            .and_then(|sessions| sessions.get(name))
+            .map_err(lua_err)?;
+        let args = args
+            .iter()
+            .map(|a| timon::value::from_json(lua, &without_nulls(a)))
+            .collect::<mlua::Result<Vec<_>>>()
+            .map_err(lua_err)?;
+        let values = rt.call(f, MultiValue::from_iter(args)).await?;
+        match values.into_iter().next() {
+            None | Some(mlua::Value::Nil) => Err(Failure::from(
+                Error::new("not_found", "timon is not running inside a session")
+                    .with_hint("Claude Code sets CLAUDE_CODE_SESSION_ID and Codex CODEX_THREAD_ID"),
+            )),
+            Some(value) => {
+                timon::value::to_json(&value, timon::value::Mode::Display).map_err(Failure::from)
+            }
+        }
+    };
+    let result = match call.await {
+        Ok(result) => result,
+        Err(failure) => return fail(&failure),
+    };
+    if json {
+        let pretty = std::io::stdout().is_terminal();
+        let text = if pretty {
+            serde_json::to_string_pretty(&result)
+        } else {
+            serde_json::to_string(&result)
+        };
+        println!("{}", text.unwrap_or_default());
+        return ExitCode::SUCCESS;
+    }
+    let (out, note) = format(&result);
+    if !out.is_empty() {
+        println!("{out}");
+    }
+    if let Some(note) = note {
+        eprintln!("{note}");
+    }
+    ExitCode::SUCCESS
+}
+
+type Format = fn(&serde_json::Value) -> (String, Option<String>);
+
+/// Drops null fields, which stand for flags not given.
+fn without_nulls(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 fn sessions_index(layers: &Layers, rebuild: bool) -> ExitCode {

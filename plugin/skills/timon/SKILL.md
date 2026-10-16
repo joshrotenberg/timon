@@ -96,4 +96,5 @@ end
 - `try(f, ...)` returns `true, ...` or `false, err`.
 - Lists from modules are arrays; `json.null` is JSON null; an empty `json.array{}` encodes as `[]`.
 - `scope`, `spawn` and `par` run work concurrently; a failure cancels the rest and is raised.
-- Write scripts and reusable code with the `timon-scripting` skill.
+- Write scripts and reusable code with the `timon-scripting` skill, run subagents with
+  `timon-agents`, and find earlier work with `timon-sessions`.

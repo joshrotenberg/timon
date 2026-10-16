@@ -30,8 +30,51 @@ fn runnable_blocks(markdown: &str) -> Vec<(String, String)> {
     blocks
 }
 
+/// Session archives in a sandbox home, for the `timon-sessions` examples.
+fn seed_archives(home: &Path) {
+    let write = |path: std::path::PathBuf, lines: &[serde_json::Value]| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        let two_hours = std::time::Duration::from_secs(2 * 3600);
+        file.set_modified(std::time::SystemTime::now() - two_hours)
+            .unwrap();
+    };
+    let text = |role: &str, text: &str| {
+        serde_json::json!({ "type": role, "cwd": "/work/app", "entrypoint": "cli",
+            "message": { "role": role, "content": [{ "type": "text", "text": text }] } })
+    };
+    write(
+        home.join(".claude/projects/-work-app/01a117cb-5e55-4f1e-9c1a-2b3c4d5e6f70.jsonl"),
+        &[
+            text("user", "the parser test is flaky, can you look"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "t1", "name": "Grep", "input": { "pattern": "fn parse" } } ] } }),
+            serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "src/parse.rs:12" } ] } }),
+            text(
+                "assistant",
+                "The parser drops quoted colons, so the flaky parser test depends on order.",
+            ),
+            text("user", "fix it in src/parse.rs"),
+            text("assistant", "Fixed in src/parse.rs; the test passes."),
+        ],
+    );
+    write(
+        home.join(".codex/sessions/2026/10/07/rollout-2026-10-07T12-00-00-019a2b3c-4d5e-7f60-8a1b-2c3d4e5f6a7b.jsonl"),
+        &[
+            serde_json::json!({ "type": "session_meta", "payload": {
+                "id": "019a2b3c-4d5e-7f60-8a1b-2c3d4e5f6a7b", "cwd": "/work/app",
+                "originator": "codex_cli_rs", "source": "cli" } }),
+            serde_json::json!({ "type": "event_msg",
+                "payload": { "type": "user_message", "message": "add a --verbose flag" } }),
+        ],
+    );
+}
+
 /// Every runnable example runs through the binary in a sandbox, with fake providers that
-/// answer any output schema, so agent examples run without a model.
+/// answer any output schema and session archives to read, so examples run without a model.
 #[test]
 fn every_runnable_skill_example_runs() {
     use std::io::Write;
@@ -41,6 +84,7 @@ fn every_runnable_skill_example_runs() {
         let text = skill.text().unwrap();
         for (lang, code) in runnable_blocks(&text) {
             let sandbox = tempfile::tempdir().unwrap();
+            seed_archives(sandbox.path());
             let mut args = vec!["eval"];
             if lang == "fennel" {
                 args.push("--fnl");
@@ -75,7 +119,7 @@ fn every_runnable_skill_example_runs() {
             ran += 1;
         }
     }
-    assert!(ran >= 18, "only {ran} examples ran");
+    assert!(ran >= 24, "only {ran} examples ran");
 }
 
 fn timon(root: &Path, cwd: &Path, args: &[&str]) -> Output {
