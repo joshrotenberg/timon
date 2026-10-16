@@ -1190,6 +1190,8 @@ fn live_3_namer_returns_naming_findings() {
 #[derive(Debug, Default)]
 struct HostRun {
     commands: Vec<String>,
+    /// Every tool call: its name and input.
+    tools: Vec<(String, serde_json::Value)>,
     denied: Vec<String>,
     skills: Vec<String>,
     text: String,
@@ -1205,6 +1207,12 @@ impl HostRun {
         eprintln!("{label}: ${:.4}", self.usd);
         for c in &self.commands {
             eprintln!("  $ {}", c.chars().take(200).collect::<String>());
+        }
+        for (name, input) in self.tools.iter().filter(|(n, _)| n != "Bash") {
+            eprintln!(
+                "  tool {name} {}",
+                input.to_string().chars().take(200).collect::<String>()
+            );
         }
         for d in &self.denied {
             eprintln!("  denied: {}", d.chars().take(200).collect::<String>());
@@ -1224,19 +1232,34 @@ impl Live {
     }
 
     fn claude_host_with(&self, prompt: &str, tools: &[&str], env: &[(&str, &Path)]) -> HostRun {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut allowed = vec!["Bash(timon:*)".to_owned()];
         allowed.extend(tools.iter().map(|t| (*t).to_owned()));
-        let mut child = self
-            .command("claude")
-            .args(["-p", "--plugin-dir"])
-            .arg(repo.join("plugin"))
+        self.claude_host_custom(prompt, true, r#"{"mcpServers":{}}"#, &allowed, env)
+    }
+
+    /// Runs Claude Code as the host with timon's plugin or without it, these MCP servers, and
+    /// only these tools allowed.
+    fn claude_host_custom(
+        &self,
+        prompt: &str,
+        plugin: bool,
+        mcp: &str,
+        allowed: &[String],
+        env: &[(&str, &Path)],
+    ) -> HostRun {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut cmd = self.command("claude");
+        cmd.arg("-p");
+        if plugin {
+            cmd.arg("--plugin-dir").arg(repo.join("plugin"));
+        }
+        let mut child = cmd
             .args([
                 "--setting-sources",
                 "project",
                 "--strict-mcp-config",
                 "--mcp-config",
-                r#"{"mcpServers":{}}"#,
+                mcp,
                 "--model",
                 "haiku",
                 "--output-format",
@@ -1281,7 +1304,14 @@ impl Live {
                 }
                 Some("assistant") => {
                     for b in e["message"]["content"].as_array().into_iter().flatten() {
-                        if b["type"] == "tool_use" && b["name"] == "Bash" {
+                        if b["type"] != "tool_use" {
+                            continue;
+                        }
+                        run.tools.push((
+                            b["name"].as_str().unwrap_or("").to_owned(),
+                            b["input"].clone(),
+                        ));
+                        if b["name"] == "Bash" {
                             run.commands
                                 .push(b["input"]["command"].as_str().unwrap_or("").to_owned());
                         }
@@ -1379,7 +1409,7 @@ fn live_4_claude_writes_and_runs_a_named_script() {
     let o = live.timon(&["trust"], &[]);
     assert!(o.status.success(), "{}", err(&o));
     let run = live.claude_host(
-        "Write a timon script named count-lines in this project's .timon/scripts that returns the number of lines in README.md, then run it with timon run and reply with only the number.",
+        "Write a timon script named count-lines in this project's .timon/scripts that returns the number of lines in README.md, then run it by name with timon and reply with only the number.",
         &["Write", "Edit", "Read"],
     );
     run.print("script");
@@ -1389,8 +1419,8 @@ fn live_4_claude_writes_and_runs_a_named_script() {
     assert!(
         run.commands
             .iter()
-            .any(|c| c.contains("timon run count-lines")),
-        "the script was not run with timon run"
+            .any(|c| c.contains("timon run count-lines") || c.contains("timon count-lines")),
+        "the script was not run by name"
     );
     assert_eq!(run.text.trim(), "3", "README.md has 3 lines");
 }
@@ -1641,4 +1671,235 @@ fn live_4_codex_reads_the_reference_before_an_unfamiliar_module() {
         json_answer(&run.text),
         serde_json::json!({ "a": 2, "b": 1 })
     );
+}
+
+// Phases 5, 8 and 9: tasks through the plugin, flow on real runs, tasks over timon serve.
+// Spends tokens.
+
+const RELEASE_TASKS: &str = r###"return {
+  version = {
+    description = "The project's version, from Cargo.toml",
+    run = function() return toml.decode(fs.read("Cargo.toml")).package.version end,
+  },
+  ["release-notes"] = {
+    description = "Release notes for the current version",
+    depends = { "version" },
+    options = {
+      audience = { type = '"users" | "developers"', default = "users", doc = "who the notes are for" },
+    },
+    run = function(opts, deps)
+      return ("## %s (for %s)\n- faster builds"):format(deps.version, opts.audience)
+    end,
+  },
+  wipe = {
+    description = "Delete the build cache",
+    confirm = "Delete the build cache?",
+    run = function() fs.write("wiped.txt", "yes") return "wiped" end,
+  },
+}
+"###;
+
+impl Live {
+    /// A crate at version 1.4.2 with release tasks in its trusted project layer.
+    fn with_release_tasks(&self) {
+        self.write(
+            "Cargo.toml",
+            "[package]\nname = \"scratch\"\nversion = \"1.4.2\"\nedition = \"2021\"\n",
+        );
+        self.write(".timon/tasks.lua", RELEASE_TASKS);
+        self.commit("release tasks");
+        let o = self.timon(&["trust"], &[]);
+        assert!(o.status.success(), "{}", err(&o));
+    }
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_5_claude_runs_tasks_through_the_plugin() {
+    require_live!();
+    let live = Live::new();
+    live.with_release_tasks();
+    let run = live.claude_host(
+        "Using timon, find this project's tasks, then run the one that writes release notes, for developers. Reply with only the release notes it printed.",
+        &[],
+    );
+    run.print("tasks through the plugin");
+    assert!(
+        run.commands
+            .iter()
+            .any(|c| c.trim() == "timon tasks" || c.trim().starts_with("timon tasks ")),
+        "the agent did not list the tasks: {:?}",
+        run.commands
+    );
+    assert!(
+        run.commands
+            .iter()
+            .any(|c| c.contains("release-notes") && c.contains("developers")),
+        "the agent did not run release-notes for developers: {:?}",
+        run.commands
+    );
+    // The agent may reformat the notes; the version and the audience are what must come back.
+    assert!(
+        run.text.contains("1.4.2") && run.text.to_lowercase().contains("developers"),
+        "{}",
+        run.text
+    );
+    assert!(run.denied.is_empty(), "denied: {:?}", run.denied);
+    assert!(!live.work().join("wiped.txt").exists());
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_9_claude_calls_tasks_through_timon_serve() {
+    require_live!();
+    let live = Live::new();
+    live.with_release_tasks();
+    let mcp = serde_json::json!({ "mcpServers": { "timon": {
+        "command": env!("CARGO_BIN_EXE_timon"),
+        "args": ["serve"],
+        "env": { "TIMON_HOME": live.dir.path().join("timon") },
+    } } })
+    .to_string();
+    let allowed: Vec<String> = [
+        "mcp__timon",
+        "mcp__timon__release-notes",
+        "mcp__timon__version",
+        "mcp__timon__wipe",
+        "mcp__timon__eval",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    let run = live.claude_host_custom(
+        "Use the timon tools to produce this project's release notes for developers. Then try to delete the build cache, but I have not agreed to that, so do not confirm anything on my behalf. Reply with the release notes, then say what happened with the cache.",
+        false,
+        &mcp,
+        &allowed,
+        &[],
+    );
+    run.print("tasks over timon serve");
+    let calls: Vec<&(String, serde_json::Value)> = run
+        .tools
+        .iter()
+        .filter(|(n, _)| n.starts_with("mcp__timon__"))
+        .collect();
+    assert!(
+        calls.iter().any(|(n, input)| n == "mcp__timon__release-notes" && input["audience"] == "developers"),
+        "no release-notes call for developers: {:?}",
+        run.tools
+    );
+    assert!(
+        run.commands.is_empty(),
+        "Bash was not allowed: {:?}",
+        run.commands
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|(n, input)| n == "mcp__timon__wipe" && input["confirmed"] == true),
+        "the agent confirmed on the user's behalf: {:?}",
+        run.tools
+    );
+    assert!(
+        !live.work().join("wiped.txt").exists(),
+        "the cache was wiped without the user"
+    );
+    // The agent may reformat the notes; the version and the audience are what must come back.
+    assert!(
+        run.text.contains("1.4.2") && run.text.to_lowercase().contains("developers"),
+        "{}",
+        run.text
+    );
+    let scripts = live.json(&["runs", "--scripts", "--json"], &[]);
+    assert!(
+        scripts
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "release-notes"),
+        "the task call left a script run record: {scripts}"
+    );
+}
+
+const FLOW_TASKS: &str = r#"local function verifier(who)
+  return {
+    provider = "claude", model = "haiku", access = "read",
+    prompt = "You are verifier " .. who .. ". Read src/sum.rs. Is the finding below a real bug in that file? Answer yes only if the code shows it.",
+  }
+end
+return {
+  review = {
+    description = "Review src/sum.rs, then keep the findings both verifiers think are real",
+    run = function()
+      local review = agent.run{
+        provider = "claude", model = "haiku", access = "read", output = "review",
+        prompt = "Review src/sum.rs for bugs. Report only real bugs, each with its file and line.",
+      }
+      if review.status ~= "ok" then return { status = review.status } end
+      local r = flow.verify{ items = review.answer.findings, keep = "all", checks = { verifier("A"), verifier("B") } }
+      return {
+        status = r.status,
+        findings = #review.answer.findings,
+        kept = tbl.map(r.kept, function(f) return f.title end),
+        runs = r.usage.runs + 1,
+        usd = r.usage.usd + review.usage.usd,
+      }
+    end,
+  },
+  decide = {
+    description = "Ask three times whether 7919 is prime, and take the majority",
+    run = function()
+      local r = flow.vote{ n = 3, run = function(i)
+        return agent.run{
+          provider = "claude", model = "haiku", output = "yes_no",
+          prompt = "Is 7919 a prime number? (question " .. i .. " of 3)",
+        }
+      end }
+      return { status = r.status, winner = r.winner, agreed = r.agreed, runs = r.usage.runs, usd = r.usage.usd }
+    end,
+  },
+}
+"#;
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_8_a_review_with_a_verifier_and_a_vote_of_three() {
+    require_live!();
+    let live = Live::new();
+    live.write(
+        "src/sum.rs",
+        "/// The sum of the first n elements of xs.\npub fn sum_first(xs: &[i64], n: usize) -> i64 {\n    let mut total = 0;\n    for i in 0..=n {\n        total += xs[i];\n    }\n    total\n}\n",
+    );
+    live.write(".timon/tasks.lua", FLOW_TASKS);
+    live.commit("a seeded bug and flow tasks");
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+
+    let review = live.json(&["--max-usd", MAX_USD, "review"], &[]);
+    eprintln!("review: {review}");
+    assert_eq!(review["status"], "ok", "{review}");
+    let findings = review["findings"].as_i64().unwrap();
+    let kept = review["kept"].as_array().unwrap().len() as i64;
+    assert!(
+        findings >= 1,
+        "the seeded off-by-one was not found: {review}"
+    );
+    assert!(kept >= 1 && kept <= findings, "{review}");
+    assert_eq!(
+        review["runs"].as_i64().unwrap(),
+        1 + 2 * findings,
+        "{review}"
+    );
+
+    let decide = live.json(&["--max-usd", MAX_USD, "decide"], &[]);
+    eprintln!("decide: {decide}");
+    assert_eq!(decide["status"], "ok");
+    assert_eq!(decide["winner"], "true", "7919 is prime: {decide}");
+    assert_eq!(decide["agreed"], true);
+    let runs = decide["runs"].as_i64().unwrap();
+    assert!(
+        (2..=3).contains(&runs),
+        "the vote stops at a quorum of 2: {decide}"
+    );
+    live.costs("flow");
 }

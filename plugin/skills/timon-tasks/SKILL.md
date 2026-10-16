@@ -5,6 +5,11 @@ description: Use when defining or running timon tasks - a project's or your own 
 
 # Tasks
 
+Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
+line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
+as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
+of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+
 A task is a name, a description and something to run. Tasks live in `tasks.lua` (or
 `tasks.fnl`) in `~/.config/timon/` and in a project's `.timon/`. Every script in `scripts/` is a
 task too.

@@ -5,6 +5,11 @@ description: Use when Claude or Codex subagents should do part of the work from 
 
 # Agents with timon
 
+Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
+line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
+as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
+of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+
 `agent.run` runs one non-interactive turn of Claude Code (default) or Codex and returns a
 record. It never raises for an outcome: check `status`. Runs spend tokens.
 
