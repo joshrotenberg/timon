@@ -158,6 +158,8 @@ pub enum Status {
     Invalid,
     Timeout,
     Cancelled,
+    /// The timon process ended before the run did; found and settled later.
+    Interrupted,
 }
 
 impl Status {
@@ -168,6 +170,7 @@ impl Status {
             Status::Invalid => "invalid",
             Status::Timeout => "timeout",
             Status::Cancelled => "cancelled",
+            Status::Interrupted => "interrupted",
         }
     }
 }
@@ -203,6 +206,28 @@ pub struct Record {
 }
 
 impl Record {
+    /// The record of a run stopped before it finished. Its cost is unknown.
+    pub fn cancelled(request: &Request, id: String, started_at: String, ms: u64) -> Self {
+        Self {
+            id,
+            started_at,
+            status: Status::Cancelled,
+            answer: None,
+            text: String::new(),
+            error: Some(
+                Error::new("cancelled", "the run was cancelled before it finished")
+                    .with_hint("its cost is not known; the provider may have spent tokens"),
+            ),
+            provider: request.provider,
+            model: request.model.clone(),
+            session: None,
+            usage: Usage::default(),
+            ms,
+            events: None,
+            worktree: None,
+        }
+    }
+
     /// The record as JSON, the shape Lua sees.
     pub fn to_json(&self) -> Json {
         json!({

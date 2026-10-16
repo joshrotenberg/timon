@@ -1566,6 +1566,7 @@ dependencies = [
  "glob",
  "include_dir",
  "jpx-core",
+ "libc",
  "mlua",
  "regex",
  "serde_json",

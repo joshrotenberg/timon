@@ -133,7 +133,9 @@ Per run: `budget = { usd = 1, turns = 15 }` (Claude).
 
 ## Past runs
 
-Every run is recorded, with secrets redacted:
+Every run is recorded, with secrets redacted, including cancelled ones. A run whose timon
+process died shows as `interrupted`; `effects_uncertain = true` means it could write, so check
+its working directory or worktree:
 
 ```lua
 local recent = agent.runs{ since = "1d", limit = 5 }
