@@ -488,6 +488,100 @@ while #tasks > 0 do
 end
 ```
 
+## sh
+
+Run a program. sh(cmd, opts) streams its output and raises command_failed on a nonzero exit; sh.out captures stdout. cmd is a string, split into words without a shell, or a list { "cargo", "test", cwd = "x" }. Pass shell = true for pipes, redirects and globs.
+
+### `sh.run(cmd, opts) -> { code, ms, out, err }`
+
+Runs cmd and waits. sh(cmd, opts) is the same call. Output goes to the terminal unless out or err is "capture" or "null". A nonzero exit raises command_failed with the code in error.data, unless check = false; a timeout raises timeout. The process and its children stop if the task is cancelled.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the directory to run in |
+| `env` | `table<string, string \| boolean>` | variables set over the inherited ones; false unsets one |
+| `clear_env` | `boolean` | start from no variables at all; set PATH in env if the program needs it |
+| `input` | `string` | text for stdin; default: the terminal's stdin |
+| `timeout` | `number \| string` | seconds, or a duration such as "10m"; stops the process group |
+| `out` | `"inherit" \| "capture" \| "null"` | stdout: the terminal (default), the record's out, or nowhere |
+| `err` | `"inherit" \| "capture" \| "null"` | stderr, the same way |
+| `check` | `boolean` | false returns the record instead of raising on a nonzero exit |
+| `shell` | `boolean` | run cmd through /bin/sh -c, for pipes, redirects, globs and $VAR |
+| `prefix` | `string` | put this before every line of output, so concurrent commands do not interleave |
+
+```lua
+sh("cargo fmt --all -- --check")
+sh{ "cargo", "test", "--", "--nocapture", cwd = "crates/core" }
+local r = sh("cargo test", { check = false })
+if r.code ~= 0 then log.warn("tests failed: " .. r.code) end
+```
+
+### `sh.out(cmd, opts) -> string`
+
+Runs cmd and returns its stdout, trimmed. stderr goes to the terminal. A nonzero exit raises command_failed.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the directory to run in |
+| `env` | `table<string, string \| boolean>` | variables set over the inherited ones; false unsets one |
+| `clear_env` | `boolean` | start from no variables at all |
+| `input` | `string` | text for stdin |
+| `timeout` | `number \| string` | seconds, or a duration such as "10m" |
+| `err` | `"inherit" \| "capture" \| "null"` | stderr: the terminal (default), captured, or nowhere |
+| `check` | `boolean` | false returns the output even after a nonzero exit |
+| `shell` | `boolean` | run cmd through /bin/sh -c |
+
+```lua
+local head = sh.out("git rev-parse HEAD")
+local files = str.lines(sh.out{ "git", "ls-files", "src" })
+```
+
+## proc
+
+Processes as data. proc.run returns { code, out, err, ms, timed_out } and never raises for an exit code; proc.spawn starts a background process that stops when its scope ends.
+
+### `proc.run(cmd, opts) -> { code, out, err, ms, timed_out }`
+
+Runs cmd and waits, capturing stdout and stderr by default. A nonzero exit or a timeout is in the record, not raised; only a program that cannot start raises.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the directory to run in |
+| `env` | `table<string, string \| boolean>` | variables set over the inherited ones; false unsets one |
+| `clear_env` | `boolean` | start from no variables at all |
+| `input` | `string` | text for stdin; default: none |
+| `timeout` | `number \| string` | seconds, or a duration such as "10m"; stops the process group |
+| `out` | `"inherit" \| "capture" \| "null"` | stdout: captured (default), the terminal, or nowhere |
+| `err` | `"inherit" \| "capture" \| "null"` | stderr, the same way |
+| `shell` | `boolean` | run cmd through /bin/sh -c |
+| `prefix` | `string` | with out or err = "inherit", put this before every line |
+
+```lua
+local r = proc.run{ "cargo", "build", "--release" }
+if r.code ~= 0 then print(r.err) end
+```
+
+### `proc.spawn(cmd, opts) -> process`
+
+Starts cmd in the background and returns at once. p:wait() returns { code, ms } without blocking other tasks; p:kill() stops it and its children; p:alive(); p:pid(). With out = "pipe", p:lines() iterates stdout and p:read() returns the rest. A process still running when its scope ends is stopped.
+
+| Option | Type | |
+|---|---|---|
+| `cwd` | `string` | the directory to run in |
+| `env` | `table<string, string \| boolean>` | variables set over the inherited ones; false unsets one |
+| `clear_env` | `boolean` | start from no variables at all |
+| `input` | `string` | text for stdin; default: none |
+| `out` | `"inherit" \| "pipe" \| "null"` | stdout: the terminal (default), readable with p:lines() and p:read(), or nowhere |
+| `err` | `"inherit" \| "null"` | stderr: the terminal (default) or nowhere |
+| `shell` | `boolean` | run cmd through /bin/sh -c |
+
+```lua
+local server = proc.spawn({ "python3", "-m", "http.server", "8000" }, { out = "null" })
+sleep("200ms")
+-- ... use it ...
+server:kill()
+```
+
 ## schema
 
 Shapes for structured data. Values: schema.string, schema.int, schema.number, schema.bool, schema.any. Every object field is required unless optional; s:describe(text) documents a field. A contract is a named schema in contracts/.

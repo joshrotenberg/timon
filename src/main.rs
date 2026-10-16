@@ -1069,7 +1069,9 @@ fn print(values: &MultiValue) -> ExitCode {
 
 fn fail(failure: &Failure) -> ExitCode {
     eprintln!("{}", failure.report());
-    if failure.error.kind == "usage" {
+    if let Some(exit) = failure.error.exit {
+        ExitCode::from(exit)
+    } else if failure.error.kind == "usage" {
         ExitCode::from(2)
     } else {
         ExitCode::FAILURE

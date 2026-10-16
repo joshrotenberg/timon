@@ -101,6 +101,8 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::fs::PATH_DOC,
         &modules::log::DOC,
         &modules::concurrency::DOC,
+        &modules::proc::SH_DOC,
+        &modules::proc::PROC_DOC,
         &modules::schema::DOC,
         &modules::agent::DOC,
         &modules::sessions::DOC,

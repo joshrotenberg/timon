@@ -1,6 +1,6 @@
 ---
 name: timon
-description: Use timon when a task is easier as a few lines of code than as many tool calls - reading and reshaping files and JSON, querying with JMESPath, running work concurrently, or scripting in Lua or Fennel. Run `timon eval 'CODE'` from the shell; `help()` documents every module.
+description: Use timon when a task is easier as a few lines of code than as many tool calls - reading and reshaping files and JSON, querying with JMESPath, running programs and concurrent work, or scripting in Lua or Fennel. Run `timon eval 'CODE'` from the shell; `help()` documents every module.
 ---
 
 # timon
@@ -33,6 +33,7 @@ timon skill show timon --ref api    # every function with an example
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt`; also string methods: `s:trim()` |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs`, `path` | files, directories, path names |
+| `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
 | `par` | `map`, `all`, `race`: concurrent work |
 | `log`, `pp` | messages and pretty-printing on stderr |
 | globals | `help`, `try`, `scope`, `spawn`, `sleep` |
@@ -68,6 +69,20 @@ for _, file in ipairs(fs.glob(path.join(dir, "**", "*.md"))) do
 end
 return counts  -- {"todo.md":2}
 ```
+
+Run programs:
+
+```lua
+sh("echo building")                         -- streams to the terminal; a nonzero exit raises
+local who = sh.out{ "printf", "%s", "timon" }   -- captured and trimmed
+local r = proc.run({ "sh", "-c", "echo oops >&2; exit 3" })   -- a record; never raises for the code
+return who, r.code, r.err                    -- timon, 3, "oops\n"
+```
+
+A command string is split into words without a shell. Pipes, redirects, globs and `$VAR` need
+`shell = true`; a string that uses them without it raises and says so. A failed `sh` ends a
+script with the program's exit code. Every process stops if its task is cancelled or times out
+(`timeout = "10m"`), children included.
 
 Concurrent work, at most 4 at a time, results in input order:
 

@@ -16,8 +16,8 @@ Design: [docs/design.md](docs/design.md).
 | 1 | Runtime, directories, skills, plugin | done (REPL left) |
 | 2 | `agent`: runs, contracts, records, budgets, worktrees, events; script runs as records, resume | done |
 | 3 | `sessions`: list, read, search and summarize every session | done |
-| 4 | Toolbox: `sh` and `proc` | next |
-| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon <task>` | planned |
+| 4 | Toolbox: `sh` and `proc` | done |
+| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon <task>` | next |
 | 6 | Built-in tasks, typed options, plans | planned |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | planned |
 | 8 | Workflow patterns | planned |
@@ -57,6 +57,7 @@ timon review.lua 12 14                     # script; args in `arg` and `...`
 timon eval --fnl '(+ 1 2)'                 # Fennel
 timon eval 'json.query({ a = { 1, 2 } }, "a[-1]")'    # JMESPath, with jpx's functions
 timon run triage                           # a named script from ~/.config/timon or .timon
+timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
 timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions
