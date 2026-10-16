@@ -74,7 +74,7 @@ Encodes a value. A table with keys 1..n is an array, any other table an object w
 
 | Option | Type | |
 |---|---|---|
-| `pretty` | boolean | indent with two spaces |
+| `pretty` | `boolean` | indent with two spaces |
 
 ```lua
 json.encode({ name = "timon", tags = { "lua", "agents" } })
@@ -288,8 +288,8 @@ Writes data to the file, replacing it unless append is set.
 
 | Option | Type | |
 |---|---|---|
-| `append` | boolean | add to the end instead of replacing |
-| `mkdir` | boolean | create missing parent directories |
+| `append` | `boolean` | add to the end instead of replacing |
+| `mkdir` | `boolean` | create missing parent directories |
 
 ```lua
 fs.write("out/report.json", json.encode(report), { mkdir = true })
@@ -309,7 +309,7 @@ Entry names in dir (default "."), sorted. Names starting with a dot are left out
 
 | Option | Type | |
 |---|---|---|
-| `hidden` | boolean | include names starting with a dot |
+| `hidden` | `boolean` | include names starting with a dot |
 
 ```lua
 for _, name in ipairs(fs.ls("src")) do print(name) end
@@ -430,8 +430,8 @@ Calls f(item, i) for every item, at most limit at a time, and returns the result
 
 | Option | Type | |
 |---|---|---|
-| `limit` | integer | most calls running at once (default: all) |
-| `settle` | boolean | collect failures as results instead of raising |
+| `limit` | `integer` | most calls running at once (default: all) |
+| `settle` | `boolean` | collect failures as results instead of raising |
 
 ```lua
 local reviews = par.map(prs, function(pr)
@@ -544,23 +544,23 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 
 | Option | Type | |
 |---|---|---|
-| `prompt` | string | what to do (required) |
-| `agent` | string | a definition from agents/NAME.lua to start from |
-| `provider` | string | "claude" (default) or "codex" |
-| `model` | string | the provider's model name |
-| `effort` | string | claude: low, medium, high, xhigh, max; codex: passed through |
-| `access` | string | "read" (default), "write", or "full" (needs limits.allow_full) |
-| `tools` | table | claude's tool list, replacing the one access picks; {} allows none |
-| `cwd` | string | the directory to run in |
-| `system` | string | instructions added to the system prompt |
-| `output` | any | a contract name or a schema; the answer is validated |
-| `timeout` | any | seconds, or a duration such as "10m" |
-| `budget` | table | { usd = number, turns = integer } (claude) |
-| `resume` | string | a session id timon started, to continue |
-| `fork` | string | a session id to branch from (claude) |
-| `native` | table | extra command-line arguments for the provider |
-| `worktree` | boolean | run in a new git worktree; kept only if the run changed it |
-| `ephemeral` | boolean | leave no session behind for the provider to resume |
+| `prompt` | `string` | what to do (required) |
+| `agent` | `string` | a definition from agents/NAME.lua to start from |
+| `provider` | `"claude" \| "codex"` | default claude |
+| `model` | `string` | the provider's model name |
+| `effort` | `string` | claude: low, medium, high, xhigh, max; codex: passed through |
+| `access` | `"read" \| "write" \| "full"` | default read; full needs limits.allow_full |
+| `tools` | `string[]` | claude's tool list, replacing the one access picks; {} allows none |
+| `cwd` | `string` | the directory to run in |
+| `system` | `string` | instructions added to the system prompt |
+| `output` | `string \| schema` | a contract name or a schema; the answer is validated |
+| `timeout` | `number \| string` | seconds, or a duration such as "10m" |
+| `budget` | `{ usd: number?, turns: integer? }` | spending and turn limits for one run (claude) |
+| `resume` | `string` | a session id timon started, to continue |
+| `fork` | `string` | a session id to branch from (claude) |
+| `native` | `string[]` | extra command-line arguments for the provider |
+| `worktree` | `boolean` | run in a new git worktree; kept only if the run changed it |
+| `ephemeral` | `boolean` | leave no session behind for the provider to resume |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -592,8 +592,8 @@ Recorded runs, newest first: id, started_at, provider, model, agent, status, ms,
 
 | Option | Type | |
 |---|---|---|
-| `since` | any | a duration back from now, such as "1d" or "2h" |
-| `limit` | integer | most entries to return (default 20) |
+| `since` | `string \| number` | a duration back from now, such as "1d" or "2h" |
+| `limit` | `integer` | most entries to return (default 20) |
 
 ```lua
 for _, r in ipairs(agent.runs{ since = "1d" }) do print(r.id, r.status, r.prompt) end
@@ -618,12 +618,12 @@ Sessions newest first, each with id, backend, title, snippet, project, modified,
 
 | Option | Type | |
 |---|---|---|
-| `backend` | string | "claude" or "codex" |
-| `project` | string | part of the session's directory |
-| `since` | any | a duration back ("2d"), a date, or an RFC 3339 time |
-| `limit` | integer | most sessions to return (default 20) |
-| `subagents` | boolean | include sessions another session started |
-| `automated` | boolean | include claude -p, codex exec and timon's own runs |
+| `backend` | `"claude" \| "codex"` | only this backend (default: both) |
+| `project` | `string` | part of the session's directory |
+| `since` | `string \| number` | a duration back ("2d"), a date, or an RFC 3339 time |
+| `limit` | `integer` | most sessions to return (default 20) |
+| `subagents` | `boolean` | include sessions another session started |
+| `automated` | `boolean` | include claude -p, codex exec and timon's own runs |
 
 ```lua
 local found = sessions.list{ project = "timon", since = "2d", limit = 5 }
@@ -636,7 +636,7 @@ One session by id or unambiguous prefix, with its file, whether it is compressed
 
 | Option | Type | |
 |---|---|---|
-| `backend` | string | "claude" or "codex", when a prefix matches both |
+| `backend` | `"claude" \| "codex"` | which backend, when an id prefix matches both |
 
 ```lua
 local s = sessions.show("01a117cb")
@@ -649,10 +649,10 @@ One page of a session's items, each { index, kind, text, name, count }. kind is 
 
 | Option | Type | |
 |---|---|---|
-| `offset` | integer | the index to start at (default 0) |
-| `limit` | integer | most items in the page (at most 200) |
-| `kinds` | table | only these kinds; indexes still count every item |
-| `backend` | string | "claude" or "codex", when a prefix matches both |
+| `offset` | `integer` | the index to start at (default 0) |
+| `limit` | `integer` | most items in the page (at most 200) |
+| `kinds` | `("user" \| "assistant" \| "tool_call" \| "tool_result" \| "reasoning" \| "attachment" \| "system" \| "omitted")[]` | only these kinds; indexes still count every item |
+| `backend` | `"claude" \| "codex"` | which backend, when an id prefix matches both |
 
 ```lua
 local page = sessions.transcript(id, { kinds = { "user", "assistant" }, limit = 50 })
@@ -666,19 +666,19 @@ Searches every session's text. Returns hits (session rows with match_count and m
 
 | Option | Type | |
 |---|---|---|
-| `query` | string | what to find (required) |
-| `mode` | string | terms (default: every word), phrase, fts (FTS5 syntax) or regex |
-| `backend` | string | "claude" or "codex" |
-| `project` | string | part of the session's directory |
-| `since` | any | a duration back ("7d"), a date, or an RFC 3339 time |
-| `until` | any | the same forms as since |
-| `limit` | integer | most sessions (default 20) |
-| `per_session` | integer | most matches shown per session (default 3) |
-| `order` | string | "relevance" (default) or "recent" |
-| `subagents` | boolean | include sessions another session started |
-| `active` | boolean | include sessions written in the last 10 minutes |
-| `automated` | boolean | include claude -p, codex exec and timon's own runs |
-| `exclude` | any | a session id to leave out (default: the current session); false for none |
+| `query` | `string` | what to find (required) |
+| `mode` | `"terms" \| "phrase" \| "fts" \| "regex"` | terms (default): every word; phrase: the words in order; fts: FTS5 syntax; regex |
+| `backend` | `"claude" \| "codex"` | only this backend (default: both) |
+| `project` | `string` | part of the session's directory |
+| `since` | `string \| number` | a duration back ("7d"), a date, or an RFC 3339 time |
+| `until` | `string \| number` | the same forms as since |
+| `limit` | `integer` | most sessions (default 20) |
+| `per_session` | `integer` | most matches shown per session (default 3) |
+| `order` | `"relevance" \| "recent"` | default relevance |
+| `subagents` | `boolean` | include sessions another session started |
+| `active` | `boolean` | include sessions written in the last 10 minutes |
+| `automated` | `boolean` | include claude -p, codex exec and timon's own runs |
+| `exclude` | `string \| boolean` | a session id to leave out (default: the current session); false for none |
 
 ```lua
 local r = sessions.search{ query = "compressed rollouts", since = "7d" }
@@ -694,9 +694,9 @@ Summarizes a session with Claude (default haiku): goal, what happened, decisions
 
 | Option | Type | |
 |---|---|---|
-| `model` | string | the Claude model (default haiku); a different one than the cache's makes a new summary |
-| `force` | boolean | summarize again even when the cache is current |
-| `backend` | string | "claude" or "codex", when a prefix matches both |
+| `model` | `string` | the Claude model (default haiku); a different one than the cache's makes a new summary |
+| `force` | `boolean` | summarize again even when the cache is current |
+| `backend` | `"claude" \| "codex"` | which backend, when an id prefix matches both |
 
 ```lua
 local s = sessions.summarize("01a117cb")

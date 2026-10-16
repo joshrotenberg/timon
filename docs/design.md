@@ -101,8 +101,12 @@ These hold for every module, so an agent that has used one module can guess the 
     hint: did you mean "prompt"?
   ```
 
-  A value of the wrong type raises with the expected type. Definition files (`agents/*.lua` and
-  the rest) are checked against the same declarations.
+  Each option's type is declared once, in LuaLS annotation syntax (`"read" | "write" | "full"`,
+  `string[]`, `{ usd: number?, turns: integer? }`, `string | schema`), and parsed into the same
+  shapes `schema` builds. A wrong type, a value outside an enum (with the closest value as the
+  hint) or a bad nested field raises with its path, such as `budget.turns`. Agent definition
+  files are checked against the same declarations, and the shapes give each function's options
+  as JSON Schema.
 - **Globals are strict.** Reading a global that does not exist raises `undefined_global` with
   the closest known name, so `agnet.run` fails on its own line instead of later on a nil. A
   script may define globals only at the top level of its main chunk; `rawget(_G, name)` tests for
@@ -110,8 +114,8 @@ These hold for every module, so an agent that has used one module can guess the 
 - **Everything is cancellable.** Any call that waits can be cancelled from outside, and a
   cancelled call raises `cancelled`.
 - **Documented at run time.** `help(agent)` describes a module and `help(agent.run)` one
-  function's signature, options and an example, as text; `help("agent.run")` works too. The option declarations behind strict options
-  are the same source, and they also generate the LuaLS stubs and the reference sections of the
+  function's signature, options and an example, as text; `help("agent.run")` works too. The
+  option declarations behind strict options are the same source, and they also generate the LuaLS stubs and the reference sections of the
   skills, so the checks, the help, the stubs and the skills cannot drift apart.
 
 ## Runtime

@@ -59,7 +59,16 @@ fn help_describes_modules_and_functions() {
     assert!(one("help(json)").contains("json.encode(value, { pretty }) -> string"));
     let encode = one("help(json.encode)");
     assert!(encode.starts_with("json.encode(value, { pretty }) -> string"));
-    assert!(encode.contains("Options:\n  pretty  boolean  indent with two spaces"));
+    assert!(encode.contains("Options:\n  pretty  boolean\n            indent with two spaces"));
+    let run = one("help(agent.run)");
+    assert!(
+        run.contains("  access     \"read\" | \"write\" | \"full\"\n"),
+        "{run}"
+    );
+    assert!(
+        run.contains("  budget     { usd: number?, turns: integer? }\n"),
+        "{run}"
+    );
     assert!(encode.contains("Example:"));
     assert!(one("help('str.fmt')").starts_with("str.fmt(template, vars)"));
     assert!(one("help(try)").starts_with("try(f, ...)"));

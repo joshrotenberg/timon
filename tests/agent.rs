@@ -347,8 +347,57 @@ fn options_are_checked_before_anything_runs() {
     assert!(
         err("agent.run{ prompt = 'x', effort = 'huge' }").contains("claude has no effort \"huge\"")
     );
-    assert!(err("agent.run{ prompt = 'x', provider = 'gpt' }").contains("unknown provider"));
+    assert!(err("agent.run{ prompt = 'x', provider = 'gpt' }").contains(
+        "option \"provider\" to agent.run must be one of \"claude\", \"codex\", got \"gpt\""
+    ));
+    let raed = err("agent.run{ prompt = 'x', access = 'raed' }");
+    assert!(
+        raed.contains("must be one of \"read\", \"write\", \"full\", got \"raed\""),
+        "{raed}"
+    );
+    assert!(raed.contains("hint: did you mean \"read\"?"), "{raed}");
+    assert!(
+        err("agent.run{ prompt = 'x', budget = { tunrs = 3 } }")
+            .contains("unknown field \"tunrs\" in option \"budget\" to agent.run\n  hint: did you mean \"turns\"?")
+    );
+    assert!(
+        err("agent.run{ prompt = 'x', budget = { turns = 'many' } }")
+            .contains("option \"budget.turns\" to agent.run must be an integer, got a string")
+    );
+    assert!(
+        err("agent.run{ prompt = 'x', output = true }")
+            .contains("must be a string or a schema, got a boolean")
+    );
+    assert!(
+        err("agent.run{ prompt = 'x', tools = { 'Read', 3 } }").contains("option \"tools[2]\"")
+    );
     assert!(err("agent.run{ prompt = 'x', output = 'nope' }").contains("no contract named"));
+    assert!(
+        std::fs::read_dir(s.logs()).unwrap().next().is_none(),
+        "nothing ran"
+    );
+}
+
+#[test]
+fn definitions_are_checked_like_the_options_they_set() {
+    let s = Sandbox::new();
+    s.write(
+        s.config().join("agents/careless.lua"),
+        "return { access = 'raed', budget = { turns = 'lots' } }",
+    );
+    let stderr = String::from_utf8_lossy(
+        &s.timon("agent.run{ agent = 'careless', prompt = 'x' }", &[])
+            .stderr,
+    )
+    .into_owned();
+    assert!(stderr.contains("bad_config"), "{stderr}");
+    assert!(stderr.contains("careless.lua"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "field \"access\" must be one of \"read\", \"write\", \"full\", got \"raed\""
+        ) || stderr.contains("field \"budget.turns\" must be an integer, got a string"),
+        "{stderr}"
+    );
     assert!(
         std::fs::read_dir(s.logs()).unwrap().next().is_none(),
         "nothing ran"

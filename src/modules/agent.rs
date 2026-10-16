@@ -8,7 +8,7 @@ use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
 
 use crate::agent::{self, Access, Budget, Provider, Record, Request, Status};
-use crate::docs::{Func, Module, Opt, Ty};
+use crate::docs::{Func, Module, Opt};
 use crate::error::{self, Error};
 use crate::layers::Kind;
 use crate::modules::{Installer, concurrency, fail_function, json as json_module, schema};
@@ -29,23 +29,23 @@ pub const DOC: Module = Module {
             "local r = agent.run{ prompt = \"Review the diff on this branch\", output = \"review\" }\nif r.status == \"ok\" then pp(r.answer.findings) else log.error(r.error.message) end",
         )
         .with_options(&[
-            Opt::required("prompt", Ty::String, "what to do"),
-            Opt::new("agent", Ty::String, "a definition from agents/NAME.lua to start from"),
-            Opt::new("provider", Ty::String, "\"claude\" (default) or \"codex\""),
-            Opt::new("model", Ty::String, "the provider's model name"),
-            Opt::new("effort", Ty::String, "claude: low, medium, high, xhigh, max; codex: passed through"),
-            Opt::new("access", Ty::String, "\"read\" (default), \"write\", or \"full\" (needs limits.allow_full)"),
-            Opt::new("tools", Ty::Table, "claude's tool list, replacing the one access picks; {} allows none"),
-            Opt::new("cwd", Ty::String, "the directory to run in"),
-            Opt::new("system", Ty::String, "instructions added to the system prompt"),
-            Opt::new("output", Ty::Any, "a contract name or a schema; the answer is validated"),
-            Opt::new("timeout", Ty::Any, "seconds, or a duration such as \"10m\""),
-            Opt::new("budget", Ty::Table, "{ usd = number, turns = integer } (claude)"),
-            Opt::new("resume", Ty::String, "a session id timon started, to continue"),
-            Opt::new("fork", Ty::String, "a session id to branch from (claude)"),
-            Opt::new("native", Ty::Table, "extra command-line arguments for the provider"),
-            Opt::new("worktree", Ty::Boolean, "run in a new git worktree; kept only if the run changed it"),
-            Opt::new("ephemeral", Ty::Boolean, "leave no session behind for the provider to resume"),
+            Opt::required("prompt", "string", "what to do"),
+            Opt::new("agent", "string", "a definition from agents/NAME.lua to start from"),
+            Opt::new("provider", "\"claude\" | \"codex\"", "default claude"),
+            Opt::new("model", "string", "the provider's model name"),
+            Opt::new("effort", "string", "claude: low, medium, high, xhigh, max; codex: passed through"),
+            Opt::new("access", "\"read\" | \"write\" | \"full\"", "default read; full needs limits.allow_full"),
+            Opt::new("tools", "string[]", "claude's tool list, replacing the one access picks; {} allows none"),
+            Opt::new("cwd", "string", "the directory to run in"),
+            Opt::new("system", "string", "instructions added to the system prompt"),
+            Opt::new("output", "string | schema", "a contract name or a schema; the answer is validated"),
+            Opt::new("timeout", "number | string", "seconds, or a duration such as \"10m\""),
+            Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude)"),
+            Opt::new("resume", "string", "a session id timon started, to continue"),
+            Opt::new("fork", "string", "a session id to branch from (claude)"),
+            Opt::new("native", "string[]", "extra command-line arguments for the provider"),
+            Opt::new("worktree", "boolean", "run in a new git worktree; kept only if the run changed it"),
+            Opt::new("ephemeral", "boolean", "leave no session behind for the provider to resume"),
         ]),
         Func::new(
             "ask",
@@ -66,8 +66,8 @@ pub const DOC: Module = Module {
             "for _, r in ipairs(agent.runs{ since = \"1d\" }) do print(r.id, r.status, r.prompt) end",
         )
         .with_options(&[
-            Opt::new("since", Ty::Any, "a duration back from now, such as \"1d\" or \"2h\""),
-            Opt::new("limit", Ty::Integer, "most entries to return (default 20)"),
+            Opt::new("since", "string | number", "a duration back from now, such as \"1d\" or \"2h\""),
+            Opt::new("limit", "integer", "most entries to return (default 20)"),
         ]),
         Func::new(
             "continue",

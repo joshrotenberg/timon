@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use mlua::{Lua, Table, Value};
 
-use crate::docs::{Func, Module, Opt, Ty};
+use crate::docs::{Func, Module, Opt};
 use crate::error::Error;
 use crate::modules::Installer;
 use crate::options;
@@ -32,7 +32,7 @@ pub const DOC: Module = Module {
             "Encodes a value. A table with keys 1..n is an array, any other table an object with sorted keys. Functions, cycles and arrays with holes are errors.",
             "json.encode({ name = \"timon\", tags = { \"lua\", \"agents\" } })\n--> {\"name\":\"timon\",\"tags\":[\"lua\",\"agents\"]}",
         )
-        .with_options(&[Opt::new("pretty", Ty::Boolean, "indent with two spaces")]),
+        .with_options(&[Opt::new("pretty", "boolean", "indent with two spaces")]),
         Func::new(
             "decode",
             "json.decode(text) -> value",

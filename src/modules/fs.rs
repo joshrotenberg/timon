@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use mlua::{Table, Variadic};
 
-use crate::docs::{Func, Module, Opt, Ty};
+use crate::docs::{Func, Module, Opt};
 use crate::error::Error;
 use crate::modules::{Installer, json};
 use crate::options;
@@ -27,8 +27,8 @@ pub const FS_DOC: Module = Module {
             "fs.write(\"out/report.json\", json.encode(report), { mkdir = true })",
         )
         .with_options(&[
-            Opt::new("append", Ty::Boolean, "add to the end instead of replacing"),
-            Opt::new("mkdir", Ty::Boolean, "create missing parent directories"),
+            Opt::new("append", "boolean", "add to the end instead of replacing"),
+            Opt::new("mkdir", "boolean", "create missing parent directories"),
         ]),
         Func::new(
             "exists",
@@ -42,7 +42,7 @@ pub const FS_DOC: Module = Module {
             "Entry names in dir (default \".\"), sorted. Names starting with a dot are left out unless hidden is set.",
             "for _, name in ipairs(fs.ls(\"src\")) do print(name) end",
         )
-        .with_options(&[Opt::new("hidden", Ty::Boolean, "include names starting with a dot")]),
+        .with_options(&[Opt::new("hidden", "boolean", "include names starting with a dot")]),
         Func::new(
             "glob",
             "fs.glob(pattern) -> array",
