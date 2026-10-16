@@ -5,6 +5,7 @@ FAKE_MODE: ok (default), auth (replays recorded/claude-not-logged-in.*), unknown
 FAKE_TEXT: the result text (default: "echo: " + the prompt)
 FAKE_STRUCTURED: JSON for structured_output
 FAKE_AUTO_ANSWER: with --json-schema and no FAKE_STRUCTURED, answer with the smallest valid value
+FAKE_ANSWERS: a JSON object from prompt text to structured_output; the first key the prompt contains wins
 FAKE_SESSION: the session id (default: claude-session-1)
 FAKE_DELAY: seconds to sleep first
 FAKE_PID_FILE: write this process's pid here first
@@ -72,7 +73,11 @@ result = {
     "num_turns": 1,
     "usage": {"input_tokens": 120, "output_tokens": 30},
 }
-if os.environ.get("FAKE_STRUCTURED"):
+answers = json.loads(os.environ.get("FAKE_ANSWERS", "{}"))
+matched = [v for k, v in answers.items() if k in prompt]
+if matched:
+    result["structured_output"] = matched[0]
+elif os.environ.get("FAKE_STRUCTURED"):
     result["structured_output"] = json.loads(os.environ["FAKE_STRUCTURED"])
 elif os.environ.get("FAKE_AUTO_ANSWER") and "--json-schema" in args:
     result["structured_output"] = example(json.loads(args[args.index("--json-schema") + 1]))
