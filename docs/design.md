@@ -825,7 +825,7 @@ claude plugin install timon@timon
 ```
 
 - `plugin/` holds both hosts' manifests (`.claude-plugin/plugin.json` for Claude Code,
-  `plugin.json` for Codex), the skills and a `bin/timon` shim. Once `timon serve` exists, both
+  `.codex-plugin/plugin.json` for Codex), the hooks, the skills and a `bin/timon` shim. Once `timon serve` exists, both
   hosts' MCP manifests register it.
 - `timon plugin build plugin/` generates the directory from the embedded skills and checked-in
   templates; `timon plugin build --check plugin/` fails when they differ, and CI runs it.
@@ -833,9 +833,12 @@ claude plugin install timon@timon
   question.
 - Rules carried over from bottega: no `version` fields, and a relative `./bin/timon` command in
   Codex's `mcp.json`.
-- `hooks/hooks.json` is one file for both hosts: both load it from a plugin, both accept the same
-  event names, matchers and JSON output, and both give the command `CLAUDE_PLUGIN_ROOT` (Claude
-  Code substitutes it; Codex sets it in the environment). See Hooks.
+- `hooks/hooks.json` is one file for both hosts: both load it from a plugin, accept the same
+  event names, matchers and JSON output, and substitute `${CLAUDE_PLUGIN_ROOT}` in the command.
+  See Hooks.
+- Codex's manifest is `.codex-plugin/plugin.json`, not the portable root `plugin.json`. Codex
+  0.162 reads a root `plugin.json` first and then loads no plugin hooks, with or without a
+  `hooks` entry (#104); from `.codex-plugin/plugin.json` it finds `hooks/hooks.json`.
 
 ## Hooks
 
@@ -986,5 +989,6 @@ are libraries for exactly this, not sibling tools.
 5. **Memory.** Whether a timon memory store replaces the local-context MCP server.
 6. **Distribution.** `cargo install` only, or prebuilt binaries the plugin can fetch.
 7. **A machine-wide concurrency cap** across separate timon invocations, or only per invocation.
-8. **Codex hooks.** Decided (#104): Codex loads `hooks/hooks.json` from a plugin, after the user
-   reviews and trusts it, so the plugin's one file serves both hosts.
+8. **Codex hooks.** Decided (#104): Codex loads `hooks/hooks.json` from a plugin whose manifest
+   is `.codex-plugin/plugin.json`, after the user reviews and trusts it, so the plugin's one file
+   serves both hosts.

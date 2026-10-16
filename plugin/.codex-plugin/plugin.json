@@ -1,0 +1,31 @@
+{
+  "name": "timon",
+  "description": "Lua and Fennel over agent, session and tool APIs: eval or scripts, with bundled skills",
+  "author": {
+    "name": "Josh Rotenberg"
+  },
+  "repository": "https://github.com/joshrotenberg/timon",
+  "keywords": [
+    "lua",
+    "fennel",
+    "scripting",
+    "agents",
+    "json"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Timon",
+    "shortDescription": "Lua and Fennel for agent work",
+    "longDescription": "One binary with Lua 5.4 and Fennel over modules for JSON, files, concurrency and, later, Claude and Codex runs and past sessions.",
+    "developerName": "Josh Rotenberg",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use timon to reshape this JSON",
+      "Write a timon script for this"
+    ]
+  }
+}
