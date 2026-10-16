@@ -619,6 +619,165 @@ Runs git with these arguments and returns stdout without its last newline, for a
 local subject = git.run{ "log", "-1", "--format=%s" }
 ```
 
+## http
+
+HTTP requests. A response is { status, ok, headers, body, url, json }: headers have lowercase names, and json() decodes the body. A status that is not 2xx is data unless check = true.
+
+### `http.get(url, opts) -> response`
+
+A GET request.
+
+| Option | Type | |
+|---|---|---|
+| `headers` | `table<string, string>` | request headers |
+| `query` | `table<string, string \| number \| boolean>` | query parameters, added to the URL |
+| `body` | `string` | the request body |
+| `json` | `any` | a value sent as a JSON body, with content-type application/json |
+| `timeout` | `number \| string` | seconds, or a duration such as "10s" (default 30s) |
+| `check` | `boolean` | raise http_status for a status that is not 2xx |
+
+```lua
+local r = http.get("https://api.github.com/zen", { timeout = "10s" })
+if r.ok then print(r.body) end
+```
+
+### `http.post(url, opts) -> response`
+
+A POST request, usually with json or body.
+
+| Option | Type | |
+|---|---|---|
+| `headers` | `table<string, string>` | request headers |
+| `query` | `table<string, string \| number \| boolean>` | query parameters, added to the URL |
+| `body` | `string` | the request body |
+| `json` | `any` | a value sent as a JSON body, with content-type application/json |
+| `timeout` | `number \| string` | seconds, or a duration such as "10s" (default 30s) |
+| `check` | `boolean` | raise http_status for a status that is not 2xx |
+
+```lua
+local r = http.post("https://httpbin.org/post", { json = { name = "timon" }, check = true })
+local echoed = r.json().json
+```
+
+### `http.request{ method, url, ... } -> response`
+
+Any request: the method and URL with the same options as http.get.
+
+| Option | Type | |
+|---|---|---|
+| `method` | `string` | GET, POST, PUT, PATCH, DELETE, HEAD or another method (required) |
+| `url` | `string` | the URL (required) |
+| `headers` | `table<string, string>` | request headers |
+| `query` | `table<string, string \| number \| boolean>` | query parameters, added to the URL |
+| `body` | `string` | the request body |
+| `json` | `any` | a value sent as a JSON body, with content-type application/json |
+| `timeout` | `number \| string` | seconds, or a duration such as "10s" (default 30s) |
+| `check` | `boolean` | raise http_status for a status that is not 2xx |
+
+```lua
+local r = http.request{ method = "DELETE", url = "https://example.com/items/1" }
+```
+
+## gh
+
+GitHub's APIs as data. Authenticates with GH_TOKEN or GITHUB_TOKEN, then gh auth token. {owner} and {repo} in a path come from the repo option or origin. Errors: not_authenticated, not_found, github_failed.
+
+### `gh.repo({ repo }) -> repository`
+
+The repository: name, full_name, default_branch, private, html_url and the rest of GitHub's fields.
+
+| Option | Type | |
+|---|---|---|
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+local r = gh.repo()
+print(r.full_name, r.default_branch)
+```
+
+### `gh.prs({ state, base, limit, repo }) -> { pr }`
+
+Pull requests, newest first: { number, title, state, draft, author, head, base, url, labels, created_at, updated_at }.
+
+| Option | Type | |
+|---|---|---|
+| `state` | `"open" \| "closed" \| "all"` | default open |
+| `base` | `string` | only pull requests into this branch |
+| `limit` | `integer` | most pull requests (default 30) |
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+for _, pr in ipairs(gh.prs{ state = "open", limit = 10 }) do print(pr.number, pr.title) end
+```
+
+### `gh.pr(number, { repo }) -> pr`
+
+One pull request with its body, merged and mergeable, files { path, status, additions, deletions }, reviews { author, state, body } and checks { name, status, conclusion }.
+
+| Option | Type | |
+|---|---|---|
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+local pr = gh.pr(12)
+for _, c in ipairs(pr.checks) do print(c.name, c.conclusion) end
+```
+
+### `gh.issues({ state, labels, limit, repo }) -> { issue }`
+
+Issues, not pull requests, newest first: { number, title, state, author, labels, url, comments, created_at }.
+
+| Option | Type | |
+|---|---|---|
+| `state` | `"open" \| "closed" \| "all"` | default open |
+| `labels` | `string[]` | only issues with every one of these labels |
+| `limit` | `integer` | most issues (default 30) |
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+local bugs = gh.issues{ labels = { "bug" } }
+```
+
+### `gh.checks(ref, { repo }) -> { { name, status, conclusion, url } }`
+
+The check runs of a commit. ref is a sha, a branch or tag on GitHub, or HEAD for the local HEAD.
+
+| Option | Type | |
+|---|---|---|
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+local failing = tbl.filter(gh.checks("HEAD"), function(c) return c.conclusion == "failure" end)
+```
+
+### `gh.api(path, { method, json, query, paginate, limit, repo }) -> value`
+
+Any REST call. path is relative to the API ("repos/{owner}/{repo}/releases"). paginate follows the next links and joins the lists, up to limit items.
+
+| Option | Type | |
+|---|---|---|
+| `method` | `string` | default GET |
+| `json` | `any` | the request body |
+| `query` | `table<string, string \| number \| boolean>` | query parameters |
+| `paginate` | `boolean` | follow next links and join the lists |
+| `limit` | `integer` | with paginate, most items |
+| `repo` | `string` | "owner/name" (default: from origin's URL) |
+
+```lua
+local release = gh.api("repos/{owner}/{repo}/releases", {
+  method = "POST",
+  json = { tag_name = "v0.2.0", name = "0.2.0", generate_release_notes = true },
+})
+```
+
+### `gh.graphql(query, variables) -> data`
+
+A GraphQL query; returns its data, or raises github_failed with GraphQL's errors.
+
+```lua
+local d = gh.graphql("query($o: String!, $n: String!) { repository(owner: $o, name: $n) { stargazerCount } }", { o = "joshrotenberg", n = "timon" })
+```
+
 ## log
 
 Messages on stderr, so stdout stays parseable.

@@ -822,7 +822,12 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
    parsed into data. Worktrees are `git.worktree_add`, `git.worktrees` and
    `git.worktree_remove`; `git.run` covers the rest. A failure raises `git_failed` with git's
    stderr.
-5. **`gh`, `http`, `sqlite`.** The shapes below are starting points:
+5. **`http` and `gh` (#90), built:** `http` on reqwest with rustls, async, so a request is
+   cancellable and times out; a response is data, and a status raises only with `check`.
+   `gh` is REST and GraphQL over it: `repo`, `prs`, `pr` (files, reviews, checks), `issues`,
+   `checks`, `api` (with `paginate`) and `graphql`. `TIMON_GITHUB_API` points it at GitHub
+   Enterprise.
+6. **`sqlite`.** The shapes below are starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }
@@ -895,11 +900,15 @@ are libraries for exactly this, not sibling tools.
 
 1. **Lua 5.5.** mlua 0.12.2 supports it. It needs a Fennel compatibility check before it is
    worth considering. Luau is settled for now (see Lua version).
-2. **JMESPath size.** `json.query` uses jpx-core with every extension. Release binaries on macOS
+2. **Binary size.** `json.query` uses jpx-core with every extension. Release binaries on macOS
    arm64: 2.47 MB without jpx-core, 2.84 MB with jpx-core and no extensions, 8.61 MB with all
    of them. Revisit when jpx-core splits its extensions into finer features.
-3. **GitHub auth.** `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token` when `gh` is installed,
-   otherwise an error with the fix. The `gh` fallback is a soft runtime dependency.
+   Measured 2026-10-16 on macOS arm64: 13.60 MB before `http` and `gh`, 17.95 MB with reqwest
+   and rustls on aws-lc-rs. rustls with the ring provider, or a smaller client, are the
+   candidates if size matters.
+3. **GitHub auth.** Decided and built (#90): `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token`
+   when `gh` is installed, otherwise `not_authenticated` with the fix. The `gh` fallback is a
+   soft runtime dependency.
 4. **MCP server import.** Whether `mcp.connect` can also use the servers Claude Code and Codex
    already have configured, or only entries in `mcp/`.
 5. **Memory.** Whether a timon memory store replaces the local-context MCP server.

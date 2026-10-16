@@ -19,7 +19,7 @@ Design: [docs/design.md](docs/design.md).
 | 4 | Toolbox: `sh` and `proc` | done |
 | 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
 | 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
-| 7 | Toolbox: data formats, `eval -i`/`-I` and `git` done; `gh`, `http`, `sqlite` | in progress |
+| 7 | Toolbox: data formats, `eval -i`/`-I`, `git`, `http`, `gh` done; `sqlite` | in progress |
 | 8 | Workflow patterns | planned |
 | 9 | MCP client and server | planned |
 
@@ -59,6 +59,7 @@ timon eval 'json.query({ a = { 1, 2 } }, "a[-1]")'    # JMESPath, with jpx's fun
 git log --oneline | timon eval -i 'return #input'       # stdin's lines as input; -I for JSON
 timon eval 'toml.edit("Cargo.toml", "package.version", "0.2.0")'   # keeps comments
 timon eval 'return git.status().files'     # git's output as data: status, log, diff, tags
+timon eval 'return gh.prs{ state = "open" }'                          # GitHub, with GH_TOKEN or gh's login
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
