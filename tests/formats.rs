@@ -237,6 +237,36 @@ fn eval_binds_stdin_and_prints_lines() {
 }
 
 #[test]
+fn eval_io_flags_take_a_file_and_fennel_sees_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    std::fs::write(
+        d.join("up.lua"),
+        "local out = {}\nfor _, l in ipairs(input) do out[#out + 1] = l:upper() end\nreturn out\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("bang.fnl"),
+        "(icollect [_ l (ipairs input)] (.. l \"!\"))\n",
+    )
+    .unwrap();
+    assert_eq!(
+        ok(d, &["eval", "-f", "up.lua", "-i", "-o"], "a\nb\n"),
+        "A\nB\n"
+    );
+    assert_eq!(
+        ok(d, &["eval", "-f", "bang.fnl", "-i", "-O"], "a\nb\n"),
+        "\"a!\"\n\"b!\"\n"
+    );
+    assert_eq!(
+        ok(d, &["eval", "--fnl", "-i", "(length input)"], "a\nb\n"),
+        "2\n"
+    );
+    let o = timon(d, &["eval", "-f", "missing.lua", "-o"], "");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("io: cannot read missing.lua"));
+}
+
+#[test]
 fn a_stream_answers_each_line_before_the_input_ends() {
     let tmp = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))

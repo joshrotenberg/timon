@@ -6,8 +6,8 @@ main branch, just 1.46 or later (the `[arg]` attribute), Task, mise, GNU make, D
 and ai-dispatch 10.6.0. No benchmarks were run. The design's short version is in
 [design.md](design.md#prior-art).
 
-In timon's column, **done** means built and tested here, **P7** to **P10** is the phase that
-delivers it (see the design's Phases), `#N` is the issue, and **not planned** is not on the
+In timon's column, **done** means built and tested here, **P10** is the phase that delivers it
+(see the design's Phases), `#N` is the issue, and **not planned** is not on the
 roadmap. In the other columns, a feature is named as the tool names it. **no** means the tool's
 documentation for that surface was checked and does not have it; **not checked** means it was
 not. A tool whose language could implement a feature through a library still gets **no** when
@@ -44,7 +44,7 @@ everything else.
 | Typed options and generated `--help` | done | `:exec-fn` with a babashka.cli `:spec` | yes | parameters, `[arg]` flags | variables with required and allowed values | `usage` specs | variables |
 | Subcommands of a task | no | `:cmd` | no | no | not checked | not checked | no |
 | Pass arguments through | done: words, and everything after `--` | `*command-line-args*` | `passthrough` | variadic parameters | after `--` | `raw_args` | no |
-| Exit status chosen by the task | done (#39) | `:babashka/exit` | `exit` | the command's | the command's | the command's | the command's |
+| Exit status chosen by the task | done: `error{ exit = N }` | `:babashka/exit` | `exit` | the command's | the command's | the command's | the command's |
 | Dry run | done: the plan as JSON | no | `--dry-run` | `--dry-run` | a preview of the commands | `--dry-run` | `-n` |
 | User and project layers | done | project only | user layer, `promote` | `--global-justfile` | not checked | global config | `include` |
 | The tool's own commands described like tasks | done: `timon tasks --all --json` | no | no | no | no | `list_commands` over MCP | no |
@@ -55,10 +55,10 @@ everything else.
 | Platform-specific tasks | done | no | `platforms` | `[linux]`, `[macos]` and others | platform-specific commands | `run_windows` | no |
 | Interactive picker | not planned | no | `voga choose` | `--choose` | not checked | `mise run` with no task | no |
 | Shell completion | done: from the declarations | from `:exec-fn` and `:cmd` declarations | yes | yes | not checked | yes | from the shell |
-| Skip work that is up to date | `fs.modified_since` in #73 | `fs/modified-since` | `fs::modified_since` | `[cache]`, unstable | up-to-date checks on files | `sources`, `outputs` | file times |
+| Skip work that is up to date | `fs.newer` in #73 | `fs/modified-since` | `fs::modified_since` | `[cache]`, unstable | up-to-date checks on files | `sources`, `outputs` | file times |
 | Cleanup after a task | no | not checked | no | no | `defer` | `depends_post` | no |
-| Watch files | P10, to discuss | no | schedules instead | no | watch mode | `mise watch` | no |
-| Load `.env` | P10, to discuss | no | no | `dotenv-load` | not checked | `env` | no |
+| Watch files | later, to discuss | no | schedules instead | no | watch mode | `mise watch` | no |
+| Load `.env` | later, to discuss | no | no | `dotenv-load` | not checked | `env` | no |
 | Remote tasks or packages | not planned | `:deps` | no | no | remote Taskfiles | remote `file`, includes | no |
 
 Lua task runners exist already. Lark is a Lua environment for build and source-tree work, with
@@ -77,7 +77,7 @@ just, Task, mise and make run shell commands, so their toolbox is whatever the s
 |---|---|---|---|
 | REPL | #11 | REPL and nREPL | no |
 | Evaluate an expression | done: `eval` | `-e` | `voga eval` |
-| Read stdin as data | P7 (#71) | `-i`, `-I`, `-o`, `-O`, `--stream` | no |
+| Read stdin as data | done: `-i`, `-I`, `-o`, `-O`, `--stream` | `-i`, `-I`, `-o`, `-O`, `--stream` | no |
 | Shebang scripts | done | yes | no |
 | Concurrency in the language | done: `scope`, `spawn`, `par` | futures, `pmap`, core.async | `process::start`, `task::run` with `jobs` |
 | Run a program, raise on failure | done: `sh` | `shell` | no; results are data |
@@ -87,12 +87,12 @@ just, Task, mise and make run shell commands, so their toolbox is whatever the s
 | Pipelines | #76 | `pipeline` | `process::pipeline` |
 | Files and paths | done; more in #73 | `babashka.fs` | `fs` |
 | JSON and queries | done: `json`, JMESPath in process (jpx) | cheshire, Clojure's functions | `json`, JMESPath |
-| TOML, YAML, CSV | P7 (#72) | YAML, CSV, EDN, Transit | TOML, CSV; YAML planned |
-| HTTP client | P7 | `babashka.http-client` | `http` |
-| git | P7 | through `shell` | `voga/git`, read only |
-| GitHub | P7 | through `shell` | `voga/gh` |
-| SQLite | P7, bundled | a pod | no |
-| Edit files | #51 | `spit` | `edit` |
+| TOML, YAML, CSV | done: `toml` (with `set` and `edit` that keep every other byte), `yaml`, `csv`, `markdown` | YAML, CSV, EDN, Transit | TOML, CSV; YAML planned |
+| HTTP client | done: `http`, cancellable, with timeouts | `babashka.http-client` | `http` |
+| git | done: `git`, output parsed into data, worktrees | through `shell` | `voga/git`, read only |
+| GitHub | done: `gh`, REST and GraphQL | through `shell` | `voga/gh` |
+| SQLite | done: `sqlite`, bundled | a pod | no |
+| Edit files | `toml.edit` for TOML; the rest in #51, a maybe | `spit` | `edit` |
 | Parse a script's arguments | done: `cli.parse`, the task options parser | `babashka.cli` | task options only |
 
 ## Runs
@@ -106,7 +106,7 @@ just, Task, mise and make run shell commands, so their toolbox is whatever the s
 | Progress output | done: `--progress`, `prefix` | no | no | `output` modes | a TUI |
 | Schedules | P10 (#35) | no | yes | no | no |
 | Long-running services | not planned | no | yes, with readiness | `daemons`, experimental | services |
-| Sandboxing | not planned; trust is per project, and strict globals are not a sandbox | no | project-local writes | `deny_*`, `allow_*` | containers |
+| Sandboxing | not planned; trust is per project, strict globals are not a sandbox, and the hook guard checks what an agent asks for, not what a process does | no | project-local writes | `deny_*`, `allow_*` | containers |
 
 ## Agents
 
@@ -122,18 +122,19 @@ just, Task, mise and make run shell commands, so their toolbox is whatever the s
 | Cost reporting | done: per run and per script; Codex reports none, so its USD is unknown | no | not documented | not documented | `aid usage` |
 | Enforced limits | done: runs and USD, nested by scope | no | no | no | budgets in config |
 | Continue with feedback | done: `agent.continue` | no | prompts build on each other | request changes | `aid retry --feedback` |
-| Verify, review, best of N | P8 (#59) | no | an agent loop in code | a review step | `--verify`, `--peer-review`, `--best-of` |
+| Verify, review, best of N | done: `flow` (check, verify, vote, best_of, refine, pipeline, retry, plan); more in #99 | no | an agent loop in code | a review step | `--verify`, `--peer-review`, `--best-of` |
 | Resume a workflow from its runs | done: `--resume` | no | the cache | not documented | not documented |
 | Search past sessions | done: `sessions` | no | no | no | no |
 | Teach the host agent | done: a plugin for Claude Code and Codex | built-in skills | no | a Claude Code skill | a prompt for `CLAUDE.md` |
+| Host hooks | done: `timon hook` for both hosts, a session-start brief, a pre-tool guard, tasks as handlers | not checked | not checked | not checked | not checked |
 | Memory | P10 | no | no | no | `aid memory` |
 
 ## Extension and MCP
 
 | Feature | timon | babashka | voga | Dagger | mise | ai-dispatch |
 |---|---|---|---|---|---|---|
-| Call out-of-process tools | P9: MCP client | pods | `mcp::connect` | `LLM.withMCPServer` | no | no |
-| Serve tasks over MCP | P9 (#34) | no | `voga mcp` | modules as an MCP server | `run_task`, and tasks as a resource | `aid mcp` |
+| Call out-of-process tools | done: `mcp.connect`, the MCP client | pods | `mcp::connect` | `LLM.withMCPServer` | no | no |
+| Serve tasks over MCP | done: `timon serve` | no | `voga mcp` | modules as an MCP server | `run_task`, and tasks as a resource | `aid mcp` |
 | Declared effects of a command | #83 | no | no | no | `list_commands` marks read, write or destructive | no |
 | Bundled docs for agents, with tested examples | done: skills | no | skills | no | no | no |
 
@@ -164,11 +165,11 @@ After phases 5 and 6, each gap from the first version of this page:
 | Task metadata | Built: aliases, groups, private, confirm, platforms. Confirm fails without a terminal unless `--yes`; nothing waits on a question no one can answer. |
 | Passing arguments through | Built. Words reach a command task as words; a command string with shell syntax is refused when tasks load. |
 | Shell completion | Built, from the same declarations as help. |
-| Skipping up-to-date work | `fs.modified_since` first (#73). `sources` and `outputs` on a task only with defined invalidation. Three mechanisms stay separate: a dependency runs once per invocation, a file check skips work, and `--resume` reuses agent runs. None of them makes replaying effects safe. |
-| Verify, review, best of N | Library functions in `flow` (#59) over the runner, not a scheduler. A verification gate can be a deterministic check (`sh`), not only another model's opinion. |
+| Skipping up-to-date work | `fs.newer` first (#73). `sources` and `outputs` on a task only with defined invalidation. Three mechanisms stay separate: a dependency runs once per invocation, a file check skips work, and `--resume` reuses agent runs. None of them makes replaying effects safe. |
+| Verify, review, best of N | Built: library functions in `flow` (#59) over the runner, not a scheduler. A verification gate can be a deterministic check (`sh`), not only another model's opinion. |
 | Cost summaries | A summary in `timon runs` that separates known, unknown (Codex) and cached spend (#84). |
 | Interactive picker | Deferred: names, the listing, help and completion come first. |
-| Services, sandboxing, remote tasks, packages | Separate, and deferred until a workflow needs one. No sandbox is claimed. The user layer and `timon promote` (#39) cover local reuse, not versioned distribution. |
+| Services, sandboxing, remote tasks, packages | Separate, and deferred until a workflow needs one. No sandbox is claimed. The user layer covers local reuse, and `timon promote` (#39) is planned; neither is versioned distribution. |
 
 ## Decisions shaped by prior art
 

@@ -60,9 +60,12 @@ timon skill show timon --ref api    # every function with an example
 | `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
 | `cli` | `parse` a script's flags against typed options, as tasks declare them; `help` |
 | `task` | `run` another task from inside a task |
+| `agent`, `schema` | Claude and Codex runs with answers checked against contracts (the `timon-agents` skill) |
+| `sessions` | every Claude Code and Codex session: list, search, read, summarize (the `timon-sessions` skill) |
+| `hook` | `input()`: the host event a hook task runs for (the `timon-tasks` skill) |
 | `par` | `map`, `all`, `race`: concurrent work |
 | `log`, `pp` | messages and pretty-printing on stderr |
-| globals | `help`, `try`, `scope`, `spawn`, `sleep` |
+| globals | `help`, `try`, `scope`, `spawn`, `phase`, `sleep` |
 
 ## Examples
 
@@ -163,7 +166,8 @@ end
   `$?`, redirects or heredocs: a host that allows only `timon` commands denies the whole line.
   Do the rest in Lua.
 - An error is a table with `kind`, `message` and often `hint`. Uncaught, it prints all three and
-  exits 1. Read the hint: it usually names the fix.
+  exits 1, or the error's `exit` (`usage` exits 2, a failed `sh` with the program's code). Read
+  the hint: it usually names the fix.
 - Globals, module fields and options are strict: a typo raises with "did you mean".
 - `try(f, ...)` returns `true, ...` or `false, err`.
 - Lists from modules are arrays; `json.null` is JSON null; an empty `json.array{}` encodes as `[]`.

@@ -100,8 +100,8 @@ return summary.phase  -- "summary"
 ```
 
 ```sh
-timon review.lua --progress text    # a line per run start and end, on stderr
-timon review.lua --progress json    # the same as JSON lines, for an agent to read
+timon --progress text review.lua    # a line per run start and end, on stderr
+timon --progress json review.lua    # the same as JSON lines, for an agent to read
 ```
 
 Progress is on by default only when stderr is a terminal.
@@ -190,8 +190,10 @@ another) < the call. `timon agents` lists them.
 ## Budgets
 
 ```sh
-timon review.lua --max-runs 10 --max-usd 5
+timon --max-runs 10 --max-usd 5 review.lua
 ```
+
+timon's flags go before the script: words after it are the script's own `arg`.
 
 Or `limits = { max_runs = 10, max_usd = 5 }` in `init.lua`. A run that would pass a limit
 raises `budget_exceeded` before it starts. Codex reports no cost, so only runs count for it.

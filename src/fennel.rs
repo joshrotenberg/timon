@@ -69,7 +69,7 @@ fn suggestion(lua: &Lua, name: &str) -> Option<String> {
 }
 
 /// The globals Fennel code may reference: every global defined now, plus `arg`, which a
-/// script gets after it compiles. Without an explicit list, `compileString` checks nothing, and
+/// script gets after it compiles, and `input`, which `eval -i` and `-I` bind after it compiles. Without an explicit list, `compileString` checks nothing, and
 /// a typo in a branch that never runs would go unnoticed.
 fn allowed_globals(lua: &Lua) -> mlua::Result<Table> {
     let mut names: Vec<String> = lua
@@ -81,6 +81,7 @@ fn allowed_globals(lua: &Lua) -> mlua::Result<Table> {
         })
         .collect();
     names.push("arg".to_owned());
+    names.push("input".to_owned());
     names.sort();
     names.dedup();
     lua.create_sequence_from(names)

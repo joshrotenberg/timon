@@ -949,6 +949,14 @@ fn the_cli_lists_shows_and_finds_the_current_session() {
         "left out: 1 automated (--automated), 1 subagents (--subagents)"
     );
 
+    let o = a.cli(&["sessions", "list", "--dir", "/work/codex"], &[]);
+    let (stdout, stderr) = out(&o);
+    assert!(o.status.success(), "{stderr}");
+    assert!(
+        stdout.lines().count() == 1 && stdout.starts_with("bbbbbbbb  codex"),
+        "the CLI door takes --dir like the module: {stdout}"
+    );
+
     let o = a.cli(
         &[
             "sessions",

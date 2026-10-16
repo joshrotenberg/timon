@@ -27,7 +27,9 @@ return r.hidden  -- left out by default: automated runs and subagents
 ```
 
 `automated = true` adds `claude -p`, `codex exec` and timon's own runs; `subagents = true`
-adds sessions another session started. Ids work as unambiguous prefixes everywhere.
+adds sessions another session started. `dir = "."` keeps the sessions that ran in a directory
+or below it, and is faster than `project`, which matches part of the path. Ids work as
+unambiguous prefixes everywhere.
 
 ## Search, then read around a match
 

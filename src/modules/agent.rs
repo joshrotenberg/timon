@@ -65,7 +65,7 @@ pub const DOC: Module = Module {
         ),
         Func::new(
             "runs",
-            "agent.runs{ since, limit } -> array",
+            "agent.runs{ since, limit, parent } -> array",
             "Recorded runs, newest first: id, started_at, provider, model, agent, status, ms, usd, output_tokens and the start of the prompt. timon runs show ID has the full request and result.",
             "for _, r in ipairs(agent.runs{ since = \"1d\" }) do print(r.id, r.status, r.prompt) end",
         )

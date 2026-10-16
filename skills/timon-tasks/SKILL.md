@@ -105,6 +105,10 @@ timon --yes drop-db           # answers its confirm question
   lists it, and `timon --resume ID NAME` reuses its agent runs that succeeded. `budget` limits
   the agent runs inside one task.
 
+A failing task ends the run with exit 1, or with the code it chooses:
+`error{ kind = "lint", message = "2 findings", exit = 3 }` exits 3. A failed `sh` exits with
+the program's code.
+
 ## Where tasks come from
 
 - A project's tasks replace yours by name, and load only after a person reviews the project and
@@ -181,9 +185,10 @@ In Fennel, `tasks.fnl` returns the same table:
 
 ## As hooks
 
-With the plugin, Claude Code and Codex run `timon hook` at session start and before edits and
-shell commands. It reads the host's event on stdin, runs the handlers `init.lua` names for the
-event, and prints the host's JSON. By default, session start adds a brief: this project's
+With the plugin, Claude Code and Codex run `timon hook` at session start (SessionStart) and
+before edits and shell commands (PreToolUse). It reads the host's event on stdin, runs the
+handlers `init.lua` names for the event, and prints the host's JSON. For another event, add a
+host hook that runs `timon hook` yourself. By default, session start adds a brief: this project's
 sessions from the last 7 days and its public tasks. Before a tool runs, the guard checks the
 call once a `guard` setting exists.
 
@@ -193,10 +198,10 @@ return {
   hooks = {
     SessionStart = { "timon:brief", "status" },   -- built-ins are timon:brief and timon:guard
     PreToolUse = { "timon:guard", "no-publish" },
-    Stop = false,                                 -- false turns an event off
+    SessionEnd = false,                           -- false turns an event off; true keeps the default
   },
   guard = {
-    writes = { ".", "/tmp" },                     -- edits may touch only these (default: the project)
+    writes = { ".", "/tmp" },                     -- edits may touch only these (default: the project; false: any)
     commands = { "git push --force" },            -- shell commands containing these are refused
   },
 }
@@ -204,7 +209,8 @@ return {
 
 A hook task reads the event with `hook.input()` and returns a string, which the agent sees as
 context, or a table: `{ deny = reason }`, `ask` or `allow` before a tool runs, `{ block =
-reason }` for Stop or UserPromptSubmit, and `context` beside any of them.
+reason }` for UserPromptSubmit, PostToolUse, Stop and SubagentStop, and `context` beside any of
+them.
 
 ```lua fragment
 -- .timon/tasks.lua
