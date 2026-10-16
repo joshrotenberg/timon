@@ -267,7 +267,7 @@ local r = agent.run{
   budget   = { usd = 2, turns = 30 },
   resume   = earlier.session,    -- continue a session timon started
   fork     = "45d4b2f5",         -- branch from any session; the original is untouched
-  events   = false,              -- true: keep tool calls and turn events in r.events
+  events   = false,              -- true: r.events lists text, reasoning, tool calls and results
   native   = { "--add-dir", "../shared" },   -- raw provider arguments, the escape hatch
 }
 ```
@@ -293,9 +293,16 @@ The result is a run record. It never raises for an outcome:
   session  = "8c1f...",          -- the provider's session id; pass to `resume`
   usage    = { input_tokens = 0, output_tokens = 0, usd = 0.42 },   -- usd is nil for Codex
   ms       = 81234,
-  events   = nil,
+  events   = nil,                -- with events = true, see below
 }
 ```
+
+With `events = true` the record lists what the agent did, in one shape for both providers:
+`{ kind = "text" | "reasoning", text }`, `{ kind = "tool_call", id, name, input }` and
+`{ kind = "tool_result", id, error, text }`. Claude streams them (`stream-json`); Codex's come
+from its `exec --json` items, with shell commands as `shell` calls. A failed run keeps the events
+it produced. Strings are capped at 2,000 characters and a run at 500 events, and the run's
+`result.json` stores them redacted.
 
 `invalid` means the provider answered but the answer failed the contract. `error.data` then holds
 the validation errors and `text` holds what came back. Execution status and the answer's

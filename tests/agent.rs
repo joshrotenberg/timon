@@ -888,3 +888,106 @@ fn a_killed_timon_leaves_an_interrupted_run() {
     assert_eq!(shown["result"]["status"], "interrupted");
     assert_eq!(shown["result"]["error"]["kind"], "interrupted");
 }
+
+// Events (#25)
+
+fn kinds(record: &serde_json::Value) -> Vec<String> {
+    record["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no events: {record}"))
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn claude_events_stream_tool_calls_into_the_record() {
+    let s = Sandbox::new();
+    let plain = s.json("agent.run{ prompt = 'x' }", &[]);
+    assert!(plain["events"].is_null());
+    assert!(has_pair(&s.args("claude", 0), "--output-format", "json"));
+
+    let r = s.json("agent.run{ prompt = 'look', events = true }", &[]);
+    assert_eq!(r["status"], "ok");
+    assert_eq!(r["text"], "echo: look");
+    assert_eq!(r["usage"]["usd"], 0.0125);
+    assert_eq!(kinds(&r), ["reasoning", "tool_call", "tool_result", "text"]);
+    assert_eq!(
+        r["events"][1],
+        serde_json::json!({ "kind": "tool_call", "id": "t1", "name": "Read",
+            "input": { "file_path": "README.md" } })
+    );
+    assert_eq!(
+        r["events"][2],
+        serde_json::json!({ "kind": "tool_result", "id": "t1", "error": false, "text": "# fake readme" })
+    );
+    let args = s.args("claude", 1);
+    assert!(
+        has_pair(&args, "--output-format", "stream-json"),
+        "{args:?}"
+    );
+    assert!(args.contains(&"--verbose".to_owned()), "{args:?}");
+}
+
+#[test]
+fn a_failed_claude_turn_keeps_its_events_and_its_classification() {
+    let s = Sandbox::new();
+    let r = s.json(
+        "agent.run{ prompt = 'x', events = true }",
+        &[("FAKE_MODE", "max_turns")],
+    );
+    assert_eq!(r["status"], "failed");
+    assert_eq!(r["error"]["kind"], "max_turns");
+    assert_eq!(kinds(&r)[..3], ["reasoning", "tool_call", "tool_result"]);
+    let r = s.json(
+        "agent.run{ prompt = 'x', events = true }",
+        &[("FAKE_MODE", "auth")],
+    );
+    assert_eq!(r["error"]["kind"], "not_logged_in");
+    assert_eq!(r["events"], serde_json::json!([]));
+}
+
+#[test]
+fn codex_events_come_from_its_items() {
+    let s = Sandbox::new();
+    let r = s.json(
+        "agent.run{ provider = 'codex', prompt = 'list', events = true }",
+        &[],
+    );
+    assert_eq!(r["status"], "ok");
+    assert_eq!(kinds(&r), ["reasoning", "tool_call", "tool_result", "text"]);
+    assert_eq!(
+        r["events"][1],
+        serde_json::json!({ "kind": "tool_call", "id": "i1", "name": "shell",
+            "input": { "command": "bash -lc ls" } })
+    );
+    assert_eq!(r["events"][2]["text"], "README.md\n");
+    let r = s.json(
+        "agent.run{ provider = 'codex', prompt = 'x', events = true }",
+        &[("FAKE_MODE", "turn_failed")],
+    );
+    assert_eq!(r["error"]["kind"], "bad_schema");
+    assert_eq!(kinds(&r), ["reasoning", "tool_call", "tool_result"]);
+}
+
+#[test]
+fn events_are_redacted_in_the_run_record_and_flagged_on_the_cli() {
+    let s = Sandbox::new();
+    let secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+    let o = s.cli(
+        &["agent", "run", "--events", "summarize"],
+        &[("FAKE_TEXT", &format!("the key is {secret}"))],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(kinds(&r).last().map(String::as_str), Some("text"));
+    let dir = s
+        .root()
+        .join("timon/state/runs")
+        .join(r["id"].as_str().unwrap());
+    let result = std::fs::read_to_string(dir.join("result.json")).unwrap();
+    assert!(result.contains("\"events\""), "{result}");
+    assert!(!result.contains(secret) && result.contains("[redacted:anthropic]"));
+    let request = std::fs::read_to_string(dir.join("request.json")).unwrap();
+    assert!(request.contains("\"events\": true"), "{request}");
+}

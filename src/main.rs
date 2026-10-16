@@ -148,6 +148,9 @@ enum AgentCommand {
         /// A session id to branch from (claude)
         #[arg(long)]
         fork: Option<String>,
+        /// Add the agent's text, reasoning, tool calls and tool results to the record
+        #[arg(long)]
+        events: bool,
         /// Run in a new git worktree
         #[arg(long)]
         worktree: bool,
@@ -565,6 +568,7 @@ async fn agent_run(rt: &Runtime, command: Command) -> Result<MultiValue, Failure
         resume,
         fork,
         worktree,
+        events,
         native,
     }) = command
     else {
@@ -611,6 +615,9 @@ async fn agent_run(rt: &Runtime, command: Command) -> Result<MultiValue, Failure
             budget.raw_set("usd", budget_usd)?;
             budget.raw_set("turns", budget_turns)?;
             spec.raw_set("budget", budget)?;
+        }
+        if events {
+            spec.raw_set("events", true)?;
         }
         if worktree {
             spec.raw_set("worktree", true)?;

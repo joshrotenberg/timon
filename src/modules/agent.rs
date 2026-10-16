@@ -46,6 +46,7 @@ pub const DOC: Module = Module {
             Opt::new("native", "string[]", "extra command-line arguments for the provider"),
             Opt::new("worktree", "boolean", "run in a new git worktree; kept only if the run changed it"),
             Opt::new("ephemeral", "boolean", "leave no session behind for the provider to resume"),
+            Opt::new("events", "boolean", "add record.events: the agent's text, reasoning, tool calls and tool results"),
         ]),
         Func::new(
             "ask",
@@ -297,6 +298,7 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
     req.ephemeral = fields
         .raw_get::<Option<bool>>("ephemeral")?
         .unwrap_or(false);
+    req.events = fields.raw_get::<Option<bool>>("events")?.unwrap_or(false);
     if let Some(tools) = fields.raw_get::<Option<Table>>("tools")? {
         req.tools = Some(string_list(&tools, "tools")?);
     }
@@ -339,6 +341,13 @@ fn record_table(lua: &Lua, record: &Record) -> mlua::Result<Table> {
     };
     if let Some(answer) = &record.answer {
         t.raw_set("answer", json_module::decode(lua, answer)?)?;
+    }
+    // Decoded as JSON, so an empty list stays an array and tool inputs keep their shapes.
+    if let Some(events) = &record.events {
+        t.raw_set(
+            "events",
+            json_module::decode(lua, &serde_json::Value::Array(events.clone()))?,
+        )?;
     }
     Ok(t)
 }

@@ -561,6 +561,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `native` | `string[]` | extra command-line arguments for the provider |
 | `worktree` | `boolean` | run in a new git worktree; kept only if the run changed it |
 | `ephemeral` | `boolean` | leave no session behind for the provider to resume |
+| `events` | `boolean` | add record.events: the agent's text, reasoning, tool calls and tool results |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }

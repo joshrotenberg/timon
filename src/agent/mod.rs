@@ -3,6 +3,7 @@
 
 mod claude;
 mod codex;
+pub mod events;
 pub mod records;
 pub mod worktree;
 
@@ -126,6 +127,7 @@ impl Request {
             "fork": self.fork,
             "native": self.native,
             "ephemeral": self.ephemeral,
+            "events": self.events,
         })
     }
 
@@ -312,9 +314,10 @@ pub async fn run_as(request: &Request, id: String) -> Record {
     let started = Instant::now();
     let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let binary = binary(request.provider);
+    let mut events = Vec::new();
     let outcome = match request.provider {
-        Provider::Claude => claude::run(request, binary.as_deref()).await,
-        Provider::Codex => codex::run(request, binary.as_deref()).await,
+        Provider::Claude => claude::run(request, binary.as_deref(), &mut events).await,
+        Provider::Codex => codex::run(request, binary.as_deref(), &mut events).await,
     };
     let mut record = Record {
         id,
@@ -328,7 +331,7 @@ pub async fn run_as(request: &Request, id: String) -> Record {
         session: None,
         usage: Usage::default(),
         ms: started.elapsed().as_millis() as u64,
-        events: None,
+        events: request.events.then(|| events::finish(events)),
         worktree: None,
     };
     match outcome {

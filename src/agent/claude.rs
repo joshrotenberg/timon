@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use claude_wrapper::auth::AuthErrorKind;
-use claude_wrapper::{Claude, Effort, PermissionMode, QueryCommand};
+use claude_wrapper::streaming::{StreamEvent, stream_query_cancellable};
+use claude_wrapper::{Claude, Effort, OutputFormat, PermissionMode, QueryCommand, QueryResult};
 use serde_json::Value as Json;
 
 use super::{Access, Outcome, Request, Status, Usage};
@@ -31,7 +32,13 @@ pub(super) fn effort(name: &str) -> Result<Effort, Error> {
     })
 }
 
-pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
+/// Runs one turn. With `request.events`, Claude streams its events and `events` collects them;
+/// the final result event is classified the same way either way.
+pub(super) async fn run(
+    request: &Request,
+    binary: Option<&Path>,
+    events: &mut Vec<Json>,
+) -> Outcome {
     let mut builder = Claude::builder()
         .env("TIMON_CHILD", "1")
         .kill_grace(Duration::from_millis(250))
@@ -105,11 +112,49 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
         (None, None) => {}
     }
 
-    let mut result = command
-        .execute_json_cancellable(&client, std::future::pending::<()>())
-        .await
-        .map_err(|e| failure(&e))?;
+    let never = std::future::pending::<()>();
+    let result = if request.events {
+        let command = command.output_format(OutputFormat::StreamJson);
+        let mut last: Option<Json> = None;
+        let streamed = stream_query_cancellable(&client, &command, never, |event: StreamEvent| {
+            if event.is_result() {
+                last = Some(event.data.clone());
+            }
+            events.extend(super::events::from_claude(&event.data));
+        })
+        .await;
+        match (streamed, last) {
+            // A failed turn exits non-zero after its result event; classify the event.
+            (Ok(_) | Err(claude_wrapper::Error::CommandFailed { .. }), Some(last)) => {
+                serde_json::from_value::<QueryResult>(last).map_err(|e| {
+                    (
+                        Status::Failed,
+                        Error::new(
+                            "provider_failed",
+                            format!("claude's result is not readable: {e}"),
+                        ),
+                    )
+                })?
+            }
+            (Ok(_), None) => {
+                return Err((
+                    Status::Failed,
+                    Error::new("provider_failed", "claude ended without a result"),
+                ));
+            }
+            (Err(e), _) => return Err(failure(&e)),
+        }
+    } else {
+        command
+            .execute_json_cancellable(&client, never)
+            .await
+            .map_err(|e| failure(&e))?
+    };
+    answer(result)
+}
 
+/// Classifies Claude's final result.
+fn answer(mut result: QueryResult) -> Outcome {
     let subtype = result
         .extra
         .get("subtype")
