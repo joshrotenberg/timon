@@ -132,6 +132,14 @@ impl Runtime {
                 home.display().to_string(),
             )?;
         }
+        self.lua.set_app_data(crate::modules::mcp::Dirs(
+            layers
+                .active()
+                .into_iter()
+                .map(|l| (l.kind.name(), l.root.join("mcp")))
+                .filter(|(_, d)| d.is_dir())
+                .collect(),
+        ));
         let settings = crate::settings::load(&self.lua, &layers.init_files())?;
         self.lua.set_named_registry_value(SETTINGS, settings)?;
         Ok(())
@@ -534,7 +542,13 @@ fn traceback(lua: &Lua) -> Vec<String> {
     for level in 1..64 {
         let Some(frame) = lua.inspect_stack(level, |d| {
             let source = d.source();
-            if source.what == "C" || source.source.as_deref() == Some(INTERNAL_CHUNK) {
+            // mlua runs async functions through a chunk of its own, named __mlua_async_poll.
+            let internal = source.source.as_deref() == Some(INTERNAL_CHUNK)
+                || source
+                    .short_src
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("__mlua"));
+            if source.what == "C" || internal {
                 return None;
             }
             let place = match d.current_line() {

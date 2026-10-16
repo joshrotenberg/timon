@@ -21,7 +21,7 @@ Design: [docs/design.md](docs/design.md).
 | 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite`, data formats, `eval -i`/`-I`; release tasks | done |
 | 8 | Workflow patterns: `flow` with gates, verify, vote, best_of, refine, pipeline, retry, plan | done |
-| 9 | MCP client and server | next |
+| 9 | MCP: the client (`mcp.connect`, `timon mcp`) done; `timon serve` | in progress |
 
 ## Install
 
@@ -60,6 +60,7 @@ git log --oneline | timon eval -i 'return #input'       # stdin's lines as input
 timon eval 'toml.edit("Cargo.toml", "package.version", "0.2.0")'   # keeps comments
 timon eval 'return git.status().files'     # git's output as data: status, log, diff, tags
 timon eval 'return gh.prs{ state = "open" }'                          # GitHub, with GH_TOKEN or gh's login
+timon mcp call crates get_crate_info name=mlua   # an MCP server's tool; mcp.connect in Lua
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated

@@ -1133,6 +1133,32 @@ local r = flow.plan{ steps = {
 return r.value.build  -- 2
 ```
 
+## mcp
+
+MCP servers' tools as Lua calls. mcp.connect returns a connection: c:tools() lists { name, description, input_schema }; c:call(tool, args) returns the structured content, or the text, and raises mcp_tool_failed when the tool reports an error; c:resources() and c:read(uri); c:close(). A connection closes, and its server stops, when the scope that opened it ends. Errors: mcp_failed, mcp_tool_failed, not_found.
+
+### `mcp.connect(name | { command, env, cwd }, { timeout }) -> connection`
+
+Starts an MCP server over stdio and initializes it: a name from mcp/NAME.lua in the layers, or a command list. c.server holds the server's name and version.
+
+| Option | Type | |
+|---|---|---|
+| `timeout` | `number \| string` | how long starting and initializing may take (default 30s) |
+
+```lua
+local fs = mcp.connect{ command = { "npx", "-y", "@modelcontextprotocol/server-filesystem", "." } }
+for _, t in ipairs(fs:tools()) do print(t.name) end
+local text = fs:call("read_text_file", { path = "README.md" })
+```
+
+### `mcp.servers() -> { { name, layer, description, command } }`
+
+The named servers in the layers' mcp/ directories; a project's entry hides a user's of the same name.
+
+```lua
+for _, s in ipairs(mcp.servers()) do print(s.name, s.description) end
+```
+
 ## toml
 
 TOML: decode and encode, and edits that keep a file's comments and formatting.

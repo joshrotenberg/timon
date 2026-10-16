@@ -118,7 +118,9 @@ fn table(t: &Table, mode: Mode, depth: usize) -> Result<serde_json::Value, Error
         }
         return Ok(serde_json::Value::Array(items));
     }
-    let mut map = serde_json::Map::new();
+    // Keys are sorted here rather than by the map type: serde_json keeps insertion order when
+    // any crate in the build turns on its preserve_order feature, as tower-mcp does.
+    let mut fields: Vec<(String, serde_json::Value)> = Vec::with_capacity(entries.len());
     for (k, v) in &entries {
         let key = match k {
             Value::String(s) => s.to_string_lossy(),
@@ -135,9 +137,10 @@ fn table(t: &Table, mode: Mode, depth: usize) -> Result<serde_json::Value, Error
                 }
             },
         };
-        map.insert(key, convert(v, mode, depth + 1)?);
+        fields.push((key, convert(v, mode, depth + 1)?));
     }
-    Ok(serde_json::Value::Object(map))
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(serde_json::Value::Object(fields.into_iter().collect()))
 }
 
 fn opaque(value: &Value, mode: Mode, what: &str) -> Result<serde_json::Value, Error> {

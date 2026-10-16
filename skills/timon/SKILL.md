@@ -39,6 +39,7 @@ timon skill show timon --ref api    # every function with an example
 | `fs`, `path` | files, directories, path names |
 | `git` | `status`, `log`, `diff`, `tags`, `branch`, `rev`, `add`, `commit`, `tag`, `push`, worktrees, `run`: git's output as data |
 | `http`, `gh` | `http.get`, `post`, `request`: responses as data; `gh.repo`, `prs`, `pr`, `issues`, `checks`, `api`, `graphql` with GH_TOKEN or gh's login |
+| `mcp` | `connect` to an MCP server: `c:tools()`, `c:call(tool, args)`, `c:resources()`, `c:read(uri)`; `servers()` |
 | `flow` | workflow patterns: `check` (a gate), `verify`, `vote`, `best_of`, `refine`, `pipeline`, `retry`, `plan`; records with status and conclusion apart |
 | `sqlite` | `sqlite.open(path)`: `db:exec`, `db:query` (rows keyed by column), `db:one`, `db:transaction` |
 | `toml`, `yaml`, `csv` | `decode`, `encode`; `toml.set` and `toml.edit` change one value and keep the rest of the file |

@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""A fake MCP server over stdio for tests: newline-delimited JSON-RPC.
+
+Tools: echo { text } -> text; add { a, b } -> structured { sum }; fail -> an error result;
+       slow { seconds } -> sleeps, then text; whoami -> the server's pid and process group.
+Resources: fake://readme (text).
+FAKE_MCP_LOG: append each request's method here.
+"""
+import json, os, sys, time
+
+def reply(id, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": id}
+    if error is not None:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+TOOLS = [
+    {"name": "echo", "description": "Echo the text back",
+     "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
+    {"name": "add", "description": "Add two numbers",
+     "inputSchema": {"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}, "required": ["a", "b"]}},
+    {"name": "fail", "description": "Always fails", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "slow", "description": "Sleeps", "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}}},
+    {"name": "whoami", "description": "The server's pid and process group", "inputSchema": {"type": "object", "properties": {}}},
+]
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    method, id, params = req.get("method"), req.get("id"), req.get("params") or {}
+    if os.environ.get("FAKE_MCP_LOG"):
+        with open(os.environ["FAKE_MCP_LOG"], "a") as f:
+            f.write(method + "\n")
+    if id is None:
+        continue
+    if method == "initialize":
+        reply(id, {"protocolVersion": params.get("protocolVersion", "2025-11-25"),
+                   "capabilities": {"tools": {}, "resources": {}},
+                   "serverInfo": {"name": "fake-mcp", "version": "1.2.3"}})
+    elif method == "tools/list":
+        reply(id, {"tools": TOOLS})
+    elif method == "tools/call":
+        name, args = params.get("name"), params.get("arguments") or {}
+        if name == "echo":
+            reply(id, {"content": [{"type": "text", "text": args.get("text", "")}]})
+        elif name == "add":
+            total = args["a"] + args["b"]
+            reply(id, {"content": [{"type": "text", "text": str(total)}], "structuredContent": {"sum": total}})
+        elif name == "fail":
+            reply(id, {"content": [{"type": "text", "text": "the tool broke"}], "isError": True})
+        elif name == "slow":
+            time.sleep(args.get("seconds", 1))
+            reply(id, {"content": [{"type": "text", "text": "slept"}]})
+        elif name == "whoami":
+            reply(id, {"content": [], "structuredContent": {"pid": os.getpid(), "pgid": os.getpgid(0)}})
+        else:
+            reply(id, error={"code": -32602, "message": f"unknown tool {name}"})
+    elif method == "resources/list":
+        reply(id, {"resources": [{"uri": "fake://readme", "name": "readme", "mimeType": "text/plain", "description": "The readme"}]})
+    elif method == "resources/read":
+        reply(id, {"contents": [{"uri": params.get("uri"), "mimeType": "text/plain", "text": "# fake\nhello"}]})
+    elif method == "ping":
+        reply(id, {})
+    else:
+        reply(id, error={"code": -32601, "message": f"no method {method}"})

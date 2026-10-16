@@ -157,6 +157,9 @@ enum Command {
     /// Build the plugin directory from the binary
     #[command(subcommand)]
     Plugin(PluginCommand),
+    /// Use MCP servers: the named ones in mcp/, a server's tools, a tool call
+    #[command(subcommand)]
+    Mcp(McpCommand),
     #[command(external_subcommand)]
     Script(Vec<OsString>),
 }
@@ -347,6 +350,30 @@ enum RunsCommand {
 }
 
 #[derive(Subcommand)]
+enum McpCommand {
+    /// The named servers in the layers' mcp/ directories
+    Servers {
+        #[arg(long)]
+        json: bool,
+    },
+    /// A server's tools, with their descriptions
+    Tools {
+        /// A server named in mcp/
+        server: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Call a tool and print its result
+    Call {
+        /// A server named in mcp/
+        server: String,
+        tool: String,
+        /// Arguments as key=value; a value that parses as JSON is taken as JSON
+        args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PluginCommand {
     /// Write the plugin's skills/ from the skills built into this binary
     Build {
@@ -440,6 +467,7 @@ async fn run(cli: Cli) -> ExitCode {
         | Command::Complete { .. }
         | Command::Script(_)
         | Command::Agent(_)
+        | Command::Mcp(_)
         | Command::Sessions(_) => {}
     }
     // The runtime must outlive the values it returns, which refer into its Lua state.
@@ -498,6 +526,7 @@ async fn run(cli: Cli) -> ExitCode {
         },
         Command::Script(argv) => external(&rt, &layers, argv, how).await,
         Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
+        Command::Mcp(command) => mcp(&rt, command).await,
         Command::Scripts { .. }
         | Command::Tasks { .. }
         | Command::Completions { .. }
@@ -553,6 +582,49 @@ async fn eval(
     } else {
         runtime.eval(&source, name).await
     }
+}
+
+/// `timon mcp`: the same calls a script makes, with the arguments bound as a global.
+async fn mcp(rt: &Runtime, command: McpCommand) -> Result<MultiValue, Failure> {
+    let (cli, code) = match command {
+        McpCommand::Servers { json } => (
+            serde_json::json!({ "json": json }),
+            r#"local list = mcp.servers()
+               if __mcp_cli.json then return list end
+               local out = {}
+               for _, s in ipairs(list) do
+                 out[#out + 1] = s.name .. "  " .. s.layer .. "  " .. (s.description or s.error or "")
+               end
+               return table.concat(out, "\n")"#,
+        ),
+        McpCommand::Tools { server, json } => (
+            serde_json::json!({ "server": server, "json": json }),
+            r#"local tools = mcp.connect(__mcp_cli.server):tools()
+               if __mcp_cli.json then return tools end
+               local out = {}
+               for _, t in ipairs(tools) do out[#out + 1] = t.name .. "  " .. (t.description or "") end
+               return table.concat(out, "\n")"#,
+        ),
+        McpCommand::Call { server, tool, args } => {
+            let mut map = serde_json::Map::new();
+            for arg in args {
+                let Some((k, v)) = arg.split_once('=') else {
+                    return Err(Error::new("usage", format!("\"{arg}\" is not key=value"))
+                        .with_hint("timon mcp call SERVER TOOL name=mlua limit=5")
+                        .into());
+                };
+                let value = serde_json::from_str(v)
+                    .unwrap_or_else(|_| serde_json::Value::String(v.to_owned()));
+                map.insert(k.to_owned(), value);
+            }
+            (
+                serde_json::json!({ "server": server, "tool": tool, "args": map }),
+                "return mcp.connect(__mcp_cli.server):call(__mcp_cli.tool, __mcp_cli.args)",
+            )
+        }
+    };
+    rt.set_global("__mcp_cli", &cli)?;
+    rt.eval(code, "=mcp").await
 }
 
 /// `timon eval`'s input and output flags, after bb's `-i`, `-I`, `-o`, `-O` and `--stream`.
