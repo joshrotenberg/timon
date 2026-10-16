@@ -106,6 +106,10 @@ pub struct Request {
     pub native: Vec<String>,
     /// Leave no session behind: Claude's `--no-session-persistence`, Codex's `--ephemeral`.
     pub ephemeral: bool,
+    /// A short name for the run, for progress lines and records; never sent to the provider.
+    pub label: Option<String>,
+    /// The workflow phase the run belongs to; never sent to the provider.
+    pub phase: Option<String>,
 }
 
 impl Request {
@@ -128,6 +132,8 @@ impl Request {
             "native": self.native,
             "ephemeral": self.ephemeral,
             "events": self.events,
+            "label": self.label,
+            "phase": self.phase,
         })
     }
 
@@ -149,6 +155,8 @@ impl Request {
             events: false,
             native: Vec::new(),
             ephemeral: false,
+            label: None,
+            phase: None,
         }
     }
 }
@@ -209,6 +217,8 @@ pub struct Record {
     pub events: Option<Vec<Json>>,
     /// `{ path, branch, kept }` when the run used a worktree.
     pub worktree: Option<Json>,
+    pub label: Option<String>,
+    pub phase: Option<String>,
 }
 
 impl Record {
@@ -231,6 +241,8 @@ impl Record {
             ms,
             events: None,
             worktree: None,
+            label: request.label.clone(),
+            phase: request.phase.clone(),
         }
     }
 
@@ -259,6 +271,8 @@ impl Record {
             "ms": self.ms,
             "events": self.events,
             "worktree": self.worktree,
+            "label": self.label,
+            "phase": self.phase,
         })
     }
 }
@@ -333,6 +347,8 @@ pub async fn run_as(request: &Request, id: String) -> Record {
         ms: started.elapsed().as_millis() as u64,
         events: request.events.then(|| events::finish(events)),
         worktree: None,
+        label: request.label.clone(),
+        phase: request.phase.clone(),
     };
     match outcome {
         Ok(answer) => {

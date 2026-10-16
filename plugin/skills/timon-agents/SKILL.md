@@ -16,8 +16,8 @@ return r.text
 
 The record: `id`, `status` (`ok`, `failed`, `invalid`, `timeout`, `cancelled`), `answer`,
 `text`, `error`, `provider`, `model`, `session`, `usage` (`input_tokens`, `output_tokens`,
-`usd` for Claude), `ms`, `started_at`, `worktree` when one was used, and `events` with
-`events = true`.
+`usd` for Claude), `ms`, `started_at`, `label`, `phase`, `worktree` when one was used, and
+`events` with `events = true`.
 
 ## Ask for a shape, get it validated
 
@@ -63,6 +63,42 @@ return #reviews, #requested
 
 `limits.concurrency` in `init.lua` caps runs at once across the whole script (default 4).
 
+Take results as they finish with `par.first`, which cancels nothing:
+
+```lua
+local tasks = tbl.map({ "a", "b", "c" }, function(x)
+  return agent.spawn{ prompt = "Reply with the letter " .. x, label = x }
+end)
+local order = {}
+while #tasks > 0 do
+  local r = table.remove(tasks, par.first(tasks)):await()
+  order[#order + 1] = r.label
+end
+return #order
+```
+
+## Phases and progress
+
+`phase(name)` names what the current task is doing. Runs started in it, and in tasks it
+spawns, record the phase; `label` names one run:
+
+```lua
+phase("review")
+local reviews = par.map({ "src/a.rs", "src/b.rs" }, function(file)
+  return agent.run{ prompt = "Review " .. file, label = file, output = "review" }
+end, { limit = 2 })
+phase("summary")
+local summary = agent.run{ prompt = "Summarize: " .. json.encode(reviews), label = "summary" }
+return summary.phase  -- "summary"
+```
+
+```sh
+timon review.lua --progress text    # a line per run start and end, on stderr
+timon review.lua --progress json    # the same as JSON lines, for an agent to read
+```
+
+Progress is on by default only when stderr is a terminal.
+
 ## Author, review, follow up
 
 One provider writes, the other reviews read-only, findings go back to the author:
@@ -79,8 +115,9 @@ end
 return change.status, review.answer.verdict
 ```
 
-`agent.continue(record, prompt, spec)` resumes the run's session. `fork = SESSION` branches
-from any session instead (Claude only).
+`agent.continue(record, prompt, spec)` resumes the run's session with the earlier call's
+model, access, output, tools, system prompt and directory (its kept worktree, if any); `spec`
+overrides them. `fork = SESSION` branches from any session instead (Claude only).
 
 ## Isolate writes in a worktree
 

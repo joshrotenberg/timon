@@ -1139,3 +1139,98 @@ fn an_unknown_model_is_named_on_both_providers() {
         "The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account."
     );
 }
+
+// Label, phase and progress (#55)
+
+#[test]
+fn runs_record_their_label_and_phase() {
+    let s = Sandbox::new();
+    let r = s.json(
+        "agent.run{ prompt = 'x', label = 'pr-12', phase = 'review' }",
+        &[],
+    );
+    assert_eq!(
+        (r["label"].as_str(), r["phase"].as_str()),
+        (Some("pr-12"), Some("review"))
+    );
+    let o = s.cli(&["runs", "--json"], &[]);
+    let runs: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(runs[0]["label"], "pr-12");
+    assert_eq!(runs[0]["phase"], "review");
+}
+
+#[test]
+fn a_run_takes_its_task_phase_and_siblings_keep_their_own() {
+    let s = Sandbox::new();
+    let r = s.json(
+        "phase('plan')
+         local first = agent.run{ prompt = 'x' }
+         local a = spawn(function() phase('a'); sleep('20ms'); return agent.run{ prompt = 'a' } end)
+         local b = spawn(function() phase('b'); return agent.run{ prompt = 'b' } end)
+         local inherited = spawn(function() return agent.run{ prompt = 'c' } end)
+         local spawned = agent.spawn{ prompt = 'd' }
+         local inner = scope(function(sc)
+           phase('inner')
+           return sc:spawn(function() return agent.run{ prompt = 'e' } end):await()
+         end)
+         local asked = try(agent.ask, { prompt = 'f', label = 'asked' })
+         local explicit = agent.run{ prompt = 'g', phase = 'given' }
+         return {
+           first = first.phase, a = a:await().phase, b = b:await().phase,
+           inherited = inherited:await().phase, spawned = spawned:await().phase,
+           inner = inner.phase, explicit = explicit.phase, now = phase(),
+         }",
+        &[],
+    );
+    assert_eq!(
+        r,
+        serde_json::json!({ "first": "plan", "a": "a", "b": "b", "inherited": "plan",
+            "spawned": "plan", "inner": "inner", "explicit": "given", "now": "plan" })
+    );
+    let o = s.cli(&["runs", "--json", "--limit", "100"], &[]);
+    let runs: Vec<serde_json::Value> = serde_json::from_slice(&o.stdout).unwrap();
+    let asked = runs.iter().find(|r| r["label"] == "asked").unwrap();
+    assert_eq!(asked["phase"], "plan", "agent.ask takes the task's phase");
+}
+
+#[test]
+fn progress_lines_go_to_stderr_when_asked_for() {
+    let s = Sandbox::new();
+    let code = "phase('review')\nreturn agent.run{ prompt = 'x', label = 'pr-12' }.status";
+    let o = s.cli(&["--progress", "text", "eval", code], &[]);
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 2, "{stderr}");
+    assert!(
+        lines[0].starts_with("timon: r_") && lines[0].ends_with(" [review] pr-12 started: claude"),
+        "{stderr}"
+    );
+    assert!(
+        lines[1].contains(" [review] pr-12 ok in ") && lines[1].ends_with(", $0.0125"),
+        "{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout),
+        "ok\n",
+        "stdout stays data"
+    );
+
+    let o = s.cli(&["--progress", "json", "eval", code], &[]);
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&o.stderr)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(events[0]["event"], "run_started");
+    assert_eq!(events[1]["event"], "run_finished");
+    assert_eq!(
+        (events[1]["phase"].as_str(), events[1]["status"].as_str()),
+        (Some("review"), Some("ok"))
+    );
+
+    let o = s.cli(&["eval", code], &[]);
+    assert!(
+        o.stderr.is_empty(),
+        "quiet by default when stderr is not a terminal: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}

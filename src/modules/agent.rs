@@ -47,6 +47,8 @@ pub const DOC: Module = Module {
             Opt::new("worktree", "boolean", "run in a new git worktree; kept only if the run changed it"),
             Opt::new("ephemeral", "boolean", "leave no session behind for the provider to resume"),
             Opt::new("events", "boolean", "add record.events: the agent's text, reasoning, tool calls and tool results"),
+            Opt::new("label", "string", "a short name for progress lines and the record"),
+            Opt::new("phase", "string", "the workflow phase; default: the calling task's phase()"),
         ]),
         Func::new(
             "ask",
@@ -91,6 +93,81 @@ struct Spending {
     max_usd: Option<f64>,
     runs: Cell<u64>,
     usd: Cell<f64>,
+}
+
+/// How agent runs report progress on stderr, from `--progress`: a line when each run starts
+/// and when it ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Progress {
+    Text,
+    Json,
+    #[default]
+    Off,
+}
+
+fn progress(lua: &Lua) -> Progress {
+    lua.app_data_ref::<Progress>()
+        .map(|p| *p)
+        .unwrap_or_default()
+}
+
+/// ` [phase] label`, as much of it as the run has.
+fn tag(request: &Request) -> String {
+    match (&request.phase, &request.label) {
+        (Some(p), Some(l)) => format!(" [{p}] {l}"),
+        (Some(p), None) => format!(" [{p}]"),
+        (None, Some(l)) => format!(" {l}"),
+        (None, None) => String::new(),
+    }
+}
+
+fn report_start(mode: Progress, id: &str, request: &Request) {
+    match mode {
+        Progress::Text => eprintln!(
+            "timon: {id}{} started: {}{}",
+            tag(request),
+            request.provider.name(),
+            request
+                .model
+                .as_deref()
+                .map(|m| format!(" {m}"))
+                .unwrap_or_default()
+        ),
+        Progress::Json => eprintln!(
+            "{}",
+            serde_json::json!({
+                "event": "run_started", "id": id, "label": request.label, "phase": request.phase,
+                "provider": request.provider.name(), "model": request.model,
+            })
+        ),
+        Progress::Off => {}
+    }
+}
+
+fn report_end(mode: Progress, record: &Record, request: &Request) {
+    match mode {
+        Progress::Text => eprintln!(
+            "timon: {}{} {} in {:.1} s{}",
+            record.id,
+            tag(request),
+            record.status.name(),
+            record.ms as f64 / 1000.0,
+            record
+                .usage
+                .usd
+                .map(|u| format!(", ${u:.4}"))
+                .unwrap_or_default()
+        ),
+        Progress::Json => eprintln!(
+            "{}",
+            serde_json::json!({
+                "event": "run_finished", "id": record.id, "label": request.label,
+                "phase": request.phase, "status": record.status.name(), "ms": record.ms,
+                "usd": record.usage.usd,
+            })
+        ),
+        Progress::Off => {}
+    }
 }
 
 /// Limits given on the command line; they win over init.lua.
@@ -188,9 +265,31 @@ fn spent(lua: &Lua, usd: Option<f64>) {
 }
 
 const GLUE: &str = r#"
-local run, spawn, fail, spec_of = ...
+local run_rust, ask_rust, spawn, fail, spec_of, phase_of = ...
 local type, error, pairs = type, error, pairs
 local agent = {}
+
+-- A run without a phase takes the calling task's.
+local function with_phase(spec)
+  if type(spec) ~= "table" or spec.phase ~= nil then return spec end
+  local p = phase_of()
+  if p == nil then return spec end
+  local s = {}
+  for k, v in pairs(spec) do s[k] = v end
+  s.phase = p
+  return s
+end
+
+local function run(spec)
+  return run_rust(with_phase(spec))
+end
+
+agent.run = run
+
+function agent.ask(arg)
+  if type(arg) == "string" then arg = { prompt = arg } end
+  return ask_rust(with_phase(arg))
+end
 
 -- Fields of the earlier call that do not carry over to a continuation.
 local fresh = { prompt = true, resume = true, fork = true, worktree = true }
@@ -342,6 +441,8 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
         .raw_get::<Option<bool>>("ephemeral")?
         .unwrap_or(false);
     req.events = fields.raw_get::<Option<bool>>("events")?.unwrap_or(false);
+    req.label = get("label")?;
+    req.phase = get("phase")?;
     if let Some(tools) = fields.raw_get::<Option<Table>>("tools")? {
         req.tools = Some(string_list(&tools, "tools")?);
     }
@@ -407,6 +508,7 @@ struct Settle {
     worktree: Option<agent::worktree::Worktree>,
     started: std::time::Instant,
     done: bool,
+    progress: Progress,
 }
 
 impl Settle {
@@ -422,6 +524,7 @@ impl Settle {
         {
             eprintln!("timon: the run record was not saved: {err}");
         }
+        report_end(self.progress, record, &self.request);
     }
 }
 
@@ -496,7 +599,9 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
         worktree,
         started: std::time::Instant::now(),
         done: false,
+        progress: progress(&lua),
     };
+    report_start(settle.progress, &id, &request);
     let mut record = agent::run_as(&request, id).await;
     settle.finish(&mut record);
     spent(&lua, record.usage.usd);
@@ -508,62 +613,52 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     let lua = installer.lua();
     let module = installer.module(&DOC)?;
-    let run_fn = installer.function(
-        &DOC,
-        Some(&module),
-        "run",
-        lua.create_async_function(|lua, spec: Table| run(lua, spec))?,
-    )?;
-    installer.function(
-        &DOC,
-        Some(&module),
-        "ask",
-        lua.create_async_function(|lua, arg: Value| async move {
-            let spec = match arg {
-                Value::String(prompt) => {
-                    let t = lua.create_table()?;
-                    t.raw_set("prompt", prompt)?;
-                    t
-                }
-                Value::Table(t) => t,
-                other => {
-                    return Err(Error::new(
-                        "bad_argument",
-                        format!(
-                            "agent.ask takes a prompt or a spec, not a {}",
-                            other.type_name()
-                        ),
-                    )
-                    .into());
-                }
-            };
-            let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
-            let record = run(lua.clone(), spec).await?;
-            let status: String = record.raw_get("status")?;
-            if status == Status::Ok.name() {
-                return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });
+    let run_fn = installer.wrap(lua.create_async_function(|lua, spec: Table| run(lua, spec))?)?;
+    let ask_fn = installer.wrap(lua.create_async_function(|lua, arg: Value| async move {
+        let spec = match arg {
+            Value::String(prompt) => {
+                let t = lua.create_table()?;
+                t.raw_set("prompt", prompt)?;
+                t
             }
-            let cause: Option<Table> = record.raw_get("error")?;
-            let message = cause
-                .as_ref()
-                .and_then(|e| e.raw_get::<String>("message").ok())
-                .unwrap_or_default();
-            let hint = cause
-                .as_ref()
-                .and_then(|e| e.raw_get::<Option<String>>("hint").ok().flatten());
-            let provider: String = record.raw_get("provider")?;
-            let mut err = Error::new(
-                "agent_failed",
-                format!("{provider} run {status}: {message}"),
-            );
-            if let Some(hint) = hint {
-                err = err.with_hint(hint);
+            Value::Table(t) => t,
+            other => {
+                return Err(Error::new(
+                    "bad_argument",
+                    format!(
+                        "agent.ask takes a prompt or a spec, not a {}",
+                        other.type_name()
+                    ),
+                )
+                .into());
             }
-            let table = error::to_table(&lua, &err)?;
-            table.raw_set("data", record)?;
-            Err(error::raise(&lua, Value::Table(table)))
-        })?,
-    )?;
+        };
+        let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
+        let record = run(lua.clone(), spec).await?;
+        let status: String = record.raw_get("status")?;
+        if status == Status::Ok.name() {
+            return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });
+        }
+        let cause: Option<Table> = record.raw_get("error")?;
+        let message = cause
+            .as_ref()
+            .and_then(|e| e.raw_get::<String>("message").ok())
+            .unwrap_or_default();
+        let hint = cause
+            .as_ref()
+            .and_then(|e| e.raw_get::<Option<String>>("hint").ok().flatten());
+        let provider: String = record.raw_get("provider")?;
+        let mut err = Error::new(
+            "agent_failed",
+            format!("{provider} run {status}: {message}"),
+        );
+        if let Some(hint) = hint {
+            err = err.with_hint(hint);
+        }
+        let table = error::to_table(&lua, &err)?;
+        table.raw_set("data", record)?;
+        Err(error::raise(&lua, Value::Table(table)))
+    })?)?;
     installer.function(
         &DOC,
         Some(&module),
@@ -592,16 +687,19 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
         })?,
     )?;
     let spawn: Function = lua.globals().raw_get("spawn")?;
+    let phase_of: Function = lua.named_registry_value(concurrency::PHASE_OF)?;
     let helpers: Table = lua.load(GLUE).set_name(INTERNAL_CHUNK).call((
         run_fn,
+        ask_fn,
         spawn,
         fail_function(lua)?,
         lua.create_function(|lua, record: Value| match record {
             Value::Table(t) => run_specs(lua)?.raw_get::<Value>(t),
             _ => Ok(Value::Nil),
         })?,
+        phase_of,
     ))?;
-    for name in ["spawn", "continue"] {
+    for name in ["run", "ask", "spawn", "continue"] {
         let f: Function = helpers.raw_get(name)?;
         installer.lua_function(&DOC, Some(&module), name, f)?;
     }

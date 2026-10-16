@@ -56,6 +56,12 @@ pub const GLOBALS_DOC: Module = Module {
             "local h = spawn(fs.read, \"big.json\")\n-- other work\nlocal text = h:await()",
         ),
         Func::new(
+            "phase",
+            "phase(name) -> previous | phase() -> current",
+            "Names the phase of the current task: agent runs started in it record the phase and show it in progress lines. Tasks inherit the phase of the task that spawned them; s:spawn takes the phase of the scope's function. phase(nil) clears it.",
+            "phase(\"review\")\nlocal reviews = par.map(prs, review_one)\nphase(\"verify\")",
+        ),
+        Func::new(
             "sleep",
             "sleep(duration)",
             "Waits without blocking other tasks. A number is seconds; a string takes ms, s, m or h.",

@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use mlua::MultiValue;
 use timon::dirs::Dirs;
 use timon::layers::{self, Layers};
+use timon::modules::agent::Progress;
 use timon::{Error, Failure, Runtime};
 
 #[derive(Parser)]
@@ -26,6 +27,9 @@ struct Cli {
     /// Most USD this invocation's Claude runs may spend
     #[arg(long, global = true, value_name = "USD")]
     max_usd: Option<f64>,
+    /// Agent run progress on stderr; default: text when stderr is a terminal, else none
+    #[arg(long, global = true, value_parser = ["text", "json", "none"])]
+    progress: Option<String>,
 }
 
 // Built once per process from the command line, so a large variant costs nothing.
@@ -373,6 +377,13 @@ async fn run(cli: Cli) -> ExitCode {
         Err(failure) => return fail(&failure),
     };
     rt.set_limits(cli.max_runs, cli.max_usd);
+    rt.set_progress(match cli.progress.as_deref() {
+        Some("text") => Progress::Text,
+        Some("json") => Progress::Json,
+        Some(_) => Progress::Off,
+        None if std::io::stderr().is_terminal() => Progress::Text,
+        None => Progress::Off,
+    });
     let command = match cli.command {
         Command::Sessions(command) => return sessions(&rt, command).await,
         command => command,
