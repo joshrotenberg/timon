@@ -30,6 +30,7 @@ pub const FIELDS: &[&str] = &[
     "native",
     "ephemeral",
     "events",
+    "idempotent",
 ];
 
 /// One definition file.

@@ -101,12 +101,37 @@ impl Worktree {
         Ok(false)
     }
 
-    /// What the record says about the worktree.
+    /// What the record says about the worktree. A kept one also records its head commit and
+    /// a hash of its uncommitted state, so a resume can tell whether it still holds what the
+    /// run left.
     pub fn to_json(&self, kept: bool) -> Json {
-        json!({
+        let mut out = json!({
             "path": self.path,
             "branch": self.branch,
             "kept": kept,
-        })
+        });
+        if kept && let Some((head, state)) = fingerprint(&self.path) {
+            out["head"] = json!(head);
+            out["state"] = json!(state);
+        }
+        out
     }
+}
+
+/// The head commit of the worktree at `path`, and a sha256 of its uncommitted changes:
+/// `git status`, the diff against HEAD, and the contents of untracked files.
+pub fn fingerprint(path: &Path) -> Option<(String, String)> {
+    use sha2::{Digest, Sha256};
+    let head = git(path, &["rev-parse", "HEAD"]).ok()?;
+    let status = git(path, &["status", "--porcelain=v1", "-uall"]).ok()?;
+    let diff = git(path, &["diff", "HEAD", "--binary"]).ok()?;
+    let mut hash = Sha256::new();
+    hash.update(status.as_bytes());
+    hash.update(diff.as_bytes());
+    for untracked in status.lines().filter_map(|l| l.strip_prefix("?? ")) {
+        if let Ok(bytes) = std::fs::read(path.join(untracked)) {
+            hash.update(&bytes);
+        }
+    }
+    Some((head, hex::encode(hash.finalize())))
 }

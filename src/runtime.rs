@@ -1,10 +1,12 @@
 //! The runtime: one Lua state, with user code run as coroutines on the current tokio runtime.
 
 use std::path::Path;
+use std::rc::Rc;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use crate::error::{self, Error, Failure};
+use crate::scripts::ScriptRun;
 use crate::strict;
 
 /// Chunk name of timon's own Lua glue, which tracebacks and strict globals skip.
@@ -213,12 +215,36 @@ impl Runtime {
     /// Runs a script file with `args` as the `arg` table and as `...`. A `.fnl` file is
     /// compiled as Fennel first.
     pub async fn run_script(&self, path: &Path, args: &[String]) -> Result<MultiValue, Failure> {
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.run_named_script(path, args, &name, None).await
+    }
+
+    /// Resumes the next script run from an earlier one: see [`crate::scripts`].
+    pub fn set_resume(&self, id: Option<String>) {
+        if let Some(id) = id {
+            self.lua.set_app_data(Resume(id));
+        }
+    }
+
+    /// Runs a script and records the run under `state/scripts/` (see [`crate::scripts`]), with
+    /// `name` and the `layer` it came from.
+    pub async fn run_named_script(
+        &self,
+        path: &Path,
+        args: &[String],
+        name: &str,
+        layer: Option<&str>,
+    ) -> Result<MultiValue, Failure> {
         let source = std::fs::read_to_string(path).map_err(|e| {
             Failure::from(Error::new(
                 "io",
                 format!("cannot read {}: {e}", path.display()),
             ))
         })?;
+        let record = self.begin_script(path, args, name, layer, &source)?;
         let name = format!("@{}", path.display());
         let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
             crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(&source), &name)?
@@ -238,8 +264,153 @@ impl Runtime {
                 .collect()
         };
         let args = script_args().map_err(|e| Failure::from(Error::from_lua(&e)))?;
-        self.call(f, args).await
+        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+        let describe = self.lua.create_function(describe_script).map_err(lua_err)?;
+        let driver: Function = self
+            .lua
+            .load(SCRIPT_DRIVER)
+            .set_name(INTERNAL_CHUNK)
+            .call((f, describe))
+            .map_err(lua_err)?;
+        let result = self.call(driver, args).await;
+        if let Some(record) = record {
+            match &result {
+                Ok(_) => record.finish("ok", None),
+                Err(failure) => record.finish(
+                    "failed",
+                    Some(serde_json::json!({
+                        "kind": failure.error.kind,
+                        "message": failure.error.message,
+                        "hint": failure.error.hint,
+                    })),
+                ),
+            }
+            self.lua.remove_app_data::<Rc<ScriptRun>>();
+        }
+        result
     }
+
+    /// Starts the record of a script run, when there is a state directory to keep it in.
+    fn begin_script(
+        &self,
+        path: &Path,
+        args: &[String],
+        name: &str,
+        layer: Option<&str>,
+        source: &str,
+    ) -> Result<Option<Rc<ScriptRun>>, Failure> {
+        let Some(state) = self
+            .lua
+            .named_registry_value::<Option<String>>(crate::modules::agent::STATE_DIR)
+            .map_err(|e| Failure::from(Error::from_lua(&e)))?
+        else {
+            return Ok(None);
+        };
+        let request = serde_json::json!({
+            "name": name,
+            "layer": layer,
+            "path": path,
+            "source_sha256": crate::scripts::source_hash(source),
+            "args": args,
+            "trigger": "manual",
+            "cwd": std::env::current_dir().ok(),
+        });
+        let resume = self.lua.app_data_ref::<Resume>().map(|r| r.0.clone());
+        let run = Rc::new(ScriptRun::begin(
+            Path::new(&state),
+            request,
+            resume.as_deref(),
+        )?);
+        self.lua.set_app_data(run.clone());
+        Ok(Some(run))
+    }
+}
+
+/// The script run to resume from, given on the command line.
+struct Resume(String);
+
+/// Runs a script's chunk. A chunk that returns `{ run = function(...) end, ... }` is a script
+/// with metadata: its `description`, `phases` and `budget` go into the run's record, and
+/// `run` is called with the arguments, inside a scope with `budget` when there is one.
+const SCRIPT_DRIVER: &str = r#"
+local chunk, describe = ...
+local pack, unpack, type = table.pack, table.unpack, type
+return function(...)
+  local args = pack(...)
+  local out = pack(chunk(...))
+  local spec = out[1]
+  if out.n == 1 and type(spec) == "table" and type(spec.run) == "function" then
+    describe(spec)
+    local function run() return spec.run(unpack(args, 1, args.n)) end
+    if spec.budget ~= nil then
+      return scope(run, { budget = spec.budget })
+    end
+    return run()
+  end
+  return unpack(out, 1, out.n)
+end
+"#;
+
+/// The fields a script with metadata may return, as a type expression.
+const SCRIPT_SHAPE: &str = "{ description: string?, phases: string[]?, budget: { runs: integer?, usd: number? }?, run: function }";
+
+/// Checks a script's metadata and adds it to the script run's record.
+fn describe_script(lua: &Lua, spec: Table) -> mlua::Result<()> {
+    use crate::modules::schema::Problem;
+    let shape = crate::types::parse(SCRIPT_SHAPE).map_err(|e| Error::new("internal", e))?;
+    if let Some(problem) = shape
+        .check_value(&Value::Table(spec.clone()))
+        .into_iter()
+        .next()
+    {
+        let at = if problem.path.is_empty() {
+            String::new()
+        } else {
+            format!(" \"{}\"", problem.path)
+        };
+        let err = match problem.problem {
+            Problem::Unknown { key, .. } if key == "params" => Error::new(
+                "unsupported",
+                "a script's params are not built yet; read arguments from arg",
+            ),
+            Problem::Unknown { key, close } => {
+                let err = Error::new("bad_script", format!("unknown script field \"{key}\""));
+                match close {
+                    Some(c) => err.with_hint(format!("did you mean \"{c}\"?")),
+                    None => {
+                        err.with_hint("a script may return description, phases, budget and run")
+                    }
+                }
+            }
+            Problem::Wrong { expected, got } => Error::new(
+                "bad_script",
+                format!("script field{at} must be {expected}, got {got}"),
+            ),
+            Problem::NotOneOf { got, .. } => Error::new(
+                "bad_script",
+                format!("script field{at} has an unknown value {got}"),
+            ),
+            Problem::Missing { name } => Error::new(
+                "bad_script",
+                format!("a script with metadata needs \"{name}\""),
+            ),
+        };
+        return Err(err.into());
+    }
+    if let Some(run) = lua.app_data_ref::<Rc<ScriptRun>>() {
+        let mut metadata = serde_json::Map::new();
+        for key in ["description", "phases", "budget"] {
+            let value: Value = spec.raw_get(key)?;
+            if !value.is_nil() {
+                metadata.insert(
+                    key.to_owned(),
+                    crate::value::to_json(&value, crate::value::Mode::Display)?,
+                );
+            }
+        }
+        run.describe(serde_json::Value::Object(metadata))?;
+    }
+    Ok(())
 }
 
 /// Comments out a leading `#!` line, keeping line numbers.

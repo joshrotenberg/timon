@@ -390,6 +390,13 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   `reserve = true` takes a scope's runs from the enclosing budget up front and gives back the
   unused ones when it ends. Codex reports tokens only, so a USD budget counts Claude runs and
   says so.
+- **Script runs and resume.** `timon run NAME` and `timon FILE` are script runs, recorded
+  with their source's sha256 and totals; their agent runs record `parent`. Each agent run in
+  a script gets a key: the sha256 of what decides its answer, and how many identical requests
+  came before it in the script run. `--resume ID` reruns the script, and a run whose key
+  matches a reusable run of `ID` returns that record (`cached = true`). Reusable means `ok`
+  and read-only, `idempotent = true`, or a write in a kept worktree still at the head and
+  state the record saw.
 - **Orphans.** Each run's record names its provider's pid and process group. If timon dies,
   the next timon command settles the run as `interrupted` and stops the provider, after
   checking that the pid still runs claude or codex and leads its group. On Linux the kernel
@@ -606,6 +613,8 @@ rusqlite with FTS5 for text search.
 ├── trusted                  trusted project roots, one per line
 ├── runs/index.jsonl         one line per agent run
 ├── runs/<id>/               request.json, result.json per agent run
+├── scripts/index.jsonl      one line per script run
+├── scripts/<id>/            request.json, result.json, runs.jsonl per script run
 └── worktrees/<id>/          worktrees for `worktree = true` runs
 ~/.cache/timon/              $XDG_CACHE_HOME/timon
 ├── index.db                 the session index; safe to delete, rebuilt on the next search

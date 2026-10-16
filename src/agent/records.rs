@@ -16,7 +16,7 @@ use crate::redact::redact_value;
 const SNIPPET: usize = 120;
 
 /// Whether a process with this pid exists.
-fn alive(pid: u64) -> bool {
+pub fn alive(pid: u64) -> bool {
     #[cfg(unix)]
     {
         let Ok(pid) = i32::try_from(pid) else {
@@ -179,6 +179,8 @@ impl Store {
             "agent": agent,
             "label": request.label,
             "phase": request.phase,
+            "parent": request.parent,
+            "key": request.key,
             "status": "running",
             "access": request.access.name(),
             "pid": std::process::id(),
@@ -341,6 +343,9 @@ impl Store {
             "agent": agent,
             "label": request.label,
             "phase": request.phase,
+            "parent": request.parent,
+            "key": request.key,
+            "contract": request.contract,
             "access": request.access.name(),
             "status": record.status.name(),
             "session": record.session,
@@ -356,10 +361,21 @@ impl Store {
     /// Index entries, newest first, started at or after `since`, at most `limit`; each run's
     /// latest state, after settling runs whose process is gone.
     pub fn list(&self, since: Option<DateTime<Utc>>, limit: usize) -> Result<Vec<Json>, Error> {
+        self.list_in(since, None, limit)
+    }
+
+    /// [`Store::list`], only the runs of script run `parent` when one is given.
+    pub fn list_in(
+        &self,
+        since: Option<DateTime<Utc>>,
+        parent: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Json>, Error> {
         self.reconcile()?;
         let mut entries: Vec<Json> = self
             .latest()?
             .into_iter()
+            .filter(|entry| parent.is_none_or(|p| entry["parent"].as_str() == Some(p)))
             .filter(|entry| match since {
                 None => true,
                 Some(since) => entry["started_at"]

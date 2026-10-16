@@ -62,11 +62,11 @@ fn help_describes_modules_and_functions() {
     assert!(encode.contains("Options:\n  pretty  boolean\n            indent with two spaces"));
     let run = one("help(agent.run)");
     assert!(
-        run.contains("  access     \"read\" | \"write\" | \"full\"\n"),
+        run.contains("  access      \"read\" | \"write\" | \"full\"\n"),
         "{run}"
     );
     assert!(
-        run.contains("  budget     { usd: number?, turns: integer? }\n"),
+        run.contains("  budget      { usd: number?, turns: integer? }\n"),
         "{run}"
     );
     assert!(encode.contains("Example:"));

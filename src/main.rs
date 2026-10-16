@@ -30,6 +30,10 @@ struct Cli {
     /// Agent run progress on stderr; default: text when stderr is a terminal, else none
     #[arg(long, global = true, value_parser = ["text", "json", "none"])]
     progress: Option<String>,
+    /// Run the script again, reusing the agent runs of this earlier script run that can be
+    /// reused (read-only, idempotent, or in an unchanged worktree)
+    #[arg(long, global = true, value_name = "SCRIPT_RUN")]
+    resume: Option<String>,
 }
 
 // Built once per process from the command line, so a large variant costs nothing.
@@ -94,6 +98,9 @@ enum Command {
         /// Most runs to list
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// List script runs instead of agent runs
+        #[arg(long)]
+        scripts: bool,
         #[arg(long)]
         json: bool,
     },
@@ -362,8 +369,14 @@ async fn run(cli: Cli) -> ExitCode {
             command,
             since,
             limit,
+            scripts,
             json,
-        } => return runs(&layers, command, since, limit, json),
+        } => {
+            if scripts {
+                return script_runs(&layers, limit, json);
+            }
+            return runs(&layers, command, since, limit, json);
+        }
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
         Command::Eval { .. }
         | Command::Run { .. }
@@ -377,6 +390,7 @@ async fn run(cli: Cli) -> ExitCode {
         Err(failure) => return fail(&failure),
     };
     rt.set_limits(cli.max_runs, cli.max_usd);
+    rt.set_resume(cli.resume.clone());
     rt.set_progress(match cli.progress.as_deref() {
         Some("text") => Progress::Text,
         Some("json") => Progress::Json,
@@ -391,7 +405,10 @@ async fn run(cli: Cli) -> ExitCode {
     let result = match command {
         Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
         Command::Run { name, args } => match layers.script(&name) {
-            Ok(script) => rt.run_script(&script.path, &args).await,
+            Ok(script) => {
+                rt.run_named_script(&script.path, &args, &script.name, Some(script.layer.name()))
+                    .await
+            }
             Err(err) => Err(err.into()),
         },
         Command::Script(argv) => script(&rt, argv).await,
@@ -869,7 +886,12 @@ fn runs(
 ) -> ExitCode {
     let store = timon::agent::records::Store::new(&layers.dirs.state);
     if let Some(RunsCommand::Show { id }) = command {
-        return match store.show(&id) {
+        let shown = if id.starts_with("s_") {
+            timon::scripts::show(&layers.dirs.state, &id)
+        } else {
+            store.show(&id)
+        };
+        return match shown {
             Ok(run) => {
                 println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());
                 ExitCode::SUCCESS
@@ -907,6 +929,31 @@ fn runs(
             e["ms"].as_u64().unwrap_or(0),
             usd,
             e["prompt"].as_str().unwrap_or(""),
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn script_runs(layers: &Layers, limit: usize, json: bool) -> ExitCode {
+    let entries = timon::scripts::list(&layers.dirs.state, limit);
+    if json {
+        println!("{}", serde_json::Value::Array(entries));
+        return ExitCode::SUCCESS;
+    }
+    for e in &entries {
+        let resumed = e["resumed_from"]
+            .as_str()
+            .map(|r| format!("  (resumed {r})"))
+            .unwrap_or_default();
+        println!(
+            "{}  {}  {:11}  {:>3} runs, {} cached  ${:.4}  {}{resumed}",
+            e["id"].as_str().unwrap_or("?"),
+            e["started_at"].as_str().unwrap_or("?"),
+            e["status"].as_str().unwrap_or("?"),
+            e["runs"].as_u64().unwrap_or(0),
+            e["cached"].as_u64().unwrap_or(0),
+            e["usd"].as_f64().unwrap_or(0.0),
+            e["name"].as_str().unwrap_or(""),
         );
     }
     ExitCode::SUCCESS

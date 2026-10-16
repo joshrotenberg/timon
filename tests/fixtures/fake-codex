@@ -46,6 +46,8 @@ if "resume" in args:
     if named:
         thread = named[0]
 mode = os.environ.get("FAKE_MODE", "ok")
+if os.environ.get("FAKE_FAIL_ON") and os.environ["FAKE_FAIL_ON"] in prompt:
+    mode = "turn_failed"
 emit = lambda event: print(json.dumps(event), flush=True)
 
 if os.environ.get("FAKE_REPLAY"):
