@@ -607,6 +607,156 @@ The Options section of a help text for declared options: flags, types, docs and 
 print(cli.help({ base = { type = "string", default = "main", doc = "the branch" } }))
 ```
 
+## toml
+
+TOML: decode and encode, and edits that keep a file's comments and formatting.
+
+### `toml.decode(text) -> table`
+
+Parses TOML into tables. Dates and times become strings.
+
+```lua
+local cargo = toml.decode('[package]\nname = "timon"\nversion = "0.1.0"')
+return cargo.package.version  -- 0.1.0
+```
+
+### `toml.encode(table) -> string`
+
+Writes a table as TOML. Nested tables become sections; nil and json.null have no TOML form.
+
+```lua
+return toml.encode({ package = { name = "x", version = "1.0.0" } })
+```
+
+### `toml.set(text, key, value) -> text, old`
+
+Sets one value in TOML text and returns the new text and the old value. Comments, order and spacing outside the value stay as they were. key is dotted ("package.version") or a list of parts ({ "dependencies", "serde.json" }); missing tables are created; a nil value removes the key.
+
+```lua
+local text = '[package]\nversion = "0.1.0" # bumped by release\n'
+local new, old = toml.set(text, "package.version", "0.2.0")
+return new, old  -- the comment stays; old is 0.1.0
+```
+
+### `toml.edit(path, key, value) -> old`
+
+toml.set on a file: reads it, sets the value and writes it back, keeping everything else byte for byte. Returns the old value.
+
+```lua
+local old = toml.edit("Cargo.toml", "package.version", "0.2.0")
+```
+
+## yaml
+
+YAML 1.2: decode and encode.
+
+### `yaml.decode(text, { all }) -> value`
+
+Parses YAML. Text with several documents (---) needs all = true, which returns a list of them. An alias reads as its anchor's value.
+
+| Option | Type | |
+|---|---|---|
+| `all` | `boolean` | return every document as a list |
+
+```lua
+local ci = yaml.decode("on: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n")
+return ci.jobs.test["runs-on"]  -- ubuntu-latest
+```
+
+### `yaml.encode(value) -> string`
+
+Writes a value as YAML, quoting strings that would read back as something else.
+
+```lua
+return yaml.encode({ name = "timon", tags = json.array{ "lua", "yes" } })
+```
+
+## csv
+
+CSV: rows as tables keyed by the header, or as lists.
+
+### `csv.decode(text, { header, separator }) -> rows`
+
+Parses CSV. With a header (the default), each row is a table keyed by the header's names; without, a list of fields. Fields are strings.
+
+| Option | Type | |
+|---|---|---|
+| `header` | `boolean` | the first row names the fields (default true) |
+| `separator` | `string` | one character (default ",") |
+
+```lua
+local rows = csv.decode("name,lines\nmain.rs,120\nlib.rs,80\n")
+return rows[2].name, tonumber(rows[2].lines)  -- lib.rs, 80
+```
+
+### `csv.encode(rows, { columns, header, separator }) -> string`
+
+Writes rows: tables keyed by column name, or lists. columns sets which names and their order (default: every name, sorted); header = false leaves the header row out.
+
+| Option | Type | |
+|---|---|---|
+| `columns` | `string[]` | the column names, in order |
+| `header` | `boolean` | write a header row (default true) |
+| `separator` | `string` | one character (default ",") |
+
+```lua
+return csv.encode({ { name = "a", n = 1 }, { name = "b,c", n = 2 } }, { columns = { "name", "n" } })
+```
+
+## markdown
+
+Markdown structure: headings and fenced code blocks, with line numbers.
+
+### `markdown.headings(text) -> { { level, text, line } }`
+
+The headings, in order. Lines that look like headings inside code blocks are not headings.
+
+```lua
+local h = markdown.headings("# timon\n\n```sh\n# not a heading\n```\n## Install\n")
+return #h, h[2].text, h[2].line  -- 2, Install, 6
+```
+
+### `markdown.code(text, { lang }) -> { { lang, code, line } }`
+
+The fenced code blocks, in order: the first word of the info string, the code, and the line the fence starts on.
+
+| Option | Type | |
+|---|---|---|
+| `lang` | `string` | only blocks in this language |
+
+```lua
+local blocks = markdown.code("text\n```lua\nreturn 1\n```\n", { lang = "lua" })
+return blocks[1].code  -- return 1
+```
+
+## term
+
+The terminal: whether there is one, its width, and color that appears only on one.
+
+### `term.tty(stream) -> boolean`
+
+Whether "stdout" (the default), "stderr" or "stdin" is a terminal.
+
+```lua
+if not term.tty() then log.info("output is piped") end
+```
+
+### `term.color(name, text) -> string`
+
+text in a color or style: red, green, yellow, blue, magenta, cyan, gray, bold, dim. Plain text when stdout is not a terminal or NO_COLOR is set.
+
+```lua
+print(term.color("green", "all gates pass"))
+```
+
+### `term.width() -> integer | nil`
+
+The terminal's width in columns, from the terminal or COLUMNS; nil when there is no terminal.
+
+```lua
+local w = term.width() or 80
+```
+
 ## task
 
 Tasks from inside a task: run another one with its options.

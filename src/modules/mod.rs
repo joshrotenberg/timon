@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod cli;
 pub mod concurrency;
+pub mod formats;
 pub mod fs;
 pub mod json;
 pub mod log;
@@ -202,6 +203,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     concurrency::install(&installer)?;
     proc::install(&installer)?;
     cli::install(&installer)?;
+    formats::install(&installer)?;
     crate::tasks::install(&installer)?;
     schema::install(&installer)?;
     agent::install(&installer)?;

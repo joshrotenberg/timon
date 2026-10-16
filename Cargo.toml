@@ -36,6 +36,11 @@ hex = "0.4.3"
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["rt", "macros", "time", "signal", "sync", "process", "io-util"] }
 zstd = "0.14.2"
+toml = "1.1.8"
+toml_edit = "0.25.17"
+csv = "1.4.0"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+saphyr = "0.2.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

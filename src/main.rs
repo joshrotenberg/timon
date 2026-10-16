@@ -63,6 +63,21 @@ enum Command {
         /// Treat CODE as Fennel
         #[arg(long)]
         fnl: bool,
+        /// Bind `input` to the lines of stdin, as a list
+        #[arg(short = 'i', long, conflicts_with = "in_json")]
+        in_lines: bool,
+        /// Bind `input` to the JSON values on stdin (one document, or JSON lines), as a list
+        #[arg(short = 'I', long)]
+        in_json: bool,
+        /// Print the returned list one element per line: strings as they are, the rest as JSON
+        #[arg(short = 'o', long, conflicts_with = "out_json")]
+        out_lines: bool,
+        /// Print the returned list as JSON lines
+        #[arg(short = 'O', long)]
+        out_json: bool,
+        /// With -i or -I, run once per line or value, with `input` bound to it; nil prints nothing
+        #[arg(long)]
+        stream: bool,
     },
     /// Run a task after its dependencies, even one a timon command shares a name with
     #[command(alias = "run")]
@@ -448,7 +463,35 @@ async fn run(cli: Cli) -> ExitCode {
         command => command,
     };
     let result = match command {
-        Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
+        Command::Eval {
+            code,
+            file,
+            fnl,
+            in_lines,
+            in_json,
+            out_lines,
+            out_json,
+            stream,
+        } if in_lines || in_json || out_lines || out_json || stream => {
+            let io = EvalIo {
+                in_lines,
+                in_json,
+                out_lines,
+                out_json,
+                stream,
+            };
+            return match (code, file) {
+                (Some(code), None) => eval_io(&rt, &code, fnl, io).await,
+                _ => fail(
+                    &Error::new("usage", "the input flags take the code as an argument")
+                        .with_hint("timon eval -i 'return #input' < file")
+                        .into(),
+                ),
+            };
+        }
+        Command::Eval {
+            code, file, fnl, ..
+        } => eval(&rt, code, file, fnl).await,
         Command::Task { name, args } => match catalog(&rt, &layers) {
             Ok(catalog) => timon::tasks::run(&rt, catalog, &name, &args, how).await,
             Err(failure) => Err(failure),
@@ -510,6 +553,124 @@ async fn eval(
     } else {
         runtime.eval(&source, name).await
     }
+}
+
+/// `timon eval`'s input and output flags, after bb's `-i`, `-I`, `-o`, `-O` and `--stream`.
+#[derive(Clone, Copy)]
+struct EvalIo {
+    in_lines: bool,
+    in_json: bool,
+    out_lines: bool,
+    out_json: bool,
+    stream: bool,
+}
+
+/// `timon eval` with input bound from stdin or output printed as lines.
+async fn eval_io(rt: &Runtime, code: &str, fnl: bool, io: EvalIo) -> ExitCode {
+    match eval_io_inner(rt, code, fnl, io).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(failure) => fail(&failure),
+    }
+}
+
+async fn eval_io_inner(rt: &Runtime, code: &str, fnl: bool, io: EvalIo) -> Result<(), Failure> {
+    use std::io::BufRead;
+    if code == "-" && (io.in_lines || io.in_json) {
+        return Err(Error::new(
+            "usage",
+            "stdin is the input, so the code cannot come from it",
+        )
+        .with_hint("give the code as an argument")
+        .into());
+    }
+    if io.stream && !(io.in_lines || io.in_json) {
+        return Err(Error::new("usage", "--stream needs -i or -I").into());
+    }
+    let f = rt.compile_eval(code, "=eval", fnl)?;
+    let io_err =
+        |e: std::io::Error| Failure::from(Error::new("io", format!("cannot read stdin: {e}")));
+    let json_err =
+        |e: serde_json::Error| Failure::from(Error::new("bad_json", format!("stdin: {e}")));
+    let stdin = std::io::stdin();
+    if io.stream {
+        if io.in_lines {
+            for line in stdin.lock().lines() {
+                rt.set_global("input", &serde_json::Value::String(line.map_err(io_err)?))?;
+                print_out(&rt.call(f.clone(), MultiValue::new()).await?, io, true)?;
+            }
+        } else {
+            for value in serde_json::Deserializer::from_reader(stdin.lock()).into_iter() {
+                rt.set_global("input", &value.map_err(json_err)?)?;
+                print_out(&rt.call(f.clone(), MultiValue::new()).await?, io, true)?;
+            }
+        }
+        return Ok(());
+    }
+    if io.in_lines {
+        let lines: Vec<serde_json::Value> = stdin
+            .lock()
+            .lines()
+            .map(|l| l.map(serde_json::Value::String))
+            .collect::<Result<_, _>>()
+            .map_err(io_err)?;
+        rt.set_global("input", &serde_json::Value::Array(lines))?;
+    } else if io.in_json {
+        let values: Vec<serde_json::Value> = serde_json::Deserializer::from_reader(stdin.lock())
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .map_err(json_err)?;
+        rt.set_global("input", &serde_json::Value::Array(values))?;
+    }
+    print_out(&rt.call(f, MultiValue::new()).await?, io, false)
+}
+
+/// Prints eval's values: a list one element per line with -o or -O, else as `print` does. In a
+/// stream, nil prints nothing and a value that is not a list prints as one line.
+fn print_out(values: &MultiValue, io: EvalIo, stream: bool) -> Result<(), Failure> {
+    use mlua::Value;
+    let line = |v: &Value| -> Result<String, Failure> {
+        Ok(match v {
+            Value::String(s) if !io.out_json => s.to_string_lossy(),
+            other => {
+                serde_json::to_string(&timon::value::to_json(other, timon::value::Mode::Strict)?)
+                    .unwrap_or_default()
+            }
+        })
+    };
+    if !(io.out_lines || io.out_json) {
+        if stream {
+            for v in values.iter().filter(|v| !v.is_nil()) {
+                println!("{}", timon::value::render(v, false)?);
+            }
+            return Ok(());
+        }
+        match print(values) {
+            ExitCode::SUCCESS => return Ok(()),
+            _ => return Err(Error::new("io", "cannot print the result").into()),
+        }
+    }
+    for v in values.iter() {
+        match v {
+            Value::Nil => {}
+            Value::Table(t) if t.raw_len() > 0 || t.pairs::<Value, Value>().next().is_none() => {
+                for item in t.sequence_values::<Value>() {
+                    println!("{}", line(&item.map_err(|e| Error::from_lua(&e))?)?);
+                }
+            }
+            other if stream => println!("{}", line(other)?),
+            other => {
+                return Err(Error::new(
+                    "usage",
+                    format!(
+                        "-o and -O print a list; the code returned a {}",
+                        other.type_name()
+                    ),
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// timon's own command names and aliases, which take precedence over a task's name.
