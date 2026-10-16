@@ -233,9 +233,11 @@ fn help(lua: &Lua, topic: Option<Value>) -> mlua::Result<String> {
 
 /// Builds an error table, for Lua-written modules.
 pub(crate) fn fail_function(lua: &Lua) -> mlua::Result<Function> {
-    lua.create_function(|lua, (kind, message): (String, String)| {
-        error::to_table(lua, &Error::new(kind, message))
-    })
+    lua.create_function(
+        |lua, (kind, message, hint): (String, String, Option<String>)| {
+            error::to_table(lua, &Error::new(kind, message).with_hint_opt(hint))
+        },
+    )
 }
 
 #[cfg(test)]

@@ -313,6 +313,83 @@ fn continue_resumes_and_fork_branches() {
 }
 
 #[test]
+fn continue_keeps_the_earlier_request_and_spec_overrides_it() {
+    let s = Sandbox::new();
+    s.json(
+        "local r = agent.run{ prompt = 'first', access = 'write', model = 'sonnet', effort = 'high', output = 'yes_no', system = 'Be brief.' }
+         agent.continue(r, 'second')
+         return agent.continue(r, 'third', { access = 'read', model = 'haiku' })",
+        &[("FAKE_AUTO_ANSWER", "1")],
+    );
+    let second = s.args("claude", 1);
+    assert!(
+        has_pair(&second, "--resume", "claude-session-1"),
+        "{second:?}"
+    );
+    assert!(
+        has_pair(&second, "--permission-mode", "acceptEdits"),
+        "{second:?}"
+    );
+    assert!(has_pair(&second, "--model", "sonnet"), "{second:?}");
+    assert!(has_pair(&second, "--effort", "high"), "{second:?}");
+    assert!(
+        has_pair(&second, "--append-system-prompt", "Be brief."),
+        "{second:?}"
+    );
+    assert!(second.contains(&"--json-schema".to_owned()), "{second:?}");
+    let third = s.args("claude", 2);
+    assert!(
+        has_pair(&third, "--permission-mode", "dontAsk"),
+        "{third:?}"
+    );
+    assert!(has_pair(&third, "--model", "haiku"), "{third:?}");
+    assert!(third.contains(&"--json-schema".to_owned()), "{third:?}");
+}
+
+#[test]
+fn continue_runs_in_the_kept_worktree() {
+    let s = Sandbox::new();
+    let repo = repo(&s);
+    let code = format!(
+        "local r = agent.run{{ prompt = 'edit', access = 'write', worktree = true, cwd = '{}' }}
+         local again = agent.continue(r, 'edit more')
+         return {{ first = r, again = again }}",
+        repo.display()
+    );
+    let r = s.json(&code, &[("FAKE_TOUCH", "note.txt")]);
+    assert_eq!(r["first"]["worktree"]["kept"], true, "{r}");
+    let path = r["first"]["worktree"]["path"].as_str().unwrap();
+    let cwd = s.call("claude", 1)["cwd"].as_str().unwrap().to_owned();
+    assert_eq!(
+        std::fs::canonicalize(&cwd).unwrap(),
+        std::fs::canonicalize(path).unwrap(),
+        "the continuation did not run in the worktree"
+    );
+    assert!(
+        r["again"]["worktree"].is_null(),
+        "a continuation makes no new worktree: {r}"
+    );
+}
+
+#[test]
+fn an_ephemeral_run_cannot_be_continued() {
+    let s = Sandbox::new();
+    let o = s.timon(
+        "local r = agent.run{ prompt = 'x', ephemeral = true }\nreturn agent.continue(r, 'y')",
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        stderr.contains("no_session: that run was ephemeral"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: run it without ephemeral = true"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn definitions_and_defaults_merge_under_the_call() {
     let s = Sandbox::new();
     s.write(

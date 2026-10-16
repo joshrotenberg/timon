@@ -73,7 +73,7 @@ pub const DOC: Module = Module {
         Func::new(
             "continue",
             "agent.continue(record, prompt, spec) -> record",
-            "Resumes record's session with a new prompt, on the same provider. spec adds or overrides fields.",
+            "Resumes record's session with a new prompt. It starts from the call that made record (provider, model, effort, access, output, tools, system, cwd, and the kept worktree as cwd), and spec overrides any of them. A record not made in this process carries only its provider.",
             "local r = agent.run{ prompt = \"List the failing tests\" }\nlocal fix = agent.continue(r, \"Fix the first one\", { access = \"write\" })",
         ),
     ],
@@ -155,6 +155,32 @@ fn start_run(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// Registry key of a table from each record `agent.run` returned to the spec it was called
+/// with, weak in its keys, so `agent.continue` can start from the same request.
+const RUN_SPECS: &str = "timon.run_specs";
+
+fn run_specs(lua: &Lua) -> mlua::Result<Table> {
+    if let Some(t) = lua.named_registry_value::<Option<Table>>(RUN_SPECS)? {
+        return Ok(t);
+    }
+    let t = lua.create_table()?;
+    let mt = lua.create_table()?;
+    mt.raw_set("__mode", "k")?;
+    t.set_metatable(Some(mt))?;
+    lua.set_named_registry_value(RUN_SPECS, &t)?;
+    Ok(t)
+}
+
+/// Remembers a copy of `spec` as the call that produced `record`.
+fn remember_spec(lua: &Lua, record: &Table, spec: &Table) -> mlua::Result<()> {
+    let copy = lua.create_table()?;
+    for pair in spec.pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        copy.raw_set(k, v)?;
+    }
+    run_specs(lua)?.raw_set(record, copy)
+}
+
 fn spent(lua: &Lua, usd: Option<f64>) {
     if let (Some(s), Some(usd)) = (lua.app_data_ref::<Spending>(), usd) {
         s.usd.set(s.usd.get() + usd);
@@ -162,9 +188,12 @@ fn spent(lua: &Lua, usd: Option<f64>) {
 }
 
 const GLUE: &str = r#"
-local run, spawn, fail = ...
+local run, spawn, fail, spec_of = ...
 local type, error, pairs = type, error, pairs
 local agent = {}
+
+-- Fields of the earlier call that do not carry over to a continuation.
+local fresh = { prompt = true, resume = true, fork = true, worktree = true }
 
 function agent.spawn(spec)
   return spawn(run, spec)
@@ -178,6 +207,20 @@ function agent.continue(record, prompt, spec)
     error(fail("no_session", "that run has no session to continue"), 2)
   end
   local s = {}
+  -- Start from the earlier call, in its worktree when it kept one; spec overrides.
+  local before = spec_of(record)
+  if before then
+    if before.ephemeral then
+      error(fail("no_session", "that run was ephemeral, so it left no session to continue",
+        "run it without ephemeral = true to continue it"), 2)
+    end
+    for k, v in pairs(before) do
+      if not fresh[k] then s[k] = v end
+    end
+    if type(record.worktree) == "table" and record.worktree.kept then
+      s.cwd = record.worktree.path
+    end
+  end
   for k, v in pairs(spec or {}) do s[k] = v end
   s.provider = s.provider or record.provider
   s.resume = record.session
@@ -457,7 +500,9 @@ async fn run(lua: Lua, spec: Table) -> mlua::Result<Table> {
     let mut record = agent::run_as(&request, id).await;
     settle.finish(&mut record);
     spent(&lua, record.usage.usd);
-    record_table(&lua, &record)
+    let table = record_table(&lua, &record)?;
+    remember_spec(&lua, &table, &spec)?;
+    Ok(table)
 }
 
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
@@ -547,10 +592,15 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
         })?,
     )?;
     let spawn: Function = lua.globals().raw_get("spawn")?;
-    let helpers: Table =
-        lua.load(GLUE)
-            .set_name(INTERNAL_CHUNK)
-            .call((run_fn, spawn, fail_function(lua)?))?;
+    let helpers: Table = lua.load(GLUE).set_name(INTERNAL_CHUNK).call((
+        run_fn,
+        spawn,
+        fail_function(lua)?,
+        lua.create_function(|lua, record: Value| match record {
+            Value::Table(t) => run_specs(lua)?.raw_get::<Value>(t),
+            _ => Ok(Value::Nil),
+        })?,
+    ))?;
     for name in ["spawn", "continue"] {
         let f: Function = helpers.raw_get(name)?;
         installer.lua_function(&DOC, Some(&module), name, f)?;
