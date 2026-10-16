@@ -10,6 +10,13 @@ use crate::strict;
 /// Chunk name of timon's own Lua glue, which tracebacks and strict globals skip.
 pub(crate) const INTERNAL_CHUNK: &str = "=[timon]";
 
+/// Registry key of the top-level runner, which tasks run under to get error tables with a
+/// traceback.
+pub(crate) const RUN: &str = "timon.run";
+
+/// Registry key of the strict environment user chunks run in.
+pub(crate) const ENV: &str = "timon.env";
+
 /// Lua glue: the host-function wrapper, `try`, and the top-level runner.
 ///
 /// `wrap` calls a host function under `pcall` and re-raises its error as an error table at the
@@ -45,7 +52,6 @@ pub struct Runtime {
     lua: Lua,
     env: Table,
     wrap: Function,
-    run: Function,
 }
 
 impl Runtime {
@@ -73,13 +79,11 @@ impl Runtime {
             .set_name(INTERNAL_CHUNK)
             .call((normalize, handler))?;
         lua.globals().set("try", try_fn)?;
+        lua.set_named_registry_value(RUN, &run)?;
         let env = strict::environment(&lua)?;
-        Ok(Self {
-            lua,
-            env,
-            wrap,
-            run,
-        })
+        lua.set_named_registry_value(ENV, &env)?;
+        crate::fennel::install_searcher(&lua)?;
+        Ok(Self { lua, env, wrap })
     }
 
     /// The Lua state, for installing modules.
@@ -115,19 +119,14 @@ impl Runtime {
             .map_err(|e| Failure::from(Error::from_lua(&e)))
     }
 
-    /// Calls `f` as a coroutine, so async host functions can yield, and returns its values or
-    /// the error that stopped it with a traceback.
+    /// Calls `f` as the root scope of a run and returns its values, or the error that stopped
+    /// it with a traceback. The run ends when `f` and every task it spawned have finished.
+    ///
+    /// Must be awaited inside a [`tokio::task::LocalSet`], because tasks are `spawn_local`.
     pub async fn call(&self, f: Function, args: MultiValue) -> Result<MultiValue, Failure> {
-        let call_args: MultiValue = std::iter::once(Value::Function(f)).chain(args).collect();
-        let mut out = self
-            .run
-            .call_async::<MultiValue>(call_args)
+        crate::modules::concurrency::run_root(&self.lua, f, args)
             .await
-            .map_err(|e| Failure::from(Error::from_lua(&e)))?;
-        match out.pop_front() {
-            Some(Value::Boolean(true)) => Ok(out),
-            _ => Err(failure(out.pop_front())),
-        }
+            .map_err(|err| failure(Some(err)))
     }
 
     /// Evaluates `source` the way `timon eval` does.
@@ -136,7 +135,15 @@ impl Runtime {
         self.call(f, MultiValue::new()).await
     }
 
-    /// Runs a script file with `args` as the `arg` table and as `...`.
+    /// Evaluates Fennel source the way `timon eval --fnl` does.
+    pub async fn eval_fennel(&self, source: &str, name: &str) -> Result<MultiValue, Failure> {
+        let lua_source = crate::fennel::compile(&self.lua, source, name)?;
+        let f = self.compile(&lua_source, name, false)?;
+        self.call(f, MultiValue::new()).await
+    }
+
+    /// Runs a script file with `args` as the `arg` table and as `...`. A `.fnl` file is
+    /// compiled as Fennel first.
     pub async fn run_script(&self, path: &Path, args: &[String]) -> Result<MultiValue, Failure> {
         let source = std::fs::read_to_string(path).map_err(|e| {
             Failure::from(Error::new(
@@ -144,11 +151,13 @@ impl Runtime {
                 format!("cannot read {}: {e}", path.display()),
             ))
         })?;
-        let f = self.compile(
-            &strip_shebang(&source),
-            &format!("@{}", path.display()),
-            false,
-        )?;
+        let name = format!("@{}", path.display());
+        let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
+            crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(&source), &name)?
+        } else {
+            strip_shebang(&source).into_owned()
+        };
+        let f = self.compile(&lua_source, &name, false)?;
         let script_args = || -> mlua::Result<MultiValue> {
             let arg = self.lua.create_table()?;
             arg.raw_set(0, path.display().to_string())?;

@@ -1,5 +1,6 @@
 //! The modules installed into every runtime, and the installer that registers them for `help()`.
 
+pub mod concurrency;
 pub mod fs;
 pub mod json;
 pub mod log;
@@ -39,6 +40,24 @@ pub const GLOBALS_DOC: Module = Module {
             "Pretty-prints each value to stderr and returns them unchanged, so it can wrap an expression.",
             "local prs = pp(json.decode(text))",
         ),
+        Func::new(
+            "scope",
+            "scope(fn) -> ...",
+            "Runs fn(s) and returns its results once every task spawned on s has finished. If fn or any task raises, the others are cancelled and the first error is raised. s:spawn(f, ...) starts a task; s:cancel() cancels the running ones. scope() with no function returns a scope for local s <close> = scope(), which waits when the block ends.",
+            "local review, history = scope(function(s)\n  local r = s:spawn(agent.run, { agent = \"reviewer\", prompt = \"Review PR 12\" })\n  local h = s:spawn(sessions.search, { query = \"PR 12\" })\n  return r:await(), h:await()\nend)",
+        ),
+        Func::new(
+            "spawn",
+            "spawn(f, ...) -> task",
+            "Starts f(...) as a task on the innermost scope; a script's main chunk is one, and the script waits for its tasks. task:await() returns the results or raises the error, task:cancel() stops it, task:done() tells whether it finished.",
+            "local h = spawn(fs.read, \"big.json\")\n-- other work\nlocal text = h:await()",
+        ),
+        Func::new(
+            "sleep",
+            "sleep(duration)",
+            "Waits without blocking other tasks. A number is seconds; a string takes ms, s, m or h.",
+            "sleep(\"250ms\")\nsleep(2)",
+        ),
     ],
 };
 
@@ -57,6 +76,11 @@ impl<'a> Installer<'a> {
 
     pub(crate) fn lua(&self) -> &Lua {
         self.runtime.lua()
+    }
+
+    /// Wraps a Rust function so its errors reach Lua as tables, without registering it.
+    pub(crate) fn wrap(&self, f: Function) -> mlua::Result<Function> {
+        self.runtime.host_function(f)
     }
 
     /// Creates the global table for a module.
@@ -134,6 +158,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     tbl::install(&installer)?;
     fs::install(&installer)?;
     log::install(&installer)?;
+    concurrency::install(&installer)?;
     Ok(())
 }
 

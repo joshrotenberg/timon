@@ -143,6 +143,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::fs::FS_DOC,
         &modules::fs::PATH_DOC,
         &modules::log::DOC,
+        &modules::concurrency::DOC,
     ]
 }
 

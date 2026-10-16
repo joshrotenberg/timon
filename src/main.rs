@@ -12,7 +12,7 @@ use timon::{Error, Failure, Runtime};
     name = "timon",
     version,
     about = "A self-contained agent harness: Lua over agent, session and tool APIs",
-    after_help = "Run a script with `timon FILE.lua [ARGS]`.",
+    after_help = "Run a script with `timon FILE.lua [ARGS]` or `timon FILE.fnl [ARGS]`.",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -27,9 +27,12 @@ enum Command {
         /// Lua source; `-` reads it from standard input
         #[arg(required_unless_present = "file", conflicts_with = "file")]
         code: Option<String>,
-        /// Evaluate a file instead
+        /// Evaluate a file instead; a .fnl file is Fennel
         #[arg(short, long, value_name = "FILE")]
         file: Option<PathBuf>,
+        /// Treat CODE as Fennel
+        #[arg(long)]
+        fnl: bool,
     },
     #[command(external_subcommand)]
     Script(Vec<OsString>),
@@ -47,7 +50,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tokio::task::LocalSet::new().block_on(&rt, run(cli))
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        tokio::select! {
+            code = run(cli) => code,
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("timon: interrupted");
+                ExitCode::from(130)
+            }
+        }
+    })
 }
 
 async fn run(cli: Cli) -> ExitCode {
@@ -56,7 +67,7 @@ async fn run(cli: Cli) -> ExitCode {
         Err(err) => return fail(&err.into()),
     };
     let result = match cli.command {
-        Command::Eval { code, file } => eval(&runtime, code, file).await,
+        Command::Eval { code, file, fnl } => eval(&runtime, code, file, fnl).await,
         Command::Script(argv) => script(&runtime, argv).await,
     };
     match result {
@@ -69,20 +80,26 @@ async fn eval(
     runtime: &Runtime,
     code: Option<String>,
     file: Option<PathBuf>,
+    fnl: bool,
 ) -> Result<MultiValue, Failure> {
     if let Some(path) = file {
         return runtime.run_script(&path, &[]).await;
     }
-    match code.as_deref() {
+    let (source, name) = match code.as_deref() {
         Some("-") => {
             let mut source = String::new();
             std::io::stdin().read_to_string(&mut source).map_err(|e| {
                 Failure::from(Error::new("io", format!("cannot read standard input: {e}")))
             })?;
-            runtime.eval(&source, "=stdin").await
+            (source, "=stdin")
         }
-        Some(code) => runtime.eval(code, "=eval").await,
-        None => Ok(MultiValue::new()),
+        Some(code) => (code.to_owned(), "=eval"),
+        None => return Ok(MultiValue::new()),
+    };
+    if fnl {
+        runtime.eval_fennel(&source, name).await
+    } else {
+        runtime.eval(&source, name).await
     }
 }
 
@@ -103,7 +120,8 @@ async fn script(runtime: &Runtime, argv: Vec<OsString>) -> Result<MultiValue, Fa
 }
 
 fn looks_like_script(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "lua")
+    path.extension()
+        .is_some_and(|ext| ext == "lua" || ext == "fnl")
         || path.components().count() > 1
         || path.is_file()
 }

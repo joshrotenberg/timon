@@ -58,7 +58,7 @@ timon (one binary)
 ├─ supervisor  concurrency caps, budgets, cancellation, run records
 ├─ sessions    every Claude Code and Codex session: list, show, transcript, search
 ├─ mcp         client: any MCP server's tools as Lua calls; server: `timon serve`
-├─ toolbox     git, gh, json.query, http, sh, proc, sqlite   (to discuss, see Toolbox)
+├─ toolbox     git, gh, http, sh, proc, sqlite              (to discuss, see Toolbox)
 ├─ later       hooks, memory, queues                          (to discuss)
 ├─ storage     SQLite (bundled, FTS5): state, run records, the session index
 ├─ surfaces    CLI, scripts, REPL, MCP server; hooks later
@@ -231,7 +231,7 @@ equivalents where they help.
 
 | Module | Functions |
 |---|---|
-| `json` | `encode(v, {pretty})`, `decode(s)`, `null`, `array(t)`, `object(t)` |
+| `json` | `encode(v, {pretty})`, `decode(s)`, `query(v, expr)` (JMESPath with jpx's extension functions), `null`, `array(t)`, `object(t)` |
 | `str` | `split`, `trim`, `lines`, `starts`, `ends`, `fmt` (`"PR ${n}"` templates); also installed as string methods, so `s:trim()` works |
 | `tbl` | `map`, `filter`, `reduce`, `find`, `keys`, `values`, `group_by`, `sort_by`, `count`, `merge`, `pick`, `omit` |
 | `fs` | `read`, `write`, `exists`, `ls`, `glob`, `mkdir`, `tmpdir`, `cwd`, `home`; `path.join`, `path.base`, `path.dir`, `path.ext` |
@@ -637,7 +637,6 @@ gh.issues{ labels = { "bug" } }    gh.checks("HEAD")
 gh.api("repos/{owner}/{repo}/pulls", { method = "POST", body = {...}, paginate = true })
 gh.graphql(query, vars)
 
-json.query(data, "items[?state=='open'].number")    -- JMESPath, possibly jpx's function set
 
 http.get(url, { headers = {...} })   -- { status, headers, body, json = function }
 http.post(url, { json = {...} })
@@ -666,7 +665,7 @@ store, durable queues and workers, and schedules.
 | 1 | Runtime: eval, scripts, REPL, Fennel, `help`, errors, strict options and globals, `json`, `str`, `tbl`, `fs`, `scope`/`spawn`/`par`; directories and layers; `timon skill`; the plugin with the `timon` skill | a Claude Code session uses `timon eval` through the plugin for a day of real work |
 | 2 | `agent`: run, ask, spawn, continue; supervisor; contracts and `schema`; agents; run records; `timon agent run`, `timon runs` | a fan-out review over three PRs and an author, review, follow-up cycle run as scripts; Ctrl-C leaves no child process |
 | 3 | `sessions`: list, show, transcript, search, current, summarize; the index; `timon sessions` | the same hit sets as trovador for a fixed list of queries on one archive snapshot |
-| 4 | Toolbox and MCP: git, gh, json.query, http, sh, proc, sqlite; the `mcp` client and `timon serve` | after the discussion above |
+| 4 | Toolbox and MCP: git, gh, http, sh, proc, sqlite; the `mcp` client and `timon serve` | after the discussion above |
 | 5 | Hooks, memory, queues | after phase 4 is in daily use |
 
 ## Where code comes from
@@ -694,8 +693,9 @@ are libraries for exactly this, not sibling tools.
 
 1. **Lua 5.5.** mlua 0.12.2 supports it. It needs a Fennel compatibility check before it is
    worth considering. Luau is settled for now (see Lua version).
-2. **JMESPath.** jpx-core's 470+ functions or the plain `jmespath` crate, weighed against binary
-   size.
+2. **JMESPath size.** `json.query` uses jpx-core with every extension. Release binaries on macOS
+   arm64: 2.47 MB without jpx-core, 2.84 MB with jpx-core and no extensions, 8.61 MB with all
+   of them. Revisit when jpx-core splits its extensions into finer features.
 3. **GitHub auth.** `GH_TOKEN` or `GITHUB_TOKEN`, then `gh auth token` when `gh` is installed,
    otherwise an error with the fix. The `gh` fallback is a soft runtime dependency.
 4. **MCP server import.** Whether `mcp.connect` can also use the servers Claude Code and Codex

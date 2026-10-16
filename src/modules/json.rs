@@ -1,5 +1,7 @@
 //! `json`: encode and decode JSON, with shapes that survive a round trip.
 
+use std::sync::LazyLock;
+
 use mlua::{Lua, Table, Value};
 
 use crate::docs::{Func, Module, Opt, Ty};
@@ -7,6 +9,14 @@ use crate::error::Error;
 use crate::modules::Installer;
 use crate::options;
 use crate::value::{self, ARRAY_NAME, Mode, NULL_NAME, OBJECT_NAME};
+
+/// JMESPath with the standard functions and every jpx extension, built on first use.
+static QUERY: LazyLock<jpx_core::Runtime> = LazyLock::new(|| {
+    jpx_core::Runtime::builder()
+        .with_standard()
+        .with_all_extensions()
+        .build()
+});
 
 const ARRAY_MT: &str = "timon.json.array_mt";
 const OBJECT_MT: &str = "timon.json.object_mt";
@@ -34,6 +44,12 @@ pub const DOC: Module = Module {
             "json.array(t) -> t",
             "Marks t, or a new table, as an array so it encodes as [] when empty.",
             "json.encode({ items = json.array{} })  --> {\"items\":[]}",
+        ),
+        Func::new(
+            "query",
+            "json.query(value, expression) -> value",
+            "Evaluates a JMESPath expression against a value, with jpx's extension functions (strings, dates, math, hashing and more). Lists come back as arrays and null as json.null.",
+            "json.query(prs, \"[?draft == `false`].number\")\njson.query(data, \"items[*].name | sort(@) | join(', ', @)\")\njson.query(run, \"upper(status)\")",
         ),
         Func::new(
             "object",
@@ -99,6 +115,17 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
     installer.function(
         &DOC,
         Some(&json),
+        "query",
+        lua.create_function(|lua, (v, expression): (Value, String)| {
+            let data = value::to_json(&v, Mode::Strict)?;
+            let compiled = QUERY.compile(&expression).map_err(query_error)?;
+            let result = compiled.search(&data).map_err(query_error)?;
+            decode(lua, &result)
+        })?,
+    )?;
+    installer.function(
+        &DOC,
+        Some(&json),
         "array",
         lua.create_function(|lua, t: Option<Table>| array(lua, t))?,
     )?;
@@ -109,6 +136,14 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
         lua.create_function(|lua, t: Option<Table>| mark(lua, t, OBJECT_MT))?,
     )?;
     Ok(())
+}
+
+fn query_error(err: jpx_core::JmespathError) -> Error {
+    let kind = match err.reason {
+        jpx_core::ErrorReason::Parse(_) => "bad_query",
+        _ => "query_failed",
+    };
+    Error::new(kind, err.to_string())
 }
 
 /// Marks `t`, or a new table, as a JSON array. Host functions use it for every list they return.
