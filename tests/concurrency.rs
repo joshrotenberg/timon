@@ -322,6 +322,6 @@ fn spawn_in_a_nested_scope_belongs_to_that_scope() {
     assert_eq!(out, ["false", "outer"]);
     assert_eq!(
         fails("return spawn(1)").message,
-        "bad argument #1 to spawn: expected a function, got a number"
+        "spawn: argument 1 must be a function, not number"
     );
 }

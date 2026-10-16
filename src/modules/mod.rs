@@ -147,7 +147,12 @@ impl<'a> Installer<'a> {
         name: &str,
         f: Function,
     ) -> mlua::Result<Function> {
-        let wrapped = self.runtime.host_function(f)?;
+        let full = if doc.name == docs::GLOBALS {
+            name.to_owned()
+        } else {
+            format!("{}.{name}", doc.name)
+        };
+        let wrapped = self.runtime.named_host_function(f, &full)?;
         self.add(doc, table, name, wrapped)
     }
 
