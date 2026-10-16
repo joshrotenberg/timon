@@ -49,9 +49,12 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Creates a runtime with the standard library, `try`, and strict globals for user code.
+    /// Creates a runtime with the standard library, timon's modules, and strict globals for user
+    /// code.
     pub fn new() -> Result<Self, Error> {
-        Self::build().map_err(Error::from)
+        let runtime = Self::build()?;
+        crate::modules::install(&runtime)?;
+        Ok(runtime)
     }
 
     fn build() -> mlua::Result<Self> {
