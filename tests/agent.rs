@@ -593,3 +593,107 @@ fn worktree_outside_a_repository_is_an_error() {
     let o = s.timon("agent.run{ prompt = 'x', worktree = true }", &[]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("needs a git repository"));
 }
+
+// timon agent run and timon agents (#24)
+
+#[test]
+fn agent_run_takes_the_options_as_flags() {
+    let s = Sandbox::new();
+    let good = r#"{"answer": true, "reason": "yes"}"#;
+    let o = s.cli(
+        &[
+            "agent",
+            "run",
+            "--model",
+            "sonnet",
+            "--effort",
+            "high",
+            "--output",
+            "yes_no",
+            "--budget-turns",
+            "7",
+            "--native",
+            "--add-dir",
+            "--native",
+            "/tmp",
+            "is it?",
+        ],
+        &[("FAKE_STRUCTURED", good)],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["status"], "ok");
+    assert_eq!(r["answer"]["reason"], "yes");
+    let args = s.args("claude", 0);
+    assert!(has_pair(&args, "--model", "sonnet"), "{args:?}");
+    assert!(has_pair(&args, "--max-turns", "7"), "{args:?}");
+    assert!(has_pair(&args, "--add-dir", "/tmp"), "{args:?}");
+    assert_eq!(s.call("claude", 0)["prompt"], "is it?");
+}
+
+#[test]
+fn agent_run_reads_the_prompt_from_stdin_and_runs_codex() {
+    use std::io::Write;
+    let s = Sandbox::new();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))
+        .args([
+            "agent",
+            "run",
+            "--provider",
+            "codex",
+            "--access",
+            "write",
+            "-",
+        ])
+        .current_dir(s.root())
+        .env("TIMON_HOME", s.root().join("timon"))
+        .env("HOME", s.root())
+        .env("TIMON_CODEX_BIN", fixtures.join("fake-codex"))
+        .env("FAKE_LOG_DIR", s.logs())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"from stdin")
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["provider"], "codex");
+    assert_eq!(r["text"], "echo: from stdin");
+    assert!(has_pair(
+        &s.args("codex", 0),
+        "--sandbox",
+        "workspace-write"
+    ));
+}
+
+#[test]
+fn agent_run_errors_like_lua_does() {
+    let s = Sandbox::new();
+    let o = s.cli(&["agent", "run", "--effort", "huge", "x"], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("claude has no effort \"huge\""));
+}
+
+#[test]
+fn agents_lists_definitions_with_descriptions() {
+    let s = Sandbox::new();
+    s.write(
+        s.config().join("agents/reviewer.lua"),
+        "return { description = 'Reviews one PR', model = 'opus' }",
+    );
+    s.write(
+        s.config().join("agents/quick.lua"),
+        "return { extends = 'reviewer', model = 'haiku' }",
+    );
+    let o = s.cli(&["agents", "--json"], &[]);
+    let list: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(list[0]["name"], "quick");
+    assert_eq!(list[0]["description"], "Reviews one PR");
+    assert_eq!(list[1]["layer"], "user");
+}

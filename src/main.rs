@@ -67,6 +67,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run a Claude or Codex agent and print the run record
+    #[command(subcommand)]
+    Agent(AgentCommand),
+    /// List agent definitions from agents/ in the user and project layers
+    Agents {
+        #[arg(long)]
+        json: bool,
+    },
     /// List recorded agent runs, newest first, or show one
     Runs {
         #[command(subcommand)]
@@ -88,6 +96,60 @@ enum Command {
     Plugin(PluginCommand),
     #[command(external_subcommand)]
     Script(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum AgentCommand {
+    /// One run, with the agent.run options as flags; prints the record as JSON
+    Run {
+        /// What to do; `-` reads it from standard input
+        prompt: String,
+        /// A definition from agents/NAME.lua to start from
+        #[arg(long)]
+        agent: Option<String>,
+        /// claude (default) or codex
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        /// read (default), write or full
+        #[arg(long)]
+        access: Option<String>,
+        /// Claude's tool list, comma-separated
+        #[arg(long, value_delimiter = ',')]
+        tools: Option<Vec<String>>,
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Instructions added to the system prompt
+        #[arg(long)]
+        system: Option<String>,
+        /// A contract name; the answer is validated against it
+        #[arg(long)]
+        output: Option<String>,
+        /// Seconds, or a duration such as 10m
+        #[arg(long)]
+        timeout: Option<String>,
+        /// Most USD this run may spend (claude)
+        #[arg(long)]
+        budget_usd: Option<f64>,
+        /// Most turns this run may take (claude)
+        #[arg(long)]
+        budget_turns: Option<u32>,
+        /// A session id timon started, to continue
+        #[arg(long)]
+        resume: Option<String>,
+        /// A session id to branch from (claude)
+        #[arg(long)]
+        fork: Option<String>,
+        /// Run in a new git worktree
+        #[arg(long)]
+        worktree: bool,
+        /// An extra provider argument; repeat for more
+        #[arg(long = "native", allow_hyphen_values = true)]
+        native: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -161,6 +223,7 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
         Command::Defs { json } => return defs(&layers, json),
         Command::Skill(command) => return skill(&layers, command),
+        Command::Agents { json } => return agents(&layers, json),
         Command::Runs {
             command,
             since,
@@ -168,7 +231,7 @@ async fn run(cli: Cli) -> ExitCode {
             json,
         } => return runs(&layers, command, since, limit, json),
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
-        Command::Eval { .. } | Command::Run { .. } | Command::Script(_) => {}
+        Command::Eval { .. } | Command::Run { .. } | Command::Script(_) | Command::Agent(_) => {}
     }
     // The runtime must outlive the values it returns, which refer into its Lua state.
     let rt = match runtime(&layers) {
@@ -183,11 +246,13 @@ async fn run(cli: Cli) -> ExitCode {
             Err(err) => Err(err.into()),
         },
         Command::Script(argv) => script(&rt, argv).await,
+        Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, cli.command).await,
         Command::Scripts { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)
         | Command::Runs { .. }
+        | Command::Agents { .. }
         | Command::Plugin(_) => Ok(MultiValue::new()),
     };
     match result {
@@ -342,6 +407,128 @@ fn skill(layers: &Layers, command: SkillCommand) -> ExitCode {
             }
         }
     }
+}
+
+/// `timon agent run`: the flags become a spec table for the same agent.run that Lua calls, so
+/// merging, checks, budgets and records cannot differ between the two.
+async fn agent_run(rt: &Runtime, command: Command) -> Result<MultiValue, Failure> {
+    let Command::Agent(AgentCommand::Run {
+        prompt,
+        agent,
+        provider,
+        model,
+        effort,
+        access,
+        tools,
+        cwd,
+        system,
+        output,
+        timeout,
+        budget_usd,
+        budget_turns,
+        resume,
+        fork,
+        worktree,
+        native,
+    }) = command
+    else {
+        return Ok(MultiValue::new());
+    };
+    let prompt = if prompt == "-" {
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text).map_err(|e| {
+            Failure::from(Error::new("io", format!("cannot read standard input: {e}")))
+        })?;
+        text
+    } else {
+        prompt
+    };
+    let build = || -> mlua::Result<mlua::Table> {
+        let lua = rt.lua();
+        let spec = lua.create_table()?;
+        spec.raw_set("prompt", prompt)?;
+        for (key, value) in [
+            ("agent", agent),
+            ("provider", provider),
+            ("model", model),
+            ("effort", effort),
+            ("access", access),
+            ("cwd", cwd),
+            ("system", system),
+            ("output", output),
+            ("timeout", timeout),
+            ("resume", resume),
+            ("fork", fork),
+        ] {
+            if let Some(value) = value {
+                spec.raw_set(key, value)?;
+            }
+        }
+        if let Some(tools) = tools {
+            spec.raw_set("tools", lua.create_sequence_from(tools)?)?;
+        }
+        if !native.is_empty() {
+            spec.raw_set("native", lua.create_sequence_from(native)?)?;
+        }
+        if budget_usd.is_some() || budget_turns.is_some() {
+            let budget = lua.create_table()?;
+            budget.raw_set("usd", budget_usd)?;
+            budget.raw_set("turns", budget_turns)?;
+            spec.raw_set("budget", budget)?;
+        }
+        if worktree {
+            spec.raw_set("worktree", true)?;
+        }
+        Ok(spec)
+    };
+    let spec = build().map_err(|e| Failure::from(Error::from_lua(&e)))?;
+    let run: mlua::Function = rt
+        .lua()
+        .globals()
+        .get::<mlua::Table>("agent")
+        .and_then(|agent| agent.get("run"))
+        .map_err(|e| Failure::from(Error::from_lua(&e)))?;
+    rt.call(run, MultiValue::from_iter([mlua::Value::Table(spec)]))
+        .await
+}
+
+fn agents(layers: &Layers, json: bool) -> ExitCode {
+    let rt = match runtime(layers) {
+        Ok(rt) => rt,
+        Err(failure) => return fail(&failure),
+    };
+    let dirs = timon::agents::dirs(layers);
+    let list: Vec<serde_json::Value> = timon::agents::list(&dirs)
+        .iter()
+        .map(|a| {
+            let description = timon::agents::describe(rt.lua(), &dirs, &a.name)
+                .unwrap_or_else(|err| format!("(cannot load: {err})"));
+            serde_json::json!({
+                "name": a.name,
+                "layer": a.layer.name(),
+                "path": a.path,
+                "description": description,
+            })
+        })
+        .collect();
+    if json {
+        println!("{}", serde_json::Value::Array(list));
+        return ExitCode::SUCCESS;
+    }
+    let width = list
+        .iter()
+        .map(|a| a["name"].as_str().unwrap_or("").len())
+        .max()
+        .unwrap_or(0);
+    for a in &list {
+        println!(
+            "{:width$}  {:7}  {}",
+            a["name"].as_str().unwrap_or(""),
+            a["layer"].as_str().unwrap_or(""),
+            a["description"].as_str().unwrap_or("")
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 fn runs(

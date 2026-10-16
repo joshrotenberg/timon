@@ -119,6 +119,13 @@ fn load_file(lua: &Lua, path: &Path) -> Result<Table, Error> {
     Ok(t)
 }
 
+/// A definition's description, after following `extends`; empty when it has none.
+pub fn describe(lua: &Lua, dirs: &[(Kind, PathBuf)], name: &str) -> Result<String, Error> {
+    Ok(resolve(lua, dirs, name)?
+        .raw_get::<Option<String>>("description")?
+        .unwrap_or_default())
+}
+
 /// Resolves definition `name` into one table of fields, following `extends` down the layers.
 pub(crate) fn resolve(lua: &Lua, dirs: &[(Kind, PathBuf)], name: &str) -> Result<Table, Error> {
     resolve_from(lua, dirs, name, 0)
