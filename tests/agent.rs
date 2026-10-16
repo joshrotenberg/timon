@@ -977,6 +977,22 @@ fn a_killed_timon_leaves_an_interrupted_run() {
             .status
             .success()
     };
+    if cfg!(target_os = "linux") {
+        // The kernel stops the provider with timon (die_with_parent), so it is gone before
+        // the next command looks.
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            !alive(&provider)
+        });
+        if !gone {
+            kill(&provider, "-9");
+        }
+        assert!(gone, "the provider outlived timon on Linux");
+        let run = &runs_json(&s)[0];
+        assert_eq!(run["status"], "interrupted");
+        assert_eq!(run["effects_uncertain"], true);
+        return;
+    }
     assert!(
         alive(&provider),
         "the provider outlives a killed timon until the next command"
