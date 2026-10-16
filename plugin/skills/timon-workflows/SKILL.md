@@ -5,6 +5,11 @@ description: Use when a task needs more than one agent run or a check on an agen
 
 # Workflows with flow
 
+Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
+line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
+as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
+of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+
 `flow` holds patterns over agent runs, commands and plain Lua. A pattern returns a record and
 never raises for an outcome:
 

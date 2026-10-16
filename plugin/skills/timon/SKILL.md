@@ -7,6 +7,11 @@ description: Use timon when a task is easier as a few lines of code than as many
 
 One binary: Lua 5.4 and Fennel over a set of modules. Run code from the shell:
 
+Run `timon` as a command of its own. A host that allows only `timon` commands denies the whole
+line when it has `;`, `&&`, `|`, `$?`, a redirect or a heredoc around timon. Pass multi-line Lua
+as one single-quoted argument, which may span lines; read files with `fs.read` in Lua instead
+of piping them in; and skip `$?`: a failure prints `timon: kind: message` and exits nonzero.
+
 ```sh
 timon eval '1 + 1'                 # 2: an expression returns its value
 timon eval '{ a = 1, b = { 2 } }'  # tables print as JSON: {"a":1,"b":[2]}
@@ -16,7 +21,12 @@ timon tasks                        # the tasks in reach: tasks.lua and scripts/
 timon check                        # run a task, after its dependencies
 timon serve                        # the tasks as MCP tools over stdio, for hosts without a shell
 timon eval --fnl '(+ 1 2)'         # Fennel
-echo 'return 6 * 7' | timon eval - # stdin
+```
+
+In a shell of your own, where pipes are allowed, timon also reads stdin:
+
+```sh
+echo 'return 6 * 7' | timon eval -                             # code from stdin
 git log --oneline | timon eval -i 'return #input'              # input: the lines of stdin
 cat events.jsonl | timon eval -I --stream 'return input.kind'  # once per JSON value
 ```
@@ -147,8 +157,9 @@ end
 
 ## Rules
 
-- Run `timon` as a command of its own, not inside a longer shell line with `;`, `&&`, `$?` or
-  redirects: a host that allows only `timon` commands denies the whole line. Do the rest in Lua.
+- Run `timon` as a command of its own, not inside a longer shell line with `;`, `&&`, `|`,
+  `$?`, redirects or heredocs: a host that allows only `timon` commands denies the whole line.
+  Do the rest in Lua.
 - An error is a table with `kind`, `message` and often `hint`. Uncaught, it prints all three and
   exits 1. Read the hint: it usually names the fix.
 - Globals, module fields and options are strict: a typo raises with "did you mean".
