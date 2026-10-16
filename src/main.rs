@@ -28,6 +28,8 @@ struct Cli {
     max_usd: Option<f64>,
 }
 
+// Built once per process from the command line, so a large variant costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Evaluate Lua and print each value it returns
