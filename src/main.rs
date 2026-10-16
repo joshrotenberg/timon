@@ -77,6 +77,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Session tools that are not Lua calls
+    #[command(subcommand)]
+    Sessions(SessionsCommand),
     /// List recorded agent runs, newest first, or show one
     Runs {
         #[command(subcommand)]
@@ -155,6 +158,16 @@ enum AgentCommand {
 }
 
 #[derive(Subcommand)]
+enum SessionsCommand {
+    /// Bring the session index fully up to date, with no time limit
+    Index {
+        /// Delete the index and build it from nothing
+        #[arg(long)]
+        rebuild: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum RunsCommand {
     /// Print a run's request and result
     Show {
@@ -226,6 +239,9 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Defs { json } => return defs(&layers, json),
         Command::Skill(command) => return skill(&layers, command),
         Command::Agents { json } => return agents(&layers, json),
+        Command::Sessions(SessionsCommand::Index { rebuild }) => {
+            return sessions_index(&layers, rebuild);
+        }
         Command::Runs {
             command,
             since,
@@ -255,6 +271,7 @@ async fn run(cli: Cli) -> ExitCode {
         | Command::Skill(_)
         | Command::Runs { .. }
         | Command::Agents { .. }
+        | Command::Sessions(_)
         | Command::Plugin(_) => Ok(MultiValue::new()),
     };
     match result {
@@ -492,6 +509,20 @@ async fn agent_run(rt: &Runtime, command: Command) -> Result<MultiValue, Failure
         .map_err(|e| Failure::from(Error::from_lua(&e)))?;
     rt.call(run, MultiValue::from_iter([mlua::Value::Table(spec)]))
         .await
+}
+
+fn sessions_index(layers: &Layers, rebuild: bool) -> ExitCode {
+    let result = timon::sessions::Roots::from_env(layers.dirs.home.as_deref()).and_then(|roots| {
+        let paths = timon::sessions::Paths::new(&layers.dirs.cache, &roots);
+        timon::sessions::search::reindex(&paths, &timon::sessions::Limits::default(), rebuild)
+    });
+    match result {
+        Ok(report) => {
+            println!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(&err.into()),
+    }
 }
 
 fn agents(layers: &Layers, json: bool) -> ExitCode {

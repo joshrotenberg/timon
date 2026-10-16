@@ -20,32 +20,8 @@ pub const PROJECTION_VERSION: i64 = 9;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::Backend;
 use super::archive::{ArchiveEntry, block_text};
-
-/// Caps on what a transcript returns.
-#[derive(Clone, Debug)]
-pub struct Limits {
-    /// Ceiling on the characters of records in one page.
-    pub response_max_chars: usize,
-    /// Per-record cap, so one huge message cannot dominate.
-    pub record_chars: usize,
-    /// Cap for tool results and tool call arguments.
-    pub tool_chars: usize,
-    /// Most records per page.
-    pub page_size: usize,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            response_max_chars: 100_000,
-            record_chars: 4_000,
-            tool_chars: 600,
-            page_size: 200,
-        }
-    }
-}
+use super::{Backend, Limits};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

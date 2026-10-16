@@ -455,3 +455,203 @@ fn a_codex_transcript_drops_the_copies_between_streams_and_reads_compressed_file
     assert_eq!(kinds(&plain), kinds(&compressed));
     assert_eq!(plain["items"], compressed["items"]);
 }
+
+// Search and the index (#42)
+
+/// Sessions old enough to be outside the 10-minute active window.
+fn searchable() -> Archive {
+    let a = Archive::new();
+    a.claude(
+        "-work-s",
+        ID_A,
+        &[
+            claude_user("please fix the flaky parser test", "/work/s"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": "The parser drops quoted colons." },
+                { "type": "tool_use", "id": "t1", "name": "Grep", "input": { "pattern": "zanzibar" } } ] } }),
+        ],
+        60,
+    );
+    a.codex(
+        ID_B,
+        &[
+            codex_meta(ID_B, "/work/c", serde_json::json!("cli")),
+            codex_user("compress the quokka archive"),
+        ],
+        90,
+        true,
+    );
+    a.codex(
+        ID_C,
+        &[
+            codex_meta(ID_C, "/work/c", serde_json::json!("exec")),
+            codex_user("scripted quokka run"),
+        ],
+        120,
+        false,
+    );
+    a
+}
+
+fn hit_ids(r: &serde_json::Value) -> Vec<String> {
+    r["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn search_finds_words_in_both_backends_with_excerpts() {
+    let a = searchable();
+    let r = a.json("sessions.search{ query = 'parser colons' }", &[]);
+    assert_eq!(hit_ids(&r), [ID_A]);
+    let m = &r["hits"][0]["matches"][0];
+    assert_eq!(m["kind"], "assistant");
+    assert_eq!(m["index"], 1);
+    assert!(m["excerpt"].as_str().unwrap().contains("[parser]"), "{m}");
+    assert_eq!(r["exhaustive"], true);
+
+    let r = a.json("sessions.search{ query = 'quokka' }", &[]);
+    assert_eq!(
+        hit_ids(&r),
+        [ID_B],
+        "the compressed rollout is searchable; exec is hidden"
+    );
+    assert_eq!(r["hidden"]["automated"], 1);
+    assert!(r["note"].as_str().unwrap().contains("automated = true"));
+    let r = a.json("sessions.search{ query = 'quokka', automated = true }", &[]);
+    assert_eq!(r["returned"], 2);
+}
+
+#[test]
+fn match_indexes_are_transcript_indexes() {
+    let a = searchable();
+    let r = a.json("sessions.search{ query = 'zanzibar' }", &[]);
+    let m = &r["hits"][0]["matches"][0];
+    assert_eq!(m["kind"], "tool_call");
+    let page = a.json(
+        &format!(
+            "sessions.transcript('{ID_A}', {{ offset = {}, limit = 1 }})",
+            m["index"]
+        ),
+        &[],
+    );
+    assert_eq!(page["items"][0]["kind"], "tool_call");
+    assert!(
+        page["items"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("zanzibar")
+    );
+}
+
+#[test]
+fn search_modes() {
+    let a = searchable();
+    let terms = a.json("sessions.search{ query = 'colons quoted' }", &[]);
+    assert_eq!(terms["returned"], 1, "terms match in any order");
+    let phrase = a.json(
+        "sessions.search{ query = 'colons quoted', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(phrase["returned"], 0, "a phrase keeps its order");
+    assert_eq!(phrase["absence_is_proof"], true);
+    let phrase = a.json(
+        "sessions.search{ query = 'quoted colons', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(phrase["returned"], 1);
+    let fts = a.json(
+        "sessions.search{ query = 'zanzibar OR quokka', mode = 'fts' }",
+        &[],
+    );
+    assert_eq!(fts["returned"], 2);
+    let regex = a.json("sessions.search{ query = 'fla.y', mode = 'regex' }", &[]);
+    assert_eq!(hit_ids(&regex), [ID_A]);
+    let o = a.timon("sessions.search{ query = 'x', mode = 'fuzzy' }", &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown mode"));
+    let o = a.timon("sessions.search{ query = '   ' }", &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("bad_query"));
+}
+
+#[test]
+fn the_current_session_and_recent_ones_are_left_out_and_counted() {
+    let a = searchable();
+    let r = a.json(
+        "sessions.search{ query = 'parser' }",
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    );
+    assert_eq!(r["returned"], 0);
+    assert_eq!(r["hidden"]["excluded"], 1);
+    assert_eq!(r["absence_is_proof"], false);
+    let r = a.json(
+        "sessions.search{ query = 'parser', exclude = false }",
+        &[("CLAUDE_CODE_SESSION_ID", ID_A)],
+    );
+    assert_eq!(r["returned"], 1);
+
+    a.claude(
+        "-work-new",
+        ID_A2,
+        &[claude_user("fresh parser work", "/work/new")],
+        0,
+    );
+    let r = a.json("sessions.search{ query = 'fresh parser' }", &[]);
+    assert_eq!(r["hidden"]["active"], 1);
+    let r = a.json(
+        "sessions.search{ query = 'fresh parser', active = true }",
+        &[],
+    );
+    assert_eq!(r["returned"], 1);
+}
+
+#[test]
+fn the_index_follows_appends_removals_and_rebuilds() {
+    let a = searchable();
+    assert_eq!(
+        a.json("sessions.search{ query = 'kumquat' }", &[])["returned"],
+        0
+    );
+    let file = a
+        .home()
+        .join(".claude/projects/-work-s")
+        .join(format!("{ID_A}.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(f, "{}", claude_user("now about kumquat", "/work/s")).unwrap();
+    drop(f);
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let r = a.json("sessions.search{ query = 'kumquat' }", &[]);
+    assert_eq!(r["returned"], 1);
+    assert_eq!(r["coverage"]["refresh"]["appended"], 1);
+
+    std::fs::remove_file(&file).unwrap();
+    let r = a.json("sessions.search{ query = 'kumquat' }", &[]);
+    assert_eq!(r["returned"], 0);
+    assert_eq!(r["coverage"]["refresh"]["removed"], 1);
+
+    let fixtures_home = a.home();
+    let o = Command::new(env!("CARGO_BIN_EXE_timon"))
+        .args(["sessions", "index", "--rebuild"])
+        .current_dir(a.dir.path())
+        .env("TIMON_HOME", a.dir.path().join("timon"))
+        .env("HOME", &fixtures_home)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(report["reindexed"], 2);
+    assert_eq!(report["pending"], 0);
+}

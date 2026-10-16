@@ -5,6 +5,9 @@
 
 pub mod archive;
 pub(crate) mod codex;
+pub mod index;
+pub(crate) mod private;
+pub mod search;
 pub mod transcript;
 
 use std::collections::HashSet;
@@ -42,6 +45,13 @@ impl Backend {
                     .with_hint("backend is \"claude\" or \"codex\""),
             ),
         }
+    }
+}
+
+impl std::str::FromStr for Backend {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        Backend::parse(s)
     }
 }
 
@@ -88,6 +98,80 @@ impl Roots {
             codex: codex.join("sessions"),
             codex_archived: codex.join("archived_sessions"),
         })
+    }
+}
+
+/// Caps and settings for transcripts, the index and search.
+#[derive(Clone, Debug)]
+pub struct Limits {
+    /// Ceiling on the characters of records in one page.
+    pub response_max_chars: usize,
+    /// Per-record cap, so one huge message cannot dominate.
+    pub record_chars: usize,
+    /// Cap for tool results and tool call arguments.
+    pub tool_chars: usize,
+    /// Most records per page.
+    pub page_size: usize,
+    /// Head read steps for metadata.
+    pub head_steps: Vec<usize>,
+    /// Claude files above this size skip the full custom-title scan.
+    pub title_scan_max_bytes: usize,
+    /// Index reasoning text too.
+    pub index_reasoning: bool,
+    /// How long a search may spend bringing the index up to date first.
+    pub index_budget_ms: usize,
+    /// Sessions a search returns by default.
+    pub search_default: usize,
+    /// Matches shown per session by default.
+    pub per_session_default: usize,
+    /// Sessions written this recently are left out of search by default; 0 turns it off.
+    pub active_window_s: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            response_max_chars: 100_000,
+            record_chars: 4_000,
+            tool_chars: 600,
+            page_size: 200,
+            head_steps: vec![64 * 1024, 512 * 1024, 4 * 1024 * 1024],
+            title_scan_max_bytes: 4 * 1024 * 1024,
+            index_reasoning: true,
+            index_budget_ms: 15_000,
+            search_default: 20,
+            per_session_default: 3,
+            active_window_s: 600,
+        }
+    }
+}
+
+/// Where the index lives and which archives it covers, in the shape the index code uses.
+#[derive(Clone, Debug)]
+pub struct Paths {
+    /// The directory holding `index.db`: timon's cache directory.
+    pub home: PathBuf,
+    pub claude_archive: PathBuf,
+    pub codex_archive: PathBuf,
+    pub codex_archived: PathBuf,
+}
+
+impl Paths {
+    pub fn new(cache: &Path, roots: &Roots) -> Self {
+        Self {
+            home: cache.to_path_buf(),
+            claude_archive: roots.claude.clone(),
+            codex_archive: roots.codex.clone(),
+            codex_archived: roots.codex_archived.clone(),
+        }
+    }
+
+    pub fn roots(&self) -> Roots {
+        Roots {
+            claude: self.claude_archive.clone(),
+            codex: self.codex_archive.clone(),
+            codex_archived: self.codex_archived.clone(),
+        }
     }
 }
 
@@ -228,7 +312,7 @@ pub fn transcript(roots: &Roots, id: &str, opts: &TranscriptOptions) -> Result<J
         opts.offset,
         opts.limit,
         opts.kinds.as_deref(),
-        &transcript::Limits::default(),
+        &Limits::default(),
     )
     .map_err(|err| Error::new("io", format!("cannot read {}: {err}", e.file.display())))?;
     let mut out = json!({

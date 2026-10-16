@@ -120,6 +120,10 @@ impl Runtime {
             crate::modules::agent::STATE_DIR,
             layers.dirs.state.display().to_string(),
         )?;
+        self.lua.set_named_registry_value(
+            crate::modules::sessions::CACHE,
+            layers.dirs.cache.display().to_string(),
+        )?;
         if let Some(home) = &layers.dirs.home {
             self.lua.set_named_registry_value(
                 crate::modules::sessions::HOME,

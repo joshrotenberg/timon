@@ -659,6 +659,34 @@ for _, item in ipairs(page.items) do print(item.index, item.kind, item.text) end
 if page.has_more then page = sessions.transcript(id, { offset = page.next_offset }) end
 ```
 
+### `sessions.search{ query, mode, backend, project, since, until, limit, per_session, order, subagents, active, automated, exclude } -> result`
+
+Searches every session's text. Returns hits (session rows with match_count and matches { index, kind, name, excerpt }), hidden counts, exhaustive, absence_is_proof when nothing matched, and a note saying what was left out. The index refreshes first, within 15 s. The current session is excluded unless exclude says otherwise.
+
+| Option | Type | |
+|---|---|---|
+| `query` | string | what to find (required) |
+| `mode` | string | terms (default: every word), phrase, fts (FTS5 syntax) or regex |
+| `backend` | string | "claude" or "codex" |
+| `project` | string | part of the session's directory |
+| `since` | any | a duration back ("7d"), a date, or an RFC 3339 time |
+| `until` | any | the same forms as since |
+| `limit` | integer | most sessions (default 20) |
+| `per_session` | integer | most matches shown per session (default 3) |
+| `order` | string | "relevance" (default) or "recent" |
+| `subagents` | boolean | include sessions another session started |
+| `active` | boolean | include sessions written in the last 10 minutes |
+| `automated` | boolean | include claude -p, codex exec and timon's own runs |
+| `exclude` | any | a session id to leave out (default: the current session); false for none |
+
+```lua
+local r = sessions.search{ query = "compressed rollouts", since = "7d" }
+for _, hit in ipairs(r.hits) do
+  print(hit.id, hit.title or hit.snippet, hit.matches[1].excerpt)
+end
+if #r.hits == 0 and not r.absence_is_proof then print(r.note) end
+```
+
 ### `sessions.current() -> session | nil`
 
 The session timon is running inside, when the host CLI says so. Inside a Claude subagent it is the parent session.
