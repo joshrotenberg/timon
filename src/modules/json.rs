@@ -151,6 +151,11 @@ pub(crate) fn array(lua: &Lua, t: Option<Table>) -> mlua::Result<Table> {
     mark(lua, t, ARRAY_MT)
 }
 
+/// Marks `t`, or a new table, as a JSON object.
+pub(crate) fn object(lua: &Lua, t: Option<Table>) -> mlua::Result<Table> {
+    mark(lua, t, OBJECT_MT)
+}
+
 /// A new array holding `items`.
 pub(crate) fn array_from<T: mlua::IntoLua>(
     lua: &Lua,

@@ -39,6 +39,7 @@ timon skill show timon --ref api    # every function with an example
 | `fs`, `path` | files, directories, path names |
 | `git` | `status`, `log`, `diff`, `tags`, `branch`, `rev`, `add`, `commit`, `tag`, `push`, worktrees, `run`: git's output as data |
 | `http`, `gh` | `http.get`, `post`, `request`: responses as data; `gh.repo`, `prs`, `pr`, `issues`, `checks`, `api`, `graphql` with GH_TOKEN or gh's login |
+| `sqlite` | `sqlite.open(path)`: `db:exec`, `db:query` (rows keyed by column), `db:one`, `db:transaction` |
 | `toml`, `yaml`, `csv` | `decode`, `encode`; `toml.set` and `toml.edit` change one value and keep the rest of the file |
 | `markdown`, `term` | `headings` and `code` blocks with line numbers; `tty`, `color`, `width` |
 | `sh`, `proc` | run programs: `sh` streams and raises on failure, `sh.out` captures, `proc.run` returns a record, `proc.spawn` runs in the background |
@@ -94,6 +95,19 @@ return old, bumped:match("version = [^\n]*"), next.text, next.line
 `-i` binds the lines of stdin to `input`, `-I` its JSON values (one document or JSON lines),
 `-o` prints a returned list one element per line, `-O` as JSON lines, and `--stream` runs the
 code once per line or value without reading all of stdin first.
+
+A database, in memory or in a file:
+
+```lua
+local db = sqlite.open()
+db:exec("create table runs (id text primary key, usd real)")
+db:transaction(function()
+  for i, usd in ipairs({ 0.01, 0.03 }) do
+    db:exec("insert into runs values (:id, :usd)", { id = "r" .. i, usd = usd })
+  end
+end)
+return db:one("select count(*) as n, sum(usd) as total from runs").total  -- 0.04
+```
 
 Run programs:
 
