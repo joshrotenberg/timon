@@ -2,8 +2,9 @@
 
 `CLAUDE.md` is a symlink to this file.
 
-timon is one self-contained Rust binary embedding Lua 5.4 and Fennel over agent, session and tool
-APIs. `docs/design.md` is canonical for direction; `README.md` is canonical for what exists.
+timon is a task runner in one self-contained Rust binary: tasks and scripts in Lua 5.4 and
+Fennel over a toolbox, with agent and session APIs built in. Everything is a task; timon's own
+commands are built-in tasks. `docs/design.md` is canonical for direction; `README.md` is canonical for what exists.
 Read the design's Rules and API conventions before adding or changing an API.
 
 ## Rules

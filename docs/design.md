@@ -3,11 +3,16 @@
 Status: design. Nothing here is implemented unless it says so. `README.md` is canonical for what
 exists; this document is canonical for direction.
 
-timon (Venetian for rudder) is one self-contained binary that gives an agent, or a person, an
-embedded language and a set of clean APIs to use it around: running Claude and Codex as
-subagents, reading every past session, calling any MCP server, and a toolbox for git, JSON, HTTP,
-GitHub and SQLite. Code is evaluated from the command line or written as scripts. The skills that
-teach it are bundled in the binary, and it ships as a plugin for Claude Code and Codex.
+timon (Venetian for rudder) is a task runner in one self-contained binary, in the style of
+babashka and voga. Tasks and scripts are written in Lua or Fennel, over a toolbox for the work
+around a codebase: files, JSON, processes, git, HTTP, GitHub and SQLite. Everything timon does is
+a task: its own commands are built-in tasks, declared the same way as a project's.
+
+Agents are first class among them. Running Claude and Codex as subagents, reading every past
+session and calling any MCP server are modules any task can use, with the same records, budgets
+and options as everything else. The skills that teach timon are bundled in the binary, and it
+ships as a plugin for Claude Code and Codex, so an agent runs timon's tasks the way a person
+does.
 
 ## Why this exists
 
@@ -22,8 +27,22 @@ The ideas behind it were tried separately:
 | trovador, tosi | History and delegation are useful daily. As separate services they cannot share a script. |
 | voga, lesto, bharli, squero | Task runners and Lisps built from scratch. Each spent its time on the runner or the language rather than on the APIs. |
 
-timon takes the parts that worked and drops the parts that did not. The language is Lua, stock.
-Fennel comes with it, stock. All the effort goes into the APIs.
+timon takes the parts that worked and drops the parts that did not. voga had the right model:
+named tasks with dependencies, typed options and retained runs. Its cost was the runner and the
+language. timon keeps the model on stock Lua, with stock Fennel beside it, and adds the agent
+and session work that voga and babagent called out to. All the effort goes into the APIs.
+
+### Prior art
+
+Checked 2026-10-16. No tool found combines a scripting-language task runner with built-in
+agent and session APIs:
+
+| Tool | What it is | How timon differs |
+|---|---|---|
+| babashka tasks | Clojure task runner, the model for voga | Lua and Fennel; agents, sessions and contracts built in |
+| Flick, tal | small Lua task runners (`flick.lua` returns shell strings or Lua functions) | a full toolbox, records, budgets and agents |
+| Dagger | a container-based workflow engine with Go, Python and TypeScript SDKs and LLMs as a core type | no containers or engine; drives the Claude Code and Codex CLIs with their sessions; one binary |
+| Subtask, ai-dispatch | CLIs that dispatch Claude Code and Codex subagents | general tasks first; agents are one module |
 
 ## Rules
 
@@ -50,27 +69,34 @@ Fennel comes with it, stock. All the effort goes into the APIs.
 10. **Sized for small teams of agents.** The target is a workflow of a handful of agents over a
     few stages: a review with a verifier, a vote of three, an author and a critic. Fleets of
     dozens of agents over many stages are not the aim. Nothing is hard-limited, but defaults
-    (`limits.concurrency = 4`), features and their cost are chosen for the small case.
+    (`limits.concurrency = 4`), features and their cost are chosen for the small case. The same
+    holds for the runner: what our own repositories need comes first.
+11. **Everything is a task.** A task is a name, a description, typed options and a function.
+    timon's own commands are built-in tasks declared that way, so `timon tasks`, `--help`,
+    strict options and run records work the same for a built-in and for a project's task. A
+    task needs no agent; agents are a module like any other, first class but optional.
 
 ## Shape
 
 ```
 timon (one binary)
+├─ runner      tasks (built-in, tasks.lua, scripts/), eval, REPL; runs as records, resume
 ├─ runtime     Lua 5.4 (mlua, vendored, async) and fennel.lua (pinned, stock)
-│              eval, scripts, REPL, help(), errors, scope/spawn/par, json, str, tbl, fs
-├─ agent       Claude and Codex runs: run, ask, spawn; contracts; agent definitions
-├─ supervisor  concurrency caps, budgets, cancellation, run records
-├─ sessions    every Claude Code and Codex session: list, show, transcript, search
-├─ mcp         client: any MCP server's tools as Lua calls; server: `timon serve`
-├─ toolbox     git, gh, http, sh, proc, sqlite              (to discuss, see Toolbox)
-├─ later       hooks, memory, queues                          (to discuss)
-├─ storage     SQLite (bundled, FTS5): state, run records, the session index
-├─ surfaces    CLI, scripts, REPL, MCP server; hooks later
-└─ embedded    skill library, LuaLS type stubs, plugin templates
+│              help(), errors, strict options, scope/spawn/par, phases
+├─ toolbox     json, str, tbl, fs, path, sh, proc, git, gh, http, sqlite
+├─ agent       Claude and Codex runs: run, ask, spawn, continue; contracts; definitions
+├─ supervisor  concurrency caps, nested budgets, cancellation, run records
+├─ sessions    every Claude Code and Codex session: list, show, transcript, search, summarize
+├─ flow        workflow patterns over agent runs: pipeline, vote, refine, debate
+├─ mcp         client: any MCP server's tools as Lua calls; server: tasks as MCP tools
+├─ later       hooks, memory, queues, schedules                (to discuss)
+├─ storage     JSON files for records; SQLite (bundled, FTS5) for the session index
+├─ surfaces    CLI (tasks), REPL, MCP server; hooks later
+└─ embedded    built-in tasks, skill library, LuaLS type stubs, plugin templates
 ```
 
-A person's own agents, contracts, skills and scripts live in `~/.config/timon/`, a project's in
-`.timon/`, in the same format (see Directories).
+A person's own tasks, agents, contracts, skills and scripts live in `~/.config/timon/`, a
+project's in `.timon/`, in the same format (see Directories).
 
 ## API conventions
 
@@ -254,6 +280,63 @@ equivalents where they help.
 | globals | `help`, `try`, `scope`, `spawn`, `par`, `sleep`, `pp` (pretty-print to stderr), `log.info/warn/error` |
 
 The stock Lua standard library stays intact.
+
+## Tasks
+
+The planned shape, from #68 (v1) and #70 (`sh` and `proc`, its prerequisite). Nothing here is
+built yet.
+
+```lua
+-- .timon/tasks.lua (and ~/.config/timon/tasks.lua)
+return {
+  check = {
+    description = "The gates: format, lint, test, docs",
+    run = function()
+      sh("cargo fmt --all -- --check")
+      sh("cargo clippy --all-targets -- -D warnings")
+      sh("cargo test")
+    end,
+  },
+  review = {
+    description = "Review the diff against main",
+    depends = { "check" },
+    options = { base = "string?", model = "\"sonnet\" | \"opus\"" },
+    budget = { runs = 3, usd = 2 },
+    run = function(deps, opts)
+      return agent.ask{ agent = "reviewer", model = opts.model,
+                        prompt = "Review the diff against " .. (opts.base or "main") }
+    end,
+  },
+}
+```
+
+```sh
+timon tasks                          # built-in, user and project tasks, with descriptions
+timon check                          # a task, when no built-in has the name
+timon review --base main --model opus
+timon task review                    # always the task
+timon check review --jobs 2          # several tasks as one plan
+```
+
+- **A task is a table:** `description`, `options` in the type syntax of #29 (parsed from
+  `--key` flags, with `--help` generated from them), `depends`, `budget` and `run`. A script
+  in `scripts/NAME.lua` that returns the same table is a task too, so a short task lives in
+  `tasks.lua` and a long one in its own file.
+- **Built-in tasks:** timon's commands (`sessions search`, `agent run`, `runs`, `skill show`
+  and the rest) are declared as tasks, so their help, options and records come from the same
+  declarations. Plumbing stays native: `eval`, `run`, `tasks`, `trust`.
+- **Layers:** project tasks replace user tasks by name, like skills; a project's tasks load
+  only after `timon trust`. Built-in tasks take precedence over both, and `timon tasks` marks
+  a task one of them hides.
+- **Runs:** each task run is a script run (#32), so it is recorded, resumable (#57) and
+  budgeted (#56). A dependency runs once per plan, depth first, and its result goes to the
+  task in `deps`. The first failure stops the plan. `--jobs N` lets independent tasks
+  overlap, as voga's does. A task can call another with `task.run(name, opts)`.
+- **Exit codes:** an error with `exit` sets the process's exit status (#39). `--dry-run`
+  prints the plan without running it (#38).
+
+Open, in #68: whether built-in tasks can be overridden, how built-in task names nest
+(`sessions search`), and whether `tasks.lua`'s top level must be free of side effects.
 
 ## agent
 
@@ -672,10 +755,20 @@ claude plugin install timon@timon
 - Rules carried over from bottega: no `version` fields, a relative `./bin/timon` command in
   Codex's `mcp.json`, and no `hooks/hooks.json`, because Codex reads that path too.
 
-## Toolbox (to discuss)
+## Toolbox
 
-These follow the agent and sessions work. The shapes below are starting points for that
-discussion, not commitments.
+The toolbox is what makes timon a task runner. It comes in the order tasks need it.
+
+1. **`sh` and `proc` (#70)**, first. `sh` streams output and raises on a nonzero exit, like
+   `set -e`. `sh.out` captures stdout for a value. `proc.run` returns a record and never raises
+   for an exit code, and `proc.spawn` starts a background process. Every process belongs to its
+   task and runs in its own process group, so cancellation, Ctrl-C and timeouts stop it the way
+   they stop agent providers.
+2. **`eval` as a pipeline tool (#71):** `-i` reads lines, `-j` JSON and `-J` JSON lines into
+   `input`, `-o` prints an array line by line, and `--stream` runs once per line or value, as
+   bb's one-liner flags do.
+3. **`git`, `gh`, `http`, `sqlite`, and data formats** (#72: `toml` with edits that keep
+   formatting, `yaml`, `csv`, `markdown`, `term`). The shapes below are starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }
@@ -688,13 +781,8 @@ gh.issues{ labels = { "bug" } }    gh.checks("HEAD")
 gh.api("repos/{owner}/{repo}/pulls", { method = "POST", body = {...}, paginate = true })
 gh.graphql(query, vars)
 
-
 http.get(url, { headers = {...} })   -- { status, headers, body, json = function }
 http.post(url, { json = {...} })
-
-sh("git rev-parse HEAD")             -- stdout, trimmed; raises on a nonzero exit
-proc.run{ "cargo", "test", cwd = "." }   -- { code, out, err, ms }; never raises on exit codes
-proc.spawn{ name = "server", "cargo", "run" }   -- background process with logs, stop, wait
 
 local db = sqlite.open("data.db")    -- sqlite.open() for an in-memory database
 db:exec("create table if not exists seen (id text primary key)")
@@ -706,7 +794,11 @@ earn a function. Git runs the `git` program rather than a Rust reimplementation,
 and worktrees matter and the pure-Rust options do not cover them.
 
 Later, also to discuss: host hooks (`timon hook session-start` injecting a brief), a memory
-store, durable queues and workers, and schedules.
+store, durable queues and workers, schedules, watch mode and `.env` loading.
+
+MCP servers fill the role babashka gives pods: external programs whose functions a script
+calls. timon's MCP client (phase 9) makes any MCP server's tools Lua calls, so it needs no pod
+protocol of its own.
 
 ## Phases
 
@@ -714,10 +806,15 @@ store, durable queues and workers, and schedules.
 |---|---|---|
 | 0 | This design and a crate that evaluates plain Lua | merged |
 | 1 | Runtime: eval, scripts, REPL, Fennel, `help`, errors, strict options and globals, `json`, `str`, `tbl`, `fs`, `scope`/`spawn`/`par`; directories and layers; `timon skill`; the plugin with the `timon` skill | a Claude Code session uses `timon eval` through the plugin for a day of real work |
-| 2 | `agent`: run, ask, spawn, continue; supervisor; contracts and `schema`; agents; run records; `timon agent run`, `timon runs` | a fan-out review over three PRs and an author, review, follow-up cycle run as scripts; Ctrl-C leaves no child process |
+| 2 | `agent`: run, ask, spawn, continue; supervisor; contracts and `schema`; agents; run records; `timon agent run`, `timon runs`; the workflow harness's base: phases, progress, nested budgets, script runs as records, resume | a fan-out review over three PRs and an author, review, follow-up cycle run as scripts; Ctrl-C leaves no child process |
 | 3 | `sessions`: list, show, transcript, search, current, summarize; the index; `timon sessions` | the same hit sets as trovador for a fixed list of queries on one archive snapshot |
-| 4 | Toolbox and MCP: git, gh, http, sh, proc, sqlite; the `mcp` client and `timon serve` | after the discussion above |
-| 5 | Hooks, memory, queues | after phase 4 is in daily use |
+| 4 | Toolbox: `sh` and `proc` (#70) | this repository's gates run as a timon script, streaming output and exiting with the first failing gate's code |
+| 5 | Tasks v1 (#68): `tasks.lua` in both layers, `timon tasks`, `timon <task>`, `depends`, tasks as script runs | this repository's gates, release steps and dogfood scripts are tasks in daily use, and an agent runs them through the plugin |
+| 6 | Built-in tasks and typed options: timon's commands declared as tasks; options from the type syntax with `--help`; several tasks per invocation with `--jobs`; `task.run`; exit codes (#39); `--dry-run` (#38) | `timon tasks` lists built-in and project tasks alike, and every command's help comes from its declaration |
+| 7 | The rest of the toolbox: `git`, `gh`, `http`, `sqlite`; data formats (#72); `eval` input modes (#71) | a release task (bump `Cargo.toml`, tag, push, GitHub release) written as a timon task |
+| 8 | Workflow patterns: `flow` (#59) and its skill | a review with a verifier and a vote of three run as tasks |
+| 9 | MCP: the `mcp` client, and `timon serve` with tasks as tools | an agent calls a project's tasks over MCP |
+| 10 | Hooks, memory, queues, schedules | after phase 9 is in daily use |
 
 ## Where code comes from
 
