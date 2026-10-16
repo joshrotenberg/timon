@@ -20,8 +20,8 @@ Design: [docs/design.md](docs/design.md).
 | 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
 | 6 | Typed options, `--jobs`, `task.run`, `--dry-run`; built-in commands as tasks; completion | done |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite`, data formats, `eval -i`/`-I`; release tasks | done |
-| 8 | Workflow patterns | next |
-| 9 | MCP client and server | planned |
+| 8 | Workflow patterns: `flow` with gates, verify, vote, best_of, refine, pipeline, retry, plan | done |
+| 9 | MCP client and server | next |
 
 ## Install
 

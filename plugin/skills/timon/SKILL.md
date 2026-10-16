@@ -39,6 +39,7 @@ timon skill show timon --ref api    # every function with an example
 | `fs`, `path` | files, directories, path names |
 | `git` | `status`, `log`, `diff`, `tags`, `branch`, `rev`, `add`, `commit`, `tag`, `push`, worktrees, `run`: git's output as data |
 | `http`, `gh` | `http.get`, `post`, `request`: responses as data; `gh.repo`, `prs`, `pr`, `issues`, `checks`, `api`, `graphql` with GH_TOKEN or gh's login |
+| `flow` | workflow patterns: `check` (a gate), `verify`, `vote`, `best_of`, `refine`, `pipeline`, `retry`, `plan`; records with status and conclusion apart |
 | `sqlite` | `sqlite.open(path)`: `db:exec`, `db:query` (rows keyed by column), `db:one`, `db:transaction` |
 | `toml`, `yaml`, `csv` | `decode`, `encode`; `toml.set` and `toml.edit` change one value and keep the rest of the file |
 | `markdown`, `term` | `headings` and `code` blocks with line numbers; `tty`, `color`, `width` |
@@ -153,5 +154,5 @@ end
 - Lists from modules are arrays; `json.null` is JSON null; an empty `json.array{}` encodes as `[]`.
 - `scope`, `spawn` and `par` run work concurrently; a failure cancels the rest and is raised.
 - Define tasks with the `timon-tasks` skill, write scripts and reusable code with
-  `timon-scripting`, run subagents with `timon-agents`, and find earlier work with
-  `timon-sessions`.
+  `timon-scripting`, run subagents with `timon-agents`, combine and check their work with
+  `timon-workflows`, and find earlier work with `timon-sessions`.

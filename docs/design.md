@@ -102,7 +102,7 @@ timon (one binary)
 ├─ agent       Claude and Codex runs: run, ask, spawn, continue; contracts; definitions
 ├─ supervisor  concurrency caps, nested budgets, cancellation, run records
 ├─ sessions    every Claude Code and Codex session: list, show, transcript, search, summarize
-├─ flow        workflow patterns over agent runs: pipeline, vote, refine, debate
+├─ flow        workflow patterns: check, verify, vote, best_of, refine, pipeline, retry, plan
 ├─ mcp         client: any MCP server's tools as Lua calls; server: tasks as MCP tools
 ├─ later       hooks, memory, queues, schedules                (to discuss)
 ├─ storage     JSON files for records; SQLite (bundled, FTS5) for the session index
@@ -477,6 +477,27 @@ for i, r in ipairs(reviews) do
   end
 end
 ```
+
+### Workflow patterns
+
+`flow` (#59, built) is Lua over the runner: Rust keeps processes, cancellation, capacity,
+budgets and records; the patterns keep sequence, rounds, quorum and verification. No scheduler
+or graph engine (#60).
+
+- **A pattern returns a record and never raises for an outcome.** `status` says whether it ran
+  to the end (`ok`, `failed`, `timeout`, `invalid`); what it concluded is a separate field
+  (`winner`, `accepted`, `kept`). Every record has `pattern`, `runs` (the agent records its
+  steps returned), `usage { runs, usd, unknown_cost }` and `ms`. Bad arguments raise
+  `bad_option`; cancellation still cancels.
+- **Gates.** `flow.check(gate, value)` is the one verification primitive: a Lua predicate, a
+  command (passes on exit 0) or an agent spec (`yes_no` by default). A verdict keeps whether the
+  check ran (`status`) apart from what it concluded (`passed`), so a review that requests
+  changes, a failed run and an invalid answer stay apart. `refine` and `verify` take gates.
+- **Patterns:** `pipeline` (no barrier between items), `vote` (stops at quorum), `best_of` (a
+  deterministic `score` or a `judge`), `refine` (revise until a gate passes), `verify` (keep by
+  majority, all or any), `retry` (the last outcome passed on, for repair) and `plan` (steps by
+  `needs`; the first failure stops new steps). debate, team, map_reduce, route and tournament
+  are compositions of these (#99).
 
 ### Contracts
 

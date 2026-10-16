@@ -999,6 +999,140 @@ The Options section of a help text for declared options: flags, types, docs and 
 print(cli.help({ base = { type = "string", default = "main", doc = "the branch" } }))
 ```
 
+## flow
+
+Workflow patterns over agent runs, commands and Lua. A pattern returns a record and never raises for an outcome: status says whether it ran to the end (ok, failed, timeout, invalid), and what it concluded is a separate field (winner, accepted, kept). Every record has pattern, runs (the agent records its steps returned), usage { runs, usd, unknown_cost } and ms. A step returns an agent record, a pattern's record, or a plain value.
+
+### `flow.check(gate, value) -> { status, passed, reason }`
+
+Runs one gate on a value: a Lua predicate, a command (passes on exit 0) or an agent spec (yes_no by default). status says whether the check ran; passed says what it concluded, and is nil when it did not run.
+
+```lua
+local tests = flow.check({ "cargo", "test", "--quiet" })
+local short = flow.check(function(s) return #s < 80, "at most 80 characters" end, "a summary")
+return tests.passed, short.passed
+```
+
+### `flow.pipeline(items, stages, { limit }) -> { status, values, items }`
+
+Runs each item through the stages, a function(value, item, i) or { name, run } each, with no barrier between items. An item stops at its first stage that is not ok; status is ok when every item finished.
+
+| Option | Type | |
+|---|---|---|
+| `limit` | `integer` | most items at once (default: all) |
+
+```lua
+local r = flow.pipeline({ "a.rs", "b.rs" }, {
+  { name = "read", run = function(path) return "fn main() {}" end },
+  { name = "measure", run = function(text) return #text end },
+})
+return r.values[1]  -- 12
+```
+
+### `flow.vote{ run, n, quorum, key, limit } -> { status, winner, value, agreed, tally }`
+
+Runs n samples, run(i) each, and counts them by key(value) (default: a yes_no answer, or the value). Stops as soon as one key reaches quorum (default: a majority of n). winner is the quorum's key, or the plurality when none reached it.
+
+| Option | Type | |
+|---|---|---|
+| `run` | `function` | run(i) returns one sample (required) |
+| `n` | `integer` | how many samples (default 3) |
+| `quorum` | `integer` | how many agreeing samples end the vote (default: a majority) |
+| `key` | `function` | key(value) is what samples agree on |
+| `limit` | `integer` | most samples at once (default: n) |
+
+```lua
+local answers = { "yes", "no", "yes" }
+local r = flow.vote{ n = 3, run = function(i) return answers[i] end }
+return r.winner, r.agreed  -- yes, true
+```
+
+### `flow.best_of{ run, n, score | judge, limit } -> { status, winner, value, scores, candidates }`
+
+Runs n candidates, run(i) each, and picks one: score(value, i) returns a number and the highest wins, or judge(values) returns the position of the best (it may run an agent).
+
+| Option | Type | |
+|---|---|---|
+| `run` | `function` | run(i) returns one candidate (required) |
+| `n` | `integer` | how many candidates (default 3) |
+| `score` | `function` | score(value, i) returns a number; the highest wins |
+| `judge` | `function` | judge(values) returns the position of the best, or { index } |
+| `limit` | `integer` | most candidates at once (default: all) |
+
+```lua
+local r = flow.best_of{ n = 3, run = function(i) return ("x"):rep(i) end, score = function(s) return -#s end }
+return r.value  -- x
+```
+
+### `flow.refine{ draft, check, revise, rounds } -> { status, value, accepted, rounds, verdicts }`
+
+Drafts, checks the draft with a gate, and revises until it passes, at most rounds checks (default 3). revise(value, verdict, round, last) gets the failed verdict and the last step's agent record, for agent.continue. accepted says whether the last check passed.
+
+| Option | Type | |
+|---|---|---|
+| `draft` | `function` | draft() returns the first version (required) |
+| `check` | `any` | a gate: a function(value) returning true or false, { passed, reason }, or an agent record with a yes_no or review answer; a command string or list, which passes on exit 0; or an agent spec { prompt, ... }, which defaults to the yes_no contract (required) |
+| `revise` | `function` | revise(value, verdict, round, last) returns the next version (required) |
+| `rounds` | `integer` | most checks (default 3) |
+
+```lua
+local r = flow.refine{
+  draft = function() return "a long first line that runs on" end,
+  check = function(s) return #s <= 12 end,
+  revise = function(s) return s:sub(1, 12) end,
+}
+return r.accepted, r.value  -- true, a long first
+```
+
+### `flow.verify{ items, check | checks, keep, limit } -> { status, kept, rejected, items }`
+
+Checks every item with each gate and keeps or rejects it: majority (default) keeps an item unless most gates reject it, all keeps one every gate passes, any keeps one at least one passes. A gate that did not run neither keeps nor rejects.
+
+| Option | Type | |
+|---|---|---|
+| `items` | `any[]` | the items to check (required) |
+| `check` | `any` | a gate: a function(value) returning true or false, { passed, reason }, or an agent record with a yes_no or review answer; a command string or list, which passes on exit 0; or an agent spec { prompt, ... }, which defaults to the yes_no contract |
+| `checks` | `any[]` | several gates |
+| `keep` | `"majority" \| "all" \| "any"` | which items to keep (default majority) |
+| `limit` | `integer` | most items at once (default: all) |
+
+```lua
+local findings = { { line = 3, text = "off by one" }, { line = 0, text = "style" } }
+local r = flow.verify{ items = findings, check = function(f) return f.line > 0 end }
+return #r.kept, #r.rejected  -- 1, 1
+```
+
+### `flow.retry(fn, { times, on }) -> { status, value, attempts }`
+
+Calls fn(attempt, last) again while its outcome's status is in on (default failed, timeout and invalid), at most times more (default 2). last is the previous outcome, with error.data for an invalid answer to repair from.
+
+| Option | Type | |
+|---|---|---|
+| `times` | `integer` | most retries (default 2) |
+| `on` | `("failed" \| "timeout" \| "invalid" \| "cancelled")[]` | the statuses that retry |
+
+```lua
+local r = flow.retry(function(attempt) if attempt < 2 then error("flaky") end return "done" end)
+return r.value, r.attempts  -- done, 2
+```
+
+### `flow.plan{ steps, limit } -> { status, value, steps, order, stopped_at, skipped }`
+
+Runs named steps, { run = function(deps), needs = { ... } } each, as soon as the steps they need succeed; deps holds those steps' values. The first step that is not ok stops new ones; the rest are skipped.
+
+| Option | Type | |
+|---|---|---|
+| `steps` | `table<string, { run: function, needs: string[]? }>` | the steps by name (required) |
+| `limit` | `integer` | most steps at once (default: all) |
+
+```lua
+local r = flow.plan{ steps = {
+  plan = { run = function() return { "a", "b" } end },
+  build = { needs = { "plan" }, run = function(deps) return #deps.plan end },
+} }
+return r.value.build  -- 2
+```
+
 ## toml
 
 TOML: decode and encode, and edits that keep a file's comments and formatting.
