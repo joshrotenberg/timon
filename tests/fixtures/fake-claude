@@ -4,6 +4,7 @@
 FAKE_MODE: ok (default), auth, max_turns, is_error
 FAKE_TEXT: the result text (default: "echo: " + the prompt)
 FAKE_STRUCTURED: JSON for structured_output
+FAKE_AUTO_ANSWER: with --json-schema and no FAKE_STRUCTURED, answer with the smallest valid value
 FAKE_SESSION: the session id (default: claude-session-1)
 FAKE_DELAY: seconds to sleep first
 FAKE_PID_FILE: write this process's pid here first
@@ -12,6 +13,18 @@ FAKE_TOUCH: a file (relative to the working directory) to write, as an edit
 FAKE_RUNNING_DIR: a marker per running process; the count seen at start goes to ../seen-PID
 """
 import json, os, sys, time
+
+
+def example(schema):
+    """The smallest value matching a JSON Schema timon generates, for FAKE_AUTO_ANSWER."""
+    if "anyOf" in schema:
+        return example([s for s in schema["anyOf"] if s.get("type") != "null"][0])
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    if kind == "object":
+        return {k: example(v) for k, v in schema.get("properties", {}).items()}
+    return {"array": [], "string": "example", "integer": 1, "number": 1.5, "boolean": True}.get(kind)
 
 args = sys.argv[1:]
 prompt = sys.stdin.read()
@@ -56,6 +69,8 @@ result = {
 }
 if os.environ.get("FAKE_STRUCTURED"):
     result["structured_output"] = json.loads(os.environ["FAKE_STRUCTURED"])
+elif os.environ.get("FAKE_AUTO_ANSWER") and "--json-schema" in args:
+    result["structured_output"] = example(json.loads(args[args.index("--json-schema") + 1]))
 
 if mode == "auth":
     sys.stderr.write("Not logged in · Please run /login\n")
