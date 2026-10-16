@@ -817,7 +817,12 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
    value through toml_edit and keep every other byte), `yaml` (saphyr, YAML 1.2), `csv`,
    `markdown` (headings and code blocks with line numbers, through pulldown-cmark) and `term`.
    Decoders return tables with `json`'s markers, so values round-trip.
-4. **`git`, `gh`, `http`, `sqlite`.** The shapes below are starting points:
+4. **`git` (#88), built:** the `git` program through `proc`'s machinery (process groups,
+   cancellation, `GIT_TERMINAL_PROMPT=0`, refused while tasks load), with porcelain output
+   parsed into data. Worktrees are `git.worktree_add`, `git.worktrees` and
+   `git.worktree_remove`; `git.run` covers the rest. A failure raises `git_failed` with git's
+   stderr.
+5. **`gh`, `http`, `sqlite`.** The shapes below are starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }

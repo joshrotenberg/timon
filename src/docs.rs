@@ -99,6 +99,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::tbl::DOC,
         &modules::fs::FS_DOC,
         &modules::fs::PATH_DOC,
+        &modules::git::DOC,
         &modules::log::DOC,
         &modules::concurrency::DOC,
         &modules::proc::SH_DOC,

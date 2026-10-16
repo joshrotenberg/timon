@@ -476,6 +476,45 @@ async fn drain<R: AsyncRead + Unpin>(
     None
 }
 
+/// A program's exit code and captured output, for modules that drive a program.
+pub(crate) struct Captured {
+    pub code: i64,
+    pub out: String,
+    pub err: String,
+}
+
+/// Runs `argv` the way `proc.run` does: its own process group, stdout and stderr captured, no
+/// stdin unless `input`, cancellable, and refused while tasks load.
+pub(crate) async fn capture(
+    lua: &Lua,
+    argv: Vec<String>,
+    cwd: Option<String>,
+    env: Vec<(String, Option<String>)>,
+    input: Option<String>,
+) -> Result<Captured, Error> {
+    crate::tasks::refuse_while_loading(lua, &argv[0])?;
+    let spec = Spec {
+        display: shell_words::join(&argv),
+        argv,
+        cwd,
+        env,
+        clear_env: false,
+        input,
+        inherit_stdin: false,
+        timeout: None,
+        out: Stream::Capture,
+        err: Stream::Capture,
+        check: false,
+        prefix: None,
+    };
+    let o = execute(&spec).await?;
+    Ok(Captured {
+        code: o.code,
+        out: o.out.unwrap_or_default(),
+        err: o.err.unwrap_or_default(),
+    })
+}
+
 async fn execute(spec: &Spec) -> Result<Outcome, Error> {
     let started = Instant::now();
     let (mut cmd, group) = command(spec, std::io::stdin().is_terminal());

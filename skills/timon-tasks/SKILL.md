@@ -135,10 +135,13 @@ release = {
   options = { version = { type = "string", doc = "the new version" } },
   confirm = "Commit a release?",
   run = function(opts)
+    if not git.status().clean then error{ kind = "dirty", message = "commit or stash first" } end
     local old = toml.edit("Cargo.toml", "package.version", opts.version)
     local log = fs.read("CHANGELOG.md")
     fs.write("CHANGELOG.md", (log:gsub("## Unreleased", "## " .. opts.version, 1)))
-    sh{ "git", "commit", "-am", "chore: release " .. opts.version }
+    git.commit{ message = "chore: release " .. opts.version, all = true }
+    git.tag("v" .. opts.version, { message = "release " .. opts.version })
+    git.push{ tags = true }
     return old .. " -> " .. opts.version
   end,
 },
