@@ -77,6 +77,17 @@ pub const DOC: Module = Module {
             Opt::new("exclude", Ty::Any, "a session id to leave out (default: the current session); false for none"),
         ]),
         Func::new(
+            "summarize",
+            "sessions.summarize(id, { model, force, backend }) -> summary",
+            "Summarizes a session with Claude (default haiku): goal, what happened, decisions, state, open items. Spends tokens through agent.run, so budgets apply and each call is a run record; the transcript is redacted before it is sent. Cached until the session changes, so a repeat costs nothing. Returns { id, backend, text, model, usd, cached, chunks, chunks_summarized }.",
+            "local s = sessions.summarize(\"01a117cb\")\nprint(s.text, s.cached and \"(cached)\" or string.format(\"$%.4f\", s.usd))",
+        )
+        .with_options(&[
+            Opt::new("model", Ty::String, "the Claude model (default haiku); a different one than the cache's makes a new summary"),
+            Opt::new("force", Ty::Boolean, "summarize again even when the cache is current"),
+            Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both"),
+        ]),
+        Func::new(
             "current",
             "sessions.current() -> session | nil",
             "The session timon is running inside, when the host CLI says so. Inside a Claude subagent it is the parent session.",
@@ -139,6 +150,111 @@ pub(crate) fn since_opt(value: &Value) -> Result<Option<chrono::DateTime<chrono:
             ),
         )),
     }
+}
+
+/// One model call through the Lua `agent.run`, so budgets, concurrency and records apply.
+async fn ask(lua: &Lua, prompt: String, model: &str) -> mlua::Result<(String, f64)> {
+    let agent: Table = lua.globals().raw_get("agent")?;
+    let run: mlua::Function = agent.raw_get("run")?;
+    let spec = lua.create_table()?;
+    spec.raw_set("prompt", prompt)?;
+    spec.raw_set("provider", "claude")?;
+    spec.raw_set("model", model)?;
+    spec.raw_set("access", "read")?;
+    spec.raw_set("tools", lua.create_table()?)?;
+    spec.raw_set("ephemeral", true)?;
+    let budget = lua.create_table()?;
+    budget.raw_set("turns", 1)?;
+    spec.raw_set("budget", budget)?;
+    let record: Table = run.call_async(spec).await?;
+    let status: String = record.raw_get("status")?;
+    if status != "ok" {
+        let message = record
+            .raw_get::<Option<Table>>("error")?
+            .and_then(|e| e.raw_get::<String>("message").ok())
+            .unwrap_or_default();
+        return Err(Error::new(
+            "summarize_failed",
+            format!("the summarizer run was {status}: {message}"),
+        )
+        .into());
+    }
+    let usd = record
+        .raw_get::<Table>("usage")?
+        .raw_get::<Option<f64>>("usd")?
+        .unwrap_or(0.0);
+    Ok((record.raw_get("text")?, usd))
+}
+
+async fn summarize(lua: Lua, id: String, opts: Option<Table>) -> mlua::Result<Value> {
+    use crate::sessions::summary;
+    options::check_opt("sessions.summarize", opts.as_ref())?;
+    let backend = backend_opt(opts.as_ref())?;
+    let (model, force) = match &opts {
+        Some(o) => (
+            o.raw_get::<Option<String>>("model")?,
+            o.raw_get::<Option<bool>>("force")?.unwrap_or(false),
+        ),
+        None => (None, false),
+    };
+    let paths = index_paths(&lua)?;
+    let e = sessions::archive::find_session(&paths.roots(), &id, backend)?;
+    let dir = paths.home.join("summaries");
+    let result = |c: &summary::Cached, cached: bool| {
+        serde_json::json!({
+            "id": c.session_id, "backend": c.backend.as_str(), "text": c.text, "model": c.model,
+            "usd": if cached { 0.0 } else { c.usd }, "cached": cached,
+            "chunks": c.chunks, "chunks_summarized": c.chunks_summarized,
+        })
+    };
+    if !force
+        && let Some(hit) = summary::cached(&dir, &e)
+        && model.as_deref().is_none_or(|m| m == hit.model)
+    {
+        return json_module::decode(&lua, &result(&hit, true));
+    }
+    let model = model.unwrap_or_else(|| summary::DEFAULT_MODEL.to_owned());
+    let entry = e.clone();
+    let text =
+        tokio::task::spawn_blocking(move || summary::render(&entry, &sessions::Limits::default()))
+            .await
+            .map_err(|err| Error::new("internal", err.to_string()))?
+            .map_err(|err| Error::new("io", format!("cannot read {}: {err}", e.file.display())))?;
+    let chunks = summary::chunk(&text, summary::CHUNK_CHARS);
+    let picked = summary::pick(chunks.len(), summary::MAX_CHUNKS);
+    let mut usd = 0.0;
+    let summary_text = if picked.len() <= 1 {
+        let body = chunks.first().copied().unwrap_or("(empty session)");
+        let (s, cost) = ask(&lua, summary::whole_prompt(body), &model).await?;
+        usd += cost;
+        s
+    } else {
+        let mut partials = Vec::with_capacity(picked.len());
+        for &i in &picked {
+            let (s, cost) = ask(
+                &lua,
+                summary::part_prompt(i, chunks.len(), chunks[i]),
+                &model,
+            )
+            .await?;
+            usd += cost;
+            partials.push((i, s));
+        }
+        let (s, cost) = ask(&lua, summary::merge_prompt(&partials, chunks.len()), &model).await?;
+        usd += cost;
+        s
+    };
+    let stored = summary::store(
+        &dir,
+        &e,
+        &summary_text,
+        &model,
+        usd,
+        chunks.len(),
+        picked.len(),
+    )
+    .map_err(|err| Error::new("io", format!("cannot cache the summary: {err}")))?;
+    json_module::decode(&lua, &result(&stored, false))
 }
 
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
@@ -263,6 +379,14 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             let result =
                 sessions::search::search(&index_paths(lua)?, &sessions::Limits::default(), &s)?;
             json_module::decode(lua, &result)
+        })?,
+    )?;
+    installer.function(
+        &DOC,
+        Some(&module),
+        "summarize",
+        lua.create_async_function(|lua, (id, opts): (String, Option<Table>)| async move {
+            summarize(lua, id, opts).await
         })?,
     )?;
     installer.function(

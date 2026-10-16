@@ -655,3 +655,165 @@ fn the_index_follows_appends_removals_and_rebuilds() {
     assert_eq!(report["reindexed"], 2);
     assert_eq!(report["pending"], 0);
 }
+
+// Summaries (#43)
+
+fn fake_claude() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake-claude")
+        .display()
+        .to_string()
+}
+
+fn logged(dir: &Path) -> Vec<serde_json::Value> {
+    let mut calls: Vec<(usize, serde_json::Value)> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let n = name["claude-".len()..name.len() - ".json".len()]
+                .parse()
+                .unwrap();
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            (n, serde_json::from_str(&text).unwrap())
+        })
+        .collect();
+    calls.sort_by_key(|(n, _)| *n);
+    calls.into_iter().map(|(_, c)| c).collect()
+}
+
+#[test]
+fn a_summary_is_redacted_ephemeral_and_cached_until_the_session_changes() {
+    let a = Archive::new();
+    let secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+    let lines = [
+        claude_user(&format!("deploy with key {secret}"), "/work/app"),
+        serde_json::json!({ "type": "assistant", "message": { "role": "assistant",
+            "content": [{ "type": "text", "text": "deployed" }] } }),
+    ];
+    a.claude("-work-app", ID_A, &lines, 10);
+    let log = a.dir.path().join("log");
+    std::fs::create_dir_all(&log).unwrap();
+    let claude = fake_claude();
+    let log_dir = log.display().to_string();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_LOG_DIR", log_dir.as_str()),
+        ("FAKE_TEXT", "Goal: deploy."),
+    ];
+    let summarize = |opts: &str| {
+        a.json(
+            &format!("return sessions.summarize(\"aaaaaaaa-1111\", {opts})"),
+            &env,
+        )
+    };
+
+    let s = summarize("{}");
+    assert_eq!(s["text"], "Goal: deploy.");
+    assert_eq!(s["id"], ID_A);
+    assert_eq!(s["model"], "haiku");
+    assert_eq!(s["cached"], false);
+    assert_eq!(s["usd"], 0.0125);
+    assert_eq!(
+        (s["chunks"].as_u64(), s["chunks_summarized"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let calls = logged(&log);
+    assert_eq!(calls.len(), 1);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("deployed") && prompt.contains("[redacted:anthropic]"));
+    assert!(!prompt.contains(secret));
+    let args: Vec<&str> = calls[0]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(args.contains(&"--no-session-persistence"), "{args:?}");
+    assert!(
+        args.windows(2).any(|w| w == ["--model", "haiku"]),
+        "{args:?}"
+    );
+    assert!(args.windows(2).any(|w| w == ["--tools", ""]), "{args:?}");
+
+    let again = summarize("{}");
+    assert_eq!(
+        (again["cached"].as_bool(), again["usd"].as_f64()),
+        (Some(true), Some(0.0))
+    );
+    assert_eq!(logged(&log).len(), 1);
+
+    assert_eq!(summarize("{ force = true }")["cached"], false);
+    let sonnet = summarize("{ model = \"sonnet\" }");
+    assert_eq!(
+        (sonnet["cached"].as_bool(), sonnet["model"].as_str()),
+        (Some(false), Some("sonnet"))
+    );
+    assert_eq!(summarize("{}")["model"], "sonnet");
+    assert_eq!(logged(&log).len(), 3);
+
+    let mut more = lines.to_vec();
+    more.push(claude_user("and roll back", "/work/app"));
+    a.claude("-work-app", ID_A, &more, 1);
+    assert_eq!(summarize("{}")["cached"], false);
+    assert_eq!(logged(&log).len(), 4);
+
+    let runs = a.json("return agent.runs{}", &[]);
+    assert_eq!(runs.as_array().unwrap().len(), 4);
+    let o = a.timon(
+        "return sessions.summarize(\"aaaaaaaa-1111\", { modle = \"x\" })",
+        &env,
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("did you mean \"model\""));
+}
+
+#[test]
+fn a_long_session_is_summarized_in_parts_and_merged_within_budget() {
+    let a = Archive::new();
+    // Records are capped at 4,000 characters each, so length comes from their number.
+    let block = "word ".repeat(700);
+    let lines: Vec<serde_json::Value> = (0..80)
+        .map(|i| claude_user(&format!("part{i} {block}"), "/work/app"))
+        .collect();
+    a.claude("-work-app", ID_A, &lines, 10);
+    let log = a.dir.path().join("log");
+    std::fs::create_dir_all(&log).unwrap();
+    let claude = fake_claude();
+    let log_dir = log.display().to_string();
+    let env = [
+        ("TIMON_CLAUDE_BIN", claude.as_str()),
+        ("FAKE_LOG_DIR", log_dir.as_str()),
+        ("FAKE_TEXT", "- a bullet"),
+    ];
+    let s = a.json("return sessions.summarize(\"aaaaaaaa\")", &env);
+    assert_eq!(
+        (s["chunks"].as_u64(), s["chunks_summarized"].as_u64()),
+        (Some(2), Some(2))
+    );
+    assert_eq!(s["usd"], 0.0125 * 3.0);
+    let prompts: Vec<String> = logged(&log)
+        .iter()
+        .map(|c| c["prompt"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(prompts.len(), 3);
+    assert!(prompts[0].starts_with("This is part 1 of 2"));
+    assert!(prompts[1].starts_with("This is part 2 of 2"));
+    assert!(prompts[2].contains("Merge them") && prompts[2].contains("PART 2:\n- a bullet"));
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_timon"));
+    let o = cmd
+        .args([
+            "eval",
+            "return sessions.summarize(\"aaaaaaaa\", { force = true })",
+            "--max-runs",
+            "2",
+        ])
+        .current_dir(a.dir.path())
+        .env("TIMON_HOME", a.dir.path().join("timon"))
+        .env("HOME", a.home())
+        .envs(env)
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("budget_exceeded"));
+}

@@ -122,6 +122,32 @@ fn write_access_adds_edit_tools() {
 }
 
 #[test]
+fn ephemeral_runs_leave_no_session_and_no_tools_means_none() {
+    let s = Sandbox::new();
+    s.json(
+        "agent.run{ prompt = 'x', ephemeral = true, tools = {} }",
+        &[],
+    );
+    let args = s.args("claude", 0);
+    assert!(
+        args.contains(&"--no-session-persistence".to_owned()),
+        "{args:?}"
+    );
+    assert!(has_pair(&args, "--tools", ""), "{args:?}");
+    s.json(
+        "agent.run{ provider = 'codex', prompt = 'x', ephemeral = true }",
+        &[],
+    );
+    let args = s.args("codex", 0);
+    assert!(args.contains(&"--ephemeral".to_owned()), "{args:?}");
+    s.json("agent.run{ prompt = 'x' }", &[]);
+    assert!(
+        !s.args("claude", 1)
+            .contains(&"--no-session-persistence".to_owned())
+    );
+}
+
+#[test]
 fn full_access_needs_an_opt_in() {
     let s = Sandbox::new();
     let o = s.timon("agent.run{ prompt = 'x', access = 'full' }", &[]);

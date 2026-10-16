@@ -35,7 +35,7 @@ pub const DOC: Module = Module {
             Opt::new("model", Ty::String, "the provider's model name"),
             Opt::new("effort", Ty::String, "claude: low, medium, high, xhigh, max; codex: passed through"),
             Opt::new("access", Ty::String, "\"read\" (default), \"write\", or \"full\" (needs limits.allow_full)"),
-            Opt::new("tools", Ty::Table, "claude's tool list, replacing the one access picks"),
+            Opt::new("tools", Ty::Table, "claude's tool list, replacing the one access picks; {} allows none"),
             Opt::new("cwd", Ty::String, "the directory to run in"),
             Opt::new("system", Ty::String, "instructions added to the system prompt"),
             Opt::new("output", Ty::Any, "a contract name or a schema; the answer is validated"),
@@ -45,6 +45,7 @@ pub const DOC: Module = Module {
             Opt::new("fork", Ty::String, "a session id to branch from (claude)"),
             Opt::new("native", Ty::Table, "extra command-line arguments for the provider"),
             Opt::new("worktree", Ty::Boolean, "run in a new git worktree; kept only if the run changed it"),
+            Opt::new("ephemeral", Ty::Boolean, "leave no session behind for the provider to resume"),
         ]),
         Func::new(
             "ask",
@@ -293,6 +294,9 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
     req.resume = get("resume")?;
     req.fork = get("fork")?;
     req.cwd = get("cwd")?.map(PathBuf::from);
+    req.ephemeral = fields
+        .raw_get::<Option<bool>>("ephemeral")?
+        .unwrap_or(false);
     if let Some(tools) = fields.raw_get::<Option<Table>>("tools")? {
         req.tools = Some(string_list(&tools, "tools")?);
     }

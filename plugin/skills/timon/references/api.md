@@ -550,7 +550,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `model` | string | the provider's model name |
 | `effort` | string | claude: low, medium, high, xhigh, max; codex: passed through |
 | `access` | string | "read" (default), "write", or "full" (needs limits.allow_full) |
-| `tools` | table | claude's tool list, replacing the one access picks |
+| `tools` | table | claude's tool list, replacing the one access picks; {} allows none |
 | `cwd` | string | the directory to run in |
 | `system` | string | instructions added to the system prompt |
 | `output` | any | a contract name or a schema; the answer is validated |
@@ -560,6 +560,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `fork` | string | a session id to branch from (claude) |
 | `native` | table | extra command-line arguments for the provider |
 | `worktree` | boolean | run in a new git worktree; kept only if the run changed it |
+| `ephemeral` | boolean | leave no session behind for the provider to resume |
 
 ```lua
 local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
@@ -685,6 +686,21 @@ for _, hit in ipairs(r.hits) do
   print(hit.id, hit.title or hit.snippet, hit.matches[1].excerpt)
 end
 if #r.hits == 0 and not r.absence_is_proof then print(r.note) end
+```
+
+### `sessions.summarize(id, { model, force, backend }) -> summary`
+
+Summarizes a session with Claude (default haiku): goal, what happened, decisions, state, open items. Spends tokens through agent.run, so budgets apply and each call is a run record; the transcript is redacted before it is sent. Cached until the session changes, so a repeat costs nothing. Returns { id, backend, text, model, usd, cached, chunks, chunks_summarized }.
+
+| Option | Type | |
+|---|---|---|
+| `model` | string | the Claude model (default haiku); a different one than the cache's makes a new summary |
+| `force` | boolean | summarize again even when the cache is current |
+| `backend` | string | "claude" or "codex", when a prefix matches both |
+
+```lua
+local s = sessions.summarize("01a117cb")
+print(s.text, s.cached and "(cached)" or string.format("$%.4f", s.usd))
 ```
 
 ### `sessions.current() -> session | nil`

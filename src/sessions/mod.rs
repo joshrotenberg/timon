@@ -8,6 +8,7 @@ pub(crate) mod codex;
 pub mod index;
 pub(crate) mod private;
 pub mod search;
+pub mod summary;
 pub mod transcript;
 
 use std::collections::HashSet;

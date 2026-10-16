@@ -103,6 +103,8 @@ pub struct Request {
     pub fork: Option<String>,
     pub events: bool,
     pub native: Vec<String>,
+    /// Leave no session behind: Claude's `--no-session-persistence`, Codex's `--ephemeral`.
+    pub ephemeral: bool,
 }
 
 impl Request {
@@ -123,6 +125,7 @@ impl Request {
             "resume": self.resume,
             "fork": self.fork,
             "native": self.native,
+            "ephemeral": self.ephemeral,
         })
     }
 
@@ -143,6 +146,7 @@ impl Request {
             fork: None,
             events: false,
             native: Vec::new(),
+            ephemeral: false,
         }
     }
 }
