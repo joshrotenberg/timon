@@ -314,3 +314,24 @@ fn json_query_reports_bad_expressions_and_null_results() {
     assert_eq!(one("json.query({ a = 1 }, 'missing') == json.null"), "true");
     assert_eq!(fails("json.query({ f = print }, 'f')").kind, "not_json");
 }
+
+// Strict module fields (#17)
+
+#[test]
+fn a_misspelled_module_field_suggests_the_real_one() {
+    let err = fails("json.qeury({}, 'a')");
+    assert_eq!(err.kind, "undefined_field");
+    assert_eq!(err.message, "json has no field \"qeury\"");
+    assert_eq!(err.hint.as_deref(), Some("did you mean \"query\"?"));
+    assert_eq!(
+        fails("tbl.nothing_like_this").hint.as_deref(),
+        Some("help(tbl) lists what it has")
+    );
+}
+
+#[test]
+fn real_fields_and_rawget_still_work() {
+    assert_eq!(one("json.null == json.decode('null')"), "true");
+    assert_eq!(one("rawget(json, 'nope') == nil"), "true");
+    assert_eq!(one("rawget(par, 'map') ~= nil"), "true");
+}
