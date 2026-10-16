@@ -52,6 +52,11 @@ if mode == "auth":
     sys.exit(1)
 emit({"type": "thread.started", "thread_id": thread})
 emit({"type": "turn.started"})
+emit({"type": "item.completed", "item": {"id": "i0", "type": "reasoning", "text": "list the files"}})
+emit({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "bash -lc ls",
+                                       "aggregated_output": "", "exit_code": None, "status": "in_progress"}})
+emit({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bash -lc ls",
+                                         "aggregated_output": "README.md\n", "exit_code": 0, "status": "completed"}})
 if mode == "turn_failed":
     inner = {"error": {"type": "invalid_request_error", "code": "invalid_json_schema",
                        "message": "Invalid schema for response_format"}, "status": 400}
@@ -61,7 +66,7 @@ text = os.environ.get("FAKE_TEXT", "echo: " + prompt)
 final = os.environ.get("FAKE_STRUCTURED", text)
 if "FAKE_STRUCTURED" not in os.environ and os.environ.get("FAKE_AUTO_ANSWER") and schema:
     final = json.dumps(example(schema))
-emit({"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": final}})
+emit({"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": final}})
 emit({"type": "turn.completed", "usage": {"input_tokens": 200, "cached_input_tokens": 0, "output_tokens": 40}})
 if "--output-last-message" in args:
     with open(args[args.index("--output-last-message") + 1], "w") as f:

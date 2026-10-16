@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use mlua::{Lua, Table, Value};
 
-use crate::docs::{Func, Module, Opt, Ty};
+use crate::docs::{Func, Module, Opt};
 use crate::error::Error;
 use crate::modules::agent::STATE_DIR;
 use crate::modules::{Installer, json as json_module};
@@ -29,12 +29,12 @@ pub const DOC: Module = Module {
             "local found = sessions.list{ project = \"timon\", since = \"2d\", limit = 5 }\nfor _, s in ipairs(found.sessions) do print(s.id, s.title or s.snippet) end",
         )
         .with_options(&[
-            Opt::new("backend", Ty::String, "\"claude\" or \"codex\""),
-            Opt::new("project", Ty::String, "part of the session's directory"),
-            Opt::new("since", Ty::Any, "a duration back (\"2d\"), a date, or an RFC 3339 time"),
-            Opt::new("limit", Ty::Integer, "most sessions to return (default 20)"),
-            Opt::new("subagents", Ty::Boolean, "include sessions another session started"),
-            Opt::new("automated", Ty::Boolean, "include claude -p, codex exec and timon's own runs"),
+            Opt::new("backend", "\"claude\" | \"codex\"", "only this backend (default: both)"),
+            Opt::new("project", "string", "part of the session's directory"),
+            Opt::new("since", "string | number", "a duration back (\"2d\"), a date, or an RFC 3339 time"),
+            Opt::new("limit", "integer", "most sessions to return (default 20)"),
+            Opt::new("subagents", "boolean", "include sessions another session started"),
+            Opt::new("automated", "boolean", "include claude -p, codex exec and timon's own runs"),
         ]),
         Func::new(
             "show",
@@ -42,7 +42,7 @@ pub const DOC: Module = Module {
             "One session by id or unambiguous prefix, with its file, whether it is compressed, and open_with, the command that resumes it.",
             "local s = sessions.show(\"01a117cb\")\nprint(s.open_with)",
         )
-        .with_options(&[Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both")]),
+        .with_options(&[Opt::new("backend", "\"claude\" | \"codex\"", "which backend, when an id prefix matches both")]),
         Func::new(
             "transcript",
             "sessions.transcript(id, { offset, limit, kinds, backend }) -> page",
@@ -50,10 +50,10 @@ pub const DOC: Module = Module {
             "local page = sessions.transcript(id, { kinds = { \"user\", \"assistant\" }, limit = 50 })\nfor _, item in ipairs(page.items) do print(item.index, item.kind, item.text) end\nif page.has_more then page = sessions.transcript(id, { offset = page.next_offset }) end",
         )
         .with_options(&[
-            Opt::new("offset", Ty::Integer, "the index to start at (default 0)"),
-            Opt::new("limit", Ty::Integer, "most items in the page (at most 200)"),
-            Opt::new("kinds", Ty::Table, "only these kinds; indexes still count every item"),
-            Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both"),
+            Opt::new("offset", "integer", "the index to start at (default 0)"),
+            Opt::new("limit", "integer", "most items in the page (at most 200)"),
+            Opt::new("kinds", "(\"user\" | \"assistant\" | \"tool_call\" | \"tool_result\" | \"reasoning\" | \"attachment\" | \"system\" | \"omitted\")[]", "only these kinds; indexes still count every item"),
+            Opt::new("backend", "\"claude\" | \"codex\"", "which backend, when an id prefix matches both"),
         ]),
         Func::new(
             "search",
@@ -62,19 +62,19 @@ pub const DOC: Module = Module {
             "local r = sessions.search{ query = \"compressed rollouts\", since = \"7d\" }\nfor _, hit in ipairs(r.hits) do\n  print(hit.id, hit.title or hit.snippet, hit.matches[1].excerpt)\nend\nif #r.hits == 0 and not r.absence_is_proof then print(r.note) end",
         )
         .with_options(&[
-            Opt::required("query", Ty::String, "what to find"),
-            Opt::new("mode", Ty::String, "terms (default: every word), phrase, fts (FTS5 syntax) or regex"),
-            Opt::new("backend", Ty::String, "\"claude\" or \"codex\""),
-            Opt::new("project", Ty::String, "part of the session's directory"),
-            Opt::new("since", Ty::Any, "a duration back (\"7d\"), a date, or an RFC 3339 time"),
-            Opt::new("until", Ty::Any, "the same forms as since"),
-            Opt::new("limit", Ty::Integer, "most sessions (default 20)"),
-            Opt::new("per_session", Ty::Integer, "most matches shown per session (default 3)"),
-            Opt::new("order", Ty::String, "\"relevance\" (default) or \"recent\""),
-            Opt::new("subagents", Ty::Boolean, "include sessions another session started"),
-            Opt::new("active", Ty::Boolean, "include sessions written in the last 10 minutes"),
-            Opt::new("automated", Ty::Boolean, "include claude -p, codex exec and timon's own runs"),
-            Opt::new("exclude", Ty::Any, "a session id to leave out (default: the current session); false for none"),
+            Opt::required("query", "string", "what to find"),
+            Opt::new("mode", "\"terms\" | \"phrase\" | \"fts\" | \"regex\"", "terms (default): every word; phrase: the words in order; fts: FTS5 syntax; regex"),
+            Opt::new("backend", "\"claude\" | \"codex\"", "only this backend (default: both)"),
+            Opt::new("project", "string", "part of the session's directory"),
+            Opt::new("since", "string | number", "a duration back (\"7d\"), a date, or an RFC 3339 time"),
+            Opt::new("until", "string | number", "the same forms as since"),
+            Opt::new("limit", "integer", "most sessions (default 20)"),
+            Opt::new("per_session", "integer", "most matches shown per session (default 3)"),
+            Opt::new("order", "\"relevance\" | \"recent\"", "default relevance"),
+            Opt::new("subagents", "boolean", "include sessions another session started"),
+            Opt::new("active", "boolean", "include sessions written in the last 10 minutes"),
+            Opt::new("automated", "boolean", "include claude -p, codex exec and timon's own runs"),
+            Opt::new("exclude", "string | boolean", "a session id to leave out (default: the current session); false for none"),
         ]),
         Func::new(
             "summarize",
@@ -83,9 +83,9 @@ pub const DOC: Module = Module {
             "local s = sessions.summarize(\"01a117cb\")\nprint(s.text, s.cached and \"(cached)\" or string.format(\"$%.4f\", s.usd))",
         )
         .with_options(&[
-            Opt::new("model", Ty::String, "the Claude model (default haiku); a different one than the cache's makes a new summary"),
-            Opt::new("force", Ty::Boolean, "summarize again even when the cache is current"),
-            Opt::new("backend", Ty::String, "\"claude\" or \"codex\", when a prefix matches both"),
+            Opt::new("model", "string", "the Claude model (default haiku); a different one than the cache's makes a new summary"),
+            Opt::new("force", "boolean", "summarize again even when the cache is current"),
+            Opt::new("backend", "\"claude\" | \"codex\"", "which backend, when an id prefix matches both"),
         ]),
         Func::new(
             "current",

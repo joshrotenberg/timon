@@ -2,62 +2,19 @@
 //!
 //! One source for what `help()` prints and what strict options check, so they cannot disagree.
 
-use mlua::Value;
-
-/// The type an option accepts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ty {
-    String,
-    Integer,
-    Number,
-    Boolean,
-    Table,
-    Function,
-    Any,
-}
-
-impl Ty {
-    /// The name used in signatures and errors.
-    pub fn name(self) -> &'static str {
-        match self {
-            Ty::String => "string",
-            Ty::Integer => "integer",
-            Ty::Number => "number",
-            Ty::Boolean => "boolean",
-            Ty::Table => "table",
-            Ty::Function => "function",
-            Ty::Any => "any",
-        }
-    }
-
-    /// Whether `value` has this type. An integral float counts as an integer.
-    pub fn accepts(self, value: &Value) -> bool {
-        match (self, value) {
-            (Ty::Any, _) => true,
-            (Ty::String, Value::String(_)) => true,
-            (Ty::Integer, Value::Integer(_)) => true,
-            (Ty::Integer, Value::Number(n)) => n.fract() == 0.0,
-            (Ty::Number, Value::Integer(_) | Value::Number(_)) => true,
-            (Ty::Boolean, Value::Boolean(_)) => true,
-            (Ty::Table, Value::Table(_)) => true,
-            (Ty::Function, Value::Function(_)) => true,
-            _ => false,
-        }
-    }
-}
-
 /// One named option of a function's options table.
 #[derive(Debug)]
 pub struct Opt {
     pub name: &'static str,
-    pub ty: Ty,
+    /// The type, in the LuaLS syntax of [`crate::types`], such as `"read" | "write"`.
+    pub ty: &'static str,
     pub required: bool,
     pub doc: &'static str,
 }
 
 impl Opt {
     /// An optional option.
-    pub const fn new(name: &'static str, ty: Ty, doc: &'static str) -> Self {
+    pub const fn new(name: &'static str, ty: &'static str, doc: &'static str) -> Self {
         Self {
             name,
             ty,
@@ -67,7 +24,7 @@ impl Opt {
     }
 
     /// An option that must be given.
-    pub const fn required(name: &'static str, ty: Ty, doc: &'static str) -> Self {
+    pub const fn required(name: &'static str, ty: &'static str, doc: &'static str) -> Self {
         Self {
             name,
             ty,
@@ -191,10 +148,8 @@ pub fn describe_function(func: &Func) -> String {
         for o in func.options {
             let required = if o.required { " (required)" } else { "" };
             out.push_str(&format!(
-                "\n  {:width$}  {:8} {}{required}",
-                o.name,
-                o.ty.name(),
-                o.doc
+                "\n  {:width$}  {}{required}\n  {:width$}    {}",
+                o.name, o.ty, "", o.doc
             ));
         }
     }
@@ -222,9 +177,9 @@ pub fn reference() -> String {
                 for o in f.options {
                     let required = if o.required { " (required)" } else { "" };
                     out.push_str(&format!(
-                        "| `{}` | {} | {}{required} |\n",
+                        "| `{}` | `{}` | {}{required} |\n",
                         o.name,
-                        o.ty.name(),
+                        o.ty.replace('|', "\\|"),
                         o.doc
                     ));
                 }
@@ -251,6 +206,19 @@ mod tests {
                 );
                 assert!(!f.summary.is_empty(), "{path}: no summary");
                 assert!(!f.example.is_empty(), "{path}: no example");
+            }
+        }
+    }
+
+    #[test]
+    fn every_option_type_parses() {
+        for m in modules() {
+            for f in m.functions {
+                for o in f.options {
+                    if let Err(e) = crate::types::parse(o.ty) {
+                        panic!("{}: option {}: {e}", m.path(f), o.name);
+                    }
+                }
             }
         }
     }

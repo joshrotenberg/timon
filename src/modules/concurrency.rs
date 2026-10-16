@@ -16,7 +16,7 @@ use mlua::{
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-use crate::docs::{Func, Module, Opt, Ty};
+use crate::docs::{Func, Module, Opt};
 use crate::error::{self, Error};
 use crate::modules::{GLOBALS_DOC, Installer, fail_function};
 use crate::options;
@@ -35,8 +35,8 @@ pub const DOC: Module = Module {
             "local reviews = par.map(prs, function(pr)\n  return agent.run{ agent = \"reviewer\", prompt = \"Review PR \" .. pr }\nend, { limit = 3 })",
         )
         .with_options(&[
-            Opt::new("limit", Ty::Integer, "most calls running at once (default: all)"),
-            Opt::new("settle", Ty::Boolean, "collect failures as results instead of raising"),
+            Opt::new("limit", "integer", "most calls running at once (default: all)"),
+            Opt::new("settle", "boolean", "collect failures as results instead of raising"),
         ]),
         Func::new(
             "all",

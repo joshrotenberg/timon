@@ -29,6 +29,7 @@ pub const FIELDS: &[&str] = &[
     "worktree",
     "native",
     "ephemeral",
+    "events",
 ];
 
 /// One definition file.
@@ -117,7 +118,60 @@ fn load_file(lua: &Lua, path: &Path) -> Result<Table, Error> {
             });
         }
     }
+    check_values(&t).map_err(|e| bad(e.message.clone()).with_hint_opt(e.hint))?;
     Ok(t)
+}
+
+/// Checks each field's value against the `agent.run` option of the same name.
+fn check_values(t: &Table) -> Result<(), Error> {
+    use crate::modules::schema::{Node, Problem};
+    let run = crate::options::shape("agent.run")?;
+    let Node::Object(options) = &run.node else {
+        return Ok(());
+    };
+    for (key, value) in t.pairs::<String, Value>().flatten() {
+        let shape = match key.as_str() {
+            "description" | "extends" => {
+                crate::types::parse("string").map_err(|e| Error::new("internal", e))?
+            }
+            _ => match options.iter().find(|(n, _)| *n == key) {
+                Some((_, shape)) => shape.clone(),
+                None => continue,
+            },
+        };
+        let Some(e) = shape.check_value(&value).into_iter().next() else {
+            continue;
+        };
+        let at = match e.path.as_str() {
+            "" => key.clone(),
+            p if p.starts_with('[') => format!("{key}{p}"),
+            p => format!("{key}.{p}"),
+        };
+        let close_hint = |close: Option<String>| close.map(|c| format!("did you mean \"{c}\"?"));
+        let (message, hint) = match e.problem {
+            Problem::Wrong { expected, got } => (
+                format!("field \"{at}\" must be {expected}, got {got}"),
+                None,
+            ),
+            Problem::NotOneOf { values, got, close } => {
+                let list: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
+                (
+                    format!(
+                        "field \"{at}\" must be one of {}, got {got}",
+                        list.join(", ")
+                    ),
+                    close_hint(close),
+                )
+            }
+            Problem::Unknown { key, close } => (
+                format!("unknown field \"{key}\" in \"{at}\""),
+                close_hint(close),
+            ),
+            Problem::Missing { name } => (format!("missing field \"{name}\" in \"{at}\""), None),
+        };
+        return Err(Error::new("bad_config", message).with_hint_opt(hint));
+    }
+    Ok(())
 }
 
 /// A definition's description, after following `extends`; empty when it has none.

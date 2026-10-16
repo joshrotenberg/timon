@@ -18,6 +18,7 @@ pub mod sessions;
 mod settings;
 pub mod skills;
 pub mod suggest;
+pub mod types;
 pub mod value;
 
 mod strict;

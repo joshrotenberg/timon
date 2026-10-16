@@ -101,8 +101,12 @@ These hold for every module, so an agent that has used one module can guess the 
     hint: did you mean "prompt"?
   ```
 
-  A value of the wrong type raises with the expected type. Definition files (`agents/*.lua` and
-  the rest) are checked against the same declarations.
+  Each option's type is declared once, in LuaLS annotation syntax (`"read" | "write" | "full"`,
+  `string[]`, `{ usd: number?, turns: integer? }`, `string | schema`), and parsed into the same
+  shapes `schema` builds. A wrong type, a value outside an enum (with the closest value as the
+  hint) or a bad nested field raises with its path, such as `budget.turns`. Agent definition
+  files are checked against the same declarations, and the shapes give each function's options
+  as JSON Schema.
 - **Globals are strict.** Reading a global that does not exist raises `undefined_global` with
   the closest known name, so `agnet.run` fails on its own line instead of later on a nil. A
   script may define globals only at the top level of its main chunk; `rawget(_G, name)` tests for
@@ -110,8 +114,8 @@ These hold for every module, so an agent that has used one module can guess the 
 - **Everything is cancellable.** Any call that waits can be cancelled from outside, and a
   cancelled call raises `cancelled`.
 - **Documented at run time.** `help(agent)` describes a module and `help(agent.run)` one
-  function's signature, options and an example, as text; `help("agent.run")` works too. The option declarations behind strict options
-  are the same source, and they also generate the LuaLS stubs and the reference sections of the
+  function's signature, options and an example, as text; `help("agent.run")` works too. The
+  option declarations behind strict options are the same source, and they also generate the LuaLS stubs and the reference sections of the
   skills, so the checks, the help, the stubs and the skills cannot drift apart.
 
 ## Runtime
@@ -263,7 +267,7 @@ local r = agent.run{
   budget   = { usd = 2, turns = 30 },
   resume   = earlier.session,    -- continue a session timon started
   fork     = "45d4b2f5",         -- branch from any session; the original is untouched
-  events   = false,              -- true: keep tool calls and turn events in r.events
+  events   = false,              -- true: r.events lists text, reasoning, tool calls and results
   native   = { "--add-dir", "../shared" },   -- raw provider arguments, the escape hatch
 }
 ```
@@ -289,9 +293,16 @@ The result is a run record. It never raises for an outcome:
   session  = "8c1f...",          -- the provider's session id; pass to `resume`
   usage    = { input_tokens = 0, output_tokens = 0, usd = 0.42 },   -- usd is nil for Codex
   ms       = 81234,
-  events   = nil,
+  events   = nil,                -- with events = true, see below
 }
 ```
+
+With `events = true` the record lists what the agent did, in one shape for both providers:
+`{ kind = "text" | "reasoning", text }`, `{ kind = "tool_call", id, name, input }` and
+`{ kind = "tool_result", id, error, text }`. Claude streams them (`stream-json`); Codex's come
+from its `exec --json` items, with shell commands as `shell` calls. A failed run keeps the events
+it produced. Strings are capped at 2,000 characters and a run at 500 events, and the run's
+`result.json` stores them redacted.
 
 `invalid` means the provider answered but the answer failed the contract. `error.data` then holds
 the validation errors and `text` holds what came back. Execution status and the answer's

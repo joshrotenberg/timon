@@ -11,6 +11,7 @@ FAKE_PID_FILE: write this process's pid here first
 FAKE_LOG_DIR: append {args, prompt, cwd} as claude-N.json
 FAKE_TOUCH: a file (relative to the working directory) to write, as an edit
 FAKE_RUNNING_DIR: a marker per running process; the count seen at start goes to ../seen-PID
+With --output-format stream-json, a Read tool call and its result come before the result line.
 """
 import json, os, sys, time
 
@@ -75,6 +76,19 @@ elif os.environ.get("FAKE_AUTO_ANSWER") and "--json-schema" in args:
 if mode == "auth":
     sys.stderr.write("Not logged in · Please run /login\n")
     sys.exit(1)
+stream = "--output-format" in args and args[args.index("--output-format") + 1] == "stream-json"
+if stream:
+    for event in [
+        {"type": "system", "subtype": "init", "session_id": session, "model": "fake"},
+        {"type": "assistant", "session_id": session, "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "read the readme first"},
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "README.md"}}]}},
+        {"type": "user", "session_id": session, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "# fake readme"}]}]}},
+        {"type": "assistant", "session_id": session, "message": {"role": "assistant", "content": [
+            {"type": "text", "text": result["result"]}]}},
+    ]:
+        print(json.dumps(event), flush=True)
 if mode == "max_turns":
     result.update(subtype="error_max_turns", is_error=True, result="", num_turns=30)
     print(json.dumps(result))

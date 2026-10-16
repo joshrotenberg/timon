@@ -421,7 +421,12 @@ fn transcripts_page_and_filter_by_kind_keeping_indexes() {
         &format!("sessions.transcript('{ID_C}', {{ kinds = {{ 'chat' }} }})"),
         &[],
     );
-    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown kind \"chat\""));
+    assert!(
+        String::from_utf8_lossy(&o.stderr)
+            .contains("option \"kinds[1]\" to sessions.transcript must be one of \"user\""),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }
 
 fn codex_lines(id: &str) -> Vec<serde_json::Value> {
@@ -575,7 +580,7 @@ fn search_modes() {
     let regex = a.json("sessions.search{ query = 'fla.y', mode = 'regex' }", &[]);
     assert_eq!(hit_ids(&regex), [ID_A]);
     let o = a.timon("sessions.search{ query = 'x', mode = 'fuzzy' }", &[]);
-    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown mode"));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("must be one of \"terms\", \"phrase\""));
     let o = a.timon("sessions.search{ query = '   ' }", &[]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("bad_query"));
 }

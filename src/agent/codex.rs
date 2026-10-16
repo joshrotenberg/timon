@@ -32,7 +32,13 @@ fn sandbox(access: Access) -> (SandboxMode, &'static str) {
     }
 }
 
-pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
+/// Runs one turn. Codex reports its items as `exec --json` events, which `events` collects
+/// when `request.events` is set.
+pub(super) async fn run(
+    request: &Request,
+    binary: Option<&Path>,
+    events: &mut Vec<Json>,
+) -> Outcome {
     if request.fork.is_some() {
         return Err((Status::Failed, no_fork()));
     }
@@ -132,7 +138,31 @@ pub(super) async fn run(request: &Request, binary: Option<&Path>) -> Outcome {
             command.execute_json_cancellable(&client, never).await
         }
     };
-    let result = result.map_err(|e| failure(&e))?;
+    let collect = |events: &mut Vec<Json>, all: &mut dyn Iterator<Item = JsonLineEvent>| {
+        if request.events {
+            for e in all {
+                events.extend(super::events::from_codex(
+                    &e.event_type,
+                    e.extra.get("item"),
+                ));
+            }
+        }
+    };
+    let result = match result {
+        Ok(result) => {
+            collect(events, &mut result.events.iter().cloned());
+            result
+        }
+        Err(e) => {
+            if let codex_wrapper::Error::CommandFailed { stdout, .. } = &e {
+                collect(
+                    events,
+                    &mut stdout.lines().filter_map(|l| serde_json::from_str(l).ok()),
+                );
+            }
+            return Err(failure(&e));
+        }
+    };
 
     if let Some(failed) = result.events.iter().find(|e| e.is_turn_failed()) {
         return Err((Status::Failed, turn_failed(failed)));

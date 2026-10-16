@@ -16,7 +16,8 @@ return r.text
 
 The record: `id`, `status` (`ok`, `failed`, `invalid`, `timeout`, `cancelled`), `answer`,
 `text`, `error`, `provider`, `model`, `session`, `usage` (`input_tokens`, `output_tokens`,
-`usd` for Claude), `ms`, `started_at`, and `worktree` when one was used.
+`usd` for Claude), `ms`, `started_at`, `worktree` when one was used, and `events` with
+`events = true`.
 
 ## Ask for a shape, get it validated
 
@@ -90,6 +91,26 @@ the run changed nothing and kept, with its path in `record.worktree`, when it di
 local r = agent.run{ access = "write", worktree = true, prompt = "Fix the failing test" }
 if r.worktree.kept then print("changes in " .. r.worktree.path .. " on " .. r.worktree.branch) end
 ```
+
+## See what the agent did
+
+`events = true` lists the agent's text, reasoning, tool calls and tool results in
+`record.events`, in the same shape for Claude and Codex. A failed run keeps the events it got
+to, which shows where it went wrong:
+
+```lua
+local r = agent.run{ prompt = "Find where the config file is loaded", events = true }
+for _, e in ipairs(r.events) do
+  if e.kind == "tool_call" then print(e.name, json.encode(e.input)) end
+  if e.kind == "tool_result" and e.error then print("  failed: " .. e.text) end
+end
+local calls = tbl.filter(r.events, function(e) return e.kind == "tool_call" end)
+return r.status, #calls
+```
+
+Events: `{ kind = "text" | "reasoning", text }`, `{ kind = "tool_call", id, name, input }`,
+`{ kind = "tool_result", id, error, text }`. Codex shell commands are `shell` calls. Long text
+is cut at 2,000 characters.
 
 ## Access
 

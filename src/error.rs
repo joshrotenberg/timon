@@ -41,6 +41,14 @@ impl Error {
         self
     }
 
+    /// Adds a hint when there is one.
+    pub fn with_hint_opt(mut self, hint: Option<String>) -> Self {
+        if hint.is_some() {
+            self.hint = hint;
+        }
+        self
+    }
+
     /// Adds structured detail.
     pub fn with_data(mut self, data: serde_json::Value) -> Self {
         self.data = Some(Box::new(data));

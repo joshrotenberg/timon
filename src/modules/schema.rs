@@ -98,10 +98,40 @@ pub enum Node {
     /// Fields in name order.
     Object(Vec<(String, Rc<Shape>)>),
     Optional(Rc<Shape>),
+    /// Any one of these.
+    OneOf(Vec<Rc<Shape>>),
+    /// A Lua function; only options take one.
+    Function,
+    /// A schema value; only options take one.
+    Schema,
+}
+
+/// What is wrong with a Lua value, found by [`Shape::check_value`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Problem {
+    /// A field the shape does not have, and the closest one it does.
+    Unknown { key: String, close: Option<String> },
+    /// A required field that is missing.
+    Missing { name: String },
+    /// A value of the wrong type.
+    Wrong { expected: String, got: String },
+    /// A string that is not one of the allowed values, and the closest one.
+    NotOneOf {
+        values: Vec<String>,
+        got: String,
+        close: Option<String>,
+    },
+}
+
+/// A [`Problem`] at a path such as `budget.turns` or `kinds[2]`; the root is "".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueError {
+    pub path: String,
+    pub problem: Problem,
 }
 
 impl Shape {
-    fn new(node: Node) -> Rc<Self> {
+    pub(crate) fn new(node: Node) -> Rc<Self> {
         Rc::new(Self {
             node,
             description: None,
@@ -120,6 +150,139 @@ impl Shape {
             Node::Map(_) => "map",
             Node::Object(_) => "object",
             Node::Optional(_) => "optional",
+            Node::OneOf(_) => "one_of",
+            Node::Function => "function",
+            Node::Schema => "schema",
+        }
+    }
+
+    /// What a value of this shape is, for messages: "a string", "one of \"a\", \"b\"".
+    pub fn expected(&self) -> String {
+        match &self.node {
+            Node::String => "a string".into(),
+            Node::Integer => "an integer".into(),
+            Node::Number => "a number".into(),
+            Node::Boolean => "a boolean".into(),
+            Node::Any => "a value".into(),
+            Node::Function => "a function".into(),
+            Node::Schema => "a schema".into(),
+            Node::Enum(values) => {
+                let list: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
+                format!("one of {}", list.join(", "))
+            }
+            Node::Array(_) => "an array".into(),
+            Node::Map(_) | Node::Object(_) => "a table".into(),
+            Node::Optional(inner) => inner.expected(),
+            Node::OneOf(options) => {
+                let names: Vec<String> = options.iter().map(|o| o.expected()).collect();
+                names.join(" or ")
+            }
+        }
+    }
+
+    /// Checks a Lua value, such as an options table, returning every problem with its path.
+    pub fn check_value(&self, value: &Value) -> Vec<ValueError> {
+        let mut errors = Vec::new();
+        self.check_value_at(value, "", &mut errors);
+        errors
+    }
+
+    fn check_value_at(&self, value: &Value, path: &str, out: &mut Vec<ValueError>) {
+        let at = |problem| ValueError {
+            path: path.to_owned(),
+            problem,
+        };
+        let wrong = || {
+            at(Problem::Wrong {
+                expected: self.expected(),
+                got: lua_type(value).to_owned(),
+            })
+        };
+        let ok = match (&self.node, value) {
+            (Node::Any, _) => true,
+            (Node::Optional(_), Value::Nil) => true,
+            (Node::Optional(inner), _) => {
+                inner.check_value_at(value, path, out);
+                true
+            }
+            (Node::String, Value::String(_)) => true,
+            (Node::Integer, Value::Integer(_)) => true,
+            (Node::Integer, Value::Number(n)) => n.fract() == 0.0,
+            (Node::Number, Value::Integer(_) | Value::Number(_)) => true,
+            (Node::Boolean, Value::Boolean(_)) => true,
+            (Node::Function, Value::Function(_)) => true,
+            (Node::Schema, Value::UserData(ud)) => ud.borrow::<Schema>().is_ok(),
+            (Node::Enum(values), Value::String(s)) => {
+                let s = s.to_string_lossy();
+                if !values.contains(&s) {
+                    out.push(at(Problem::NotOneOf {
+                        values: values.clone(),
+                        close: suggest::closest(&s, values.iter().map(String::as_str))
+                            .map(str::to_owned),
+                        got: format!("{s:?}"),
+                    }));
+                }
+                true
+            }
+            (Node::OneOf(options), _) => options.iter().any(|o| o.check_value(value).is_empty()),
+            (Node::Array(item), Value::Table(t)) => {
+                let len = t.raw_len();
+                if t.pairs::<Value, Value>().count() != len {
+                    false
+                } else {
+                    for i in 1..=len {
+                        let v: Value = t.raw_get(i).unwrap_or(Value::Nil);
+                        item.check_value_at(&v, &format!("{path}[{i}]"), out);
+                    }
+                    true
+                }
+            }
+            (Node::Map(inner), Value::Table(t)) => {
+                for (k, v) in t.pairs::<Value, Value>().flatten() {
+                    match k {
+                        Value::String(k) => {
+                            inner.check_value_at(&v, &join(path, &k.to_string_lossy()), out)
+                        }
+                        other => out.push(at(Problem::Wrong {
+                            expected: "string keys".into(),
+                            got: lua_type(&other).to_owned(),
+                        })),
+                    }
+                }
+                true
+            }
+            (Node::Object(fields), Value::Table(t)) => {
+                for (k, v) in t.pairs::<Value, Value>().flatten() {
+                    let Value::String(key) = k else {
+                        out.push(at(Problem::Wrong {
+                            expected: "named fields".into(),
+                            got: format!("{} key", lua_type(&k)),
+                        }));
+                        continue;
+                    };
+                    let key = key.to_string_lossy();
+                    match fields.iter().find(|(n, _)| *n == key) {
+                        Some((_, shape)) => shape.check_value_at(&v, &join(path, &key), out),
+                        None => out.push(at(Problem::Unknown {
+                            close: suggest::closest(&key, fields.iter().map(|(n, _)| n.as_str()))
+                                .map(str::to_owned),
+                            key,
+                        })),
+                    }
+                }
+                for (name, shape) in fields {
+                    if !matches!(shape.node, Node::Optional(_))
+                        && t.raw_get::<Value>(name.as_str()).is_ok_and(|v| v.is_nil())
+                    {
+                        out.push(at(Problem::Missing { name: name.clone() }));
+                    }
+                }
+                true
+            }
+            _ => false,
+        };
+        if !ok {
+            out.push(wrong());
         }
     }
 
@@ -152,6 +315,11 @@ impl Shape {
             Node::Optional(inner) => {
                 json!({ "anyOf": [inner.json_schema(), { "type": "null" }] })
             }
+            Node::OneOf(options) => {
+                json!({ "anyOf": options.iter().map(|o| o.json_schema()).collect::<Vec<_>>() })
+            }
+            Node::Function => json!({ "description": "a Lua function" }),
+            Node::Schema => json!({ "type": "object", "description": "a JSON Schema" }),
         };
         if let (Some(text), Json::Object(map)) = (&self.description, &mut out) {
             map.insert("description".to_owned(), Json::String(text.clone()));
@@ -217,6 +385,17 @@ impl Shape {
                     inner.check_at(value, path, errors);
                 }
             }
+            Node::OneOf(options) => {
+                if !options.iter().any(|o| o.check(value).is_empty()) {
+                    wrong(&self.expected());
+                }
+            }
+            Node::Function => wrong("a function"),
+            Node::Schema => {
+                if !value.is_object() {
+                    wrong("a JSON Schema object");
+                }
+            }
             Node::Array(item) => match value {
                 Json::Array(items) => {
                     for (i, v) in items.iter().enumerate() {
@@ -280,6 +459,21 @@ fn describe(value: &Json) -> &'static str {
         Json::String(_) => "a string",
         Json::Array(_) => "an array",
         Json::Object(_) => "an object",
+    }
+}
+
+/// The type of a Lua value, for messages.
+fn lua_type(value: &Value) -> &'static str {
+    match value {
+        Value::Nil => "nil",
+        Value::Boolean(_) => "a boolean",
+        Value::Integer(_) => "an integer",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Table(_) => "a table",
+        Value::Function(_) => "a function",
+        Value::UserData(ud) if ud.borrow::<Schema>().is_ok() => "a schema",
+        _ => "a value of another type",
     }
 }
 
