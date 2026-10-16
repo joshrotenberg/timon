@@ -285,6 +285,27 @@ A new table without the given keys.
 tbl.omit(run, { "events" })
 ```
 
+## sqlite
+
+SQLite databases. sqlite.open returns a database: db:exec(sql, params) runs statements and returns the rows changed; db:query(sql, params) returns rows as tables keyed by column; db:one returns the first row or nil; db:last_id(); db:transaction(fn) commits, or rolls back and raises; db:close(). params is a list for ?, or a table for :name. NULL reads as nil. Errors raise sqlite_failed.
+
+### `sqlite.open(path, { readonly, create }) -> db`
+
+Opens a database file, or an in-memory database without a path. A missing file is created unless readonly or create = false.
+
+| Option | Type | |
+|---|---|---|
+| `readonly` | `boolean` | open for reading only |
+| `create` | `boolean` | create a missing file (default true) |
+
+```lua
+local db = sqlite.open()
+db:exec("create table seen (id text primary key, n integer)")
+db:exec("insert into seen values (?, ?)", { "a", 1 })
+db:exec("insert into seen values (:id, :n)", { id = "b", n = 2 })
+return db:one("select sum(n) as total from seen").total  -- 3
+```
+
 ## fs
 
 Files and directories. Paths are relative to the working directory.

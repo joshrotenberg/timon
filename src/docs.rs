@@ -97,6 +97,7 @@ pub fn modules() -> &'static [&'static Module] {
         &modules::json::DOC,
         &modules::text::DOC,
         &modules::tbl::DOC,
+        &modules::sqlite::DOC,
         &modules::fs::FS_DOC,
         &modules::fs::PATH_DOC,
         &modules::git::DOC,

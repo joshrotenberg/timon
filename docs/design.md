@@ -827,7 +827,10 @@ The toolbox is what makes timon a task runner. It comes in the order tasks need 
    `gh` is REST and GraphQL over it: `repo`, `prs`, `pr` (files, reviews, checks), `issues`,
    `checks`, `api` (with `paginate`) and `graphql`. `TIMON_GITHUB_API` points it at GitHub
    Enterprise.
-6. **`sqlite`.** The shapes below are starting points:
+6. **`sqlite` (#92), built:** the bundled rusqlite. `sqlite.open(path)` (in memory without
+   one) returns a database with `exec`, `query`, `one`, `last_id`, `transaction` and `close`.
+   NULL reads as nil and blobs as Lua strings; parameters are a list for `?` or a table for
+   `:name`. The shapes below were the starting points:
 
 ```lua
 git.status()             -- { branch, upstream, ahead, behind, files = { { path, status } } }

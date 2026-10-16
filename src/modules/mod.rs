@@ -13,6 +13,7 @@ pub mod log;
 pub mod proc;
 pub mod schema;
 pub mod sessions;
+pub mod sqlite;
 pub mod tbl;
 pub mod text;
 
@@ -201,6 +202,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     json::install(&installer)?;
     text::install(&installer)?;
     tbl::install(&installer)?;
+    sqlite::install(&installer)?;
     fs::install(&installer)?;
     git::install(&installer)?;
     http::install(&installer)?;
