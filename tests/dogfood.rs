@@ -125,6 +125,15 @@ fn the_project_layer_loads_agents_tasks_scripts_and_skills() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(gates, ["docs", "format", "lint", "plugin-check", "test"]);
+    let release = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "release")
+        .unwrap();
+    assert_eq!(release["depends"], serde_json::json!(["check"]));
+    assert_eq!(release["group"], "release");
+    assert!(release["confirm"].is_string());
     let skills = p.names(&["skill", "list", "--json"]);
     assert!(skills.iter().any(|(n, _)| n == "timon-dev"), "{skills:?}");
 }

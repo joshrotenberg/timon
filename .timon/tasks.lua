@@ -1,5 +1,10 @@
 -- This repository's tasks. The scripts in scripts/ are tasks too; timon tasks lists them all.
+local release = require("release")
+release.release.depends = { "check" }
+
 return {
+  bump = release.bump,
+  release = release.release,
   format = {
     description = "Check formatting",
     group = "gates",
