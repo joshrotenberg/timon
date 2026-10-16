@@ -56,7 +56,7 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
-    /// Show the layers, settings, scripts and lib directories in effect
+    /// Show the layers, settings, agents, scripts and lib directories in effect
     Defs {
         #[arg(long)]
         json: bool,
@@ -386,6 +386,9 @@ fn defs(layers: &Layers, json: bool) -> ExitCode {
         "settings": settings,
         "scripts": layers.scripts().iter().map(|s| serde_json::json!({
             "name": s.name, "layer": s.layer.name(), "path": s.path,
+        })).collect::<Vec<_>>(),
+        "agents": timon::agents::list(&timon::agents::dirs(layers)).iter().map(|a| serde_json::json!({
+            "name": a.name, "layer": a.layer.name(), "path": a.path,
         })).collect::<Vec<_>>(),
         "lib": layers.lib_dirs(),
         "state": layers.dirs.state,

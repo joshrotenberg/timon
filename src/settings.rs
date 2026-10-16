@@ -14,7 +14,7 @@ pub const KEYS: &[&str] = &["defaults", "limits", "serve"];
 /// Globals a definition file can use: pure functions only, no I/O.
 const SAFE_GLOBALS: &[&str] = &[
     "assert", "error", "ipairs", "next", "pairs", "select", "tonumber", "tostring", "type", "math",
-    "string", "table", "utf8", "str", "tbl", "json",
+    "string", "table", "utf8", "str", "tbl", "json", "schema",
 ];
 
 /// An environment for definition files: the pure standard library and timon's pure modules.

@@ -460,3 +460,135 @@ local answer, i = par.race(
   function() return agent.ask{ provider = "codex", prompt = q } end
 )
 ```
+
+## schema
+
+Shapes for structured data. Values: schema.string, schema.int, schema.number, schema.bool, schema.any. Every object field is required unless optional; s:describe(text) documents a field. A contract is a named schema in contracts/.
+
+### `schema.object(fields) -> schema`
+
+An object with exactly these fields. Each field is required unless wrapped in schema.optional.
+
+```lua
+schema.object{
+  verdict = schema.enum{ "approve", "request_changes" },
+  summary = schema.string:describe("two sentences at most"),
+  notes = schema.optional(schema.string),
+}
+```
+
+### `schema.array(item) -> schema`
+
+A list whose elements all match item.
+
+```lua
+schema.array(schema.object{ file = schema.string, line = schema.int })
+```
+
+### `schema.map(value) -> schema`
+
+An object with any string keys whose values all match value. Codex's strict output mode does not accept it; use object for agent output.
+
+```lua
+schema.map(schema.int)  -- { a = 1, b = 2 }
+```
+
+### `schema.enum(values) -> schema`
+
+One of the given strings.
+
+```lua
+schema.enum{ "high", "medium", "low" }
+```
+
+### `schema.optional(s) -> schema`
+
+s, or missing, or null.
+
+```lua
+schema.object{ name = schema.string, nickname = schema.optional(schema.string) }
+```
+
+### `schema.check(s, value) -> true | false, errors`
+
+Validates value. Each error is { path, message }, with paths like findings[2].line.
+
+```lua
+local ok, errors = schema.check(schema.object{ n = schema.int }, { n = "x" })
+-- false, { { path = "n", message = "expected an integer, got a string" } }
+```
+
+### `schema.json(s) -> table`
+
+The JSON Schema for s, as given to providers for structured output.
+
+```lua
+json.encode(schema.json(schema.contract("review")), { pretty = true })
+```
+
+### `schema.contract(name) -> schema`
+
+A named schema: contracts/NAME.lua in the project or user layer, or a built-in one (review, implementation, investigation, yes_no, list).
+
+```lua
+local review = schema.contract("review")
+```
+
+## agent
+
+Claude Code and Codex runs. agent.run returns a record and never raises for an outcome; agent.ask returns the answer or raises. Runs spend tokens.
+
+### `agent.run{ prompt, agent, provider, model, effort, access, ... } -> record`
+
+Runs one non-interactive turn. The record has id, status (ok, failed, invalid, timeout, cancelled), answer (with output), text, error, provider, model, session, usage { input_tokens, output_tokens, usd } and ms. Fields merge: defaults < init.lua defaults < the agent definition < this call.
+
+| Option | Type | |
+|---|---|---|
+| `prompt` | string | what to do (required) |
+| `agent` | string | a definition from agents/NAME.lua to start from |
+| `provider` | string | "claude" (default) or "codex" |
+| `model` | string | the provider's model name |
+| `effort` | string | claude: low, medium, high, xhigh, max; codex: passed through |
+| `access` | string | "read" (default), "write", or "full" (needs limits.allow_full) |
+| `tools` | table | claude's tool list, replacing the one access picks |
+| `cwd` | string | the directory to run in |
+| `system` | string | instructions added to the system prompt |
+| `output` | any | a contract name or a schema; the answer is validated |
+| `timeout` | any | seconds, or a duration such as "10m" |
+| `budget` | table | { usd = number, turns = integer } (claude) |
+| `resume` | string | a session id timon started, to continue |
+| `fork` | string | a session id to branch from (claude) |
+| `native` | table | extra command-line arguments for the provider |
+
+```lua
+local r = agent.run{ prompt = "Review the diff on this branch", output = "review" }
+if r.status == "ok" then pp(r.answer.findings) else log.error(r.error.message) end
+```
+
+### `agent.ask(prompt | spec) -> answer | text`
+
+Runs like agent.run and returns the answer (with output) or the text. Raises agent_failed, with the record as error.data, when the run is not ok.
+
+```lua
+local ok = agent.ask{ prompt = "Is this function pure? " .. src, output = "yes_no" }
+if ok.answer then print(ok.reason) end
+```
+
+### `agent.spawn(spec) -> task`
+
+Starts agent.run(spec) as a task on the innermost scope; task:await() returns the record.
+
+```lua
+local a = agent.spawn{ prompt = "Summarize README.md" }
+local b = agent.spawn{ prompt = "Summarize CHANGELOG.md", provider = "codex" }
+local ra, rb = a:await(), b:await()
+```
+
+### `agent.continue(record, prompt, spec) -> record`
+
+Resumes record's session with a new prompt, on the same provider. spec adds or overrides fields.
+
+```lua
+local r = agent.run{ prompt = "List the failing tests" }
+local fix = agent.continue(r, "Fix the first one", { access = "write" })
+```

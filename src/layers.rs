@@ -150,6 +150,15 @@ impl Layers {
             .collect()
     }
 
+    /// `contracts/` directories of the trusted layers, in lookup order.
+    pub fn contract_dirs(&self) -> Vec<PathBuf> {
+        self.active()
+            .into_iter()
+            .map(|l| l.root.join("contracts"))
+            .filter(|p| p.is_dir())
+            .collect()
+    }
+
     /// `init.lua` files of the trusted layers, lowest first, so later ones win when merged.
     pub fn init_files(&self) -> Vec<(Kind, PathBuf)> {
         let mut files: Vec<(Kind, PathBuf)> = self
