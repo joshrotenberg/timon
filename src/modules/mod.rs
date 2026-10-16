@@ -4,6 +4,7 @@ pub mod concurrency;
 pub mod fs;
 pub mod json;
 pub mod log;
+pub mod schema;
 pub mod tbl;
 pub mod text;
 
@@ -185,6 +186,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     fs::install(&installer)?;
     log::install(&installer)?;
     concurrency::install(&installer)?;
+    schema::install(&installer)?;
     Ok(())
 }
 

@@ -172,7 +172,8 @@ fn mark(lua: &Lua, t: Option<Table>, key: &str) -> mlua::Result<Table> {
     Ok(t)
 }
 
-fn decode(lua: &Lua, json: &serde_json::Value) -> mlua::Result<Value> {
+/// Converts JSON to Lua with array and object markers and `json.null`.
+pub(crate) fn decode(lua: &Lua, json: &serde_json::Value) -> mlua::Result<Value> {
     Ok(match json {
         serde_json::Value::Null => lua.named_registry_value(NULL)?,
         serde_json::Value::Array(items) => {

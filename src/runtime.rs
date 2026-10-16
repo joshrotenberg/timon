@@ -99,6 +99,15 @@ impl Runtime {
             prefix.push_str(&format!("{0}/?.lua;{0}/?/init.lua;", dir.display()));
         }
         package.set("path", format!("{prefix}{path}"))?;
+        let contract_dirs: Vec<String> = layers
+            .contract_dirs()
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect();
+        self.lua.set_named_registry_value(
+            crate::modules::schema::CONTRACT_DIRS,
+            self.lua.create_sequence_from(contract_dirs)?,
+        )?;
         let settings = crate::settings::load(&self.lua, &layers.init_files())?;
         self.lua.set_named_registry_value(SETTINGS, settings)?;
         Ok(())
