@@ -249,6 +249,9 @@ enum SessionsCommand {
         /// Only sessions whose directory contains this
         #[arg(long)]
         project: Option<String>,
+        /// Only sessions that ran in this directory or below it; faster than --project
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
         /// A duration back (7d, 2h), a date, or an RFC 3339 time
         #[arg(long)]
         since: Option<String>,
@@ -1073,6 +1076,7 @@ async fn sessions(rt: &Runtime, command: SessionsCommand) -> ExitCode {
         SessionsCommand::List {
             flags,
             project,
+            dir,
             since,
             limit,
             subagents,
@@ -1081,7 +1085,7 @@ async fn sessions(rt: &Runtime, command: SessionsCommand) -> ExitCode {
             "list",
             vec![opts(
                 &flags,
-                json!({ "project": project, "since": since, "limit": limit,
+                json!({ "project": project, "dir": dir, "since": since, "limit": limit,
                     "subagents": flag(subagents), "automated": flag(automated) }),
             )],
             flags.json,
