@@ -223,9 +223,10 @@ async fn run_task(
     tasks::run_given(rt, catalog, &name, given, how).await
 }
 
-/// The protocol's stream: a copy of stdout, after which fd 1 points at stderr.
+/// The protocol's stream: a copy of stdout, after which fd 1 points at stderr. `timon hook`
+/// uses it too, so what its tasks print cannot corrupt the JSON the host reads.
 #[cfg(unix)]
-fn protocol_stdout() -> Result<tokio::fs::File, Error> {
+pub(crate) fn protocol_stdout() -> Result<tokio::fs::File, Error> {
     use std::os::fd::FromRawFd;
     // SAFETY: duplicates and replaces this process's own standard descriptors.
     unsafe {
@@ -238,7 +239,7 @@ fn protocol_stdout() -> Result<tokio::fs::File, Error> {
 }
 
 #[cfg(not(unix))]
-fn protocol_stdout() -> Result<tokio::io::Stdout, Error> {
+pub(crate) fn protocol_stdout() -> Result<tokio::io::Stdout, Error> {
     Ok(tokio::io::stdout())
 }
 

@@ -215,6 +215,7 @@ pub(crate) fn install(runtime: &Runtime) -> mlua::Result<()> {
     cli::install(&installer)?;
     formats::install(&installer)?;
     crate::tasks::install(&installer)?;
+    crate::hook::install(&installer)?;
     schema::install(&installer)?;
     agent::install(&installer)?;
     sessions::install(&installer)?;

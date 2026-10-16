@@ -162,6 +162,12 @@ enum Command {
     Mcp(McpCommand),
     /// Serve this project's tasks as MCP tools over stdio, with eval and the skills
     Serve,
+    /// Run a Claude Code or Codex hook: reads the event's JSON on stdin, runs the handlers
+    /// init.lua's hooks setting names, and prints the host's JSON
+    Hook {
+        /// The event, such as SessionStart; default: the input's hook_event_name
+        event: Option<String>,
+    },
     #[command(external_subcommand)]
     Script(Vec<OsString>),
 }
@@ -459,6 +465,7 @@ async fn run(cli: Cli) -> ExitCode {
             return runs(&layers, command, since, limit, json);
         }
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
+        Command::Hook { event } => return hook(&layers, event).await,
         Command::Serve => {
             return match timon::serve::serve(layers, builtins()).await {
                 Ok(()) => ExitCode::SUCCESS,
@@ -540,6 +547,7 @@ async fn run(cli: Cli) -> ExitCode {
         | Command::Completions { .. }
         | Command::Complete { .. }
         | Command::Serve
+        | Command::Hook { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)
@@ -552,6 +560,18 @@ async fn run(cli: Cli) -> ExitCode {
         Ok(values) => print(&values),
         Err(failure) => fail(&failure),
     }
+}
+
+/// `timon hook`: always exits 0, so a failing hook never stops the host.
+async fn hook(layers: &Layers, event: Option<String>) -> ExitCode {
+    let mut input = String::new();
+    if !std::io::stdin().is_terminal()
+        && let Err(e) = std::io::stdin().read_to_string(&mut input)
+    {
+        eprintln!("timon hook: cannot read the input: {e}");
+    }
+    timon::hook::run(layers, &builtins(), event, &input).await;
+    ExitCode::SUCCESS
 }
 
 fn discover() -> Result<Layers, Error> {

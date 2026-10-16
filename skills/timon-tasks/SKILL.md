@@ -1,6 +1,6 @@
 ---
 name: timon-tasks
-description: Use when defining or running timon tasks - a project's or your own tasks.lua, timon tasks, timon NAME, typed options and --help, dependencies and --jobs, task.run, --dry-run, words after --, aliases, groups, confirm and platforms. Load the timon skill first for the basics.
+description: Use when defining or running timon tasks - a project's or your own tasks.lua, timon tasks, timon NAME, typed options and --help, dependencies and --jobs, task.run, --dry-run, words after --, aliases, groups, confirm and platforms, and tasks as Claude Code and Codex hooks (timon hook, the brief, the guard). Load the timon skill first for the basics.
 ---
 
 # Tasks
@@ -176,3 +176,51 @@ In Fennel, `tasks.fnl` returns the same table:
 {:hello {:description "Say hello"
          :run (fn [opts deps] (.. "hello " (or (. opts.args 1) "you")))}}
 ```
+
+## As hooks
+
+With the plugin, Claude Code and Codex run `timon hook` at session start and before edits and
+shell commands. It reads the host's event on stdin, runs the handlers `init.lua` names for the
+event, and prints the host's JSON. By default, session start adds a brief: this project's
+sessions from the last 7 days and its public tasks. Before a tool runs, the guard checks the
+call once a `guard` setting exists.
+
+```lua fragment
+-- .timon/init.lua
+return {
+  hooks = {
+    SessionStart = { "timon:brief", "status" },   -- built-ins are timon:brief and timon:guard
+    PreToolUse = { "timon:guard", "no-publish" },
+    Stop = false,                                 -- false turns an event off
+  },
+  guard = {
+    writes = { ".", "/tmp" },                     -- edits may touch only these (default: the project)
+    commands = { "git push --force" },            -- shell commands containing these are refused
+  },
+}
+```
+
+A hook task reads the event with `hook.input()` and returns a string, which the agent sees as
+context, or a table: `{ deny = reason }`, `ask` or `allow` before a tool runs, `{ block =
+reason }` for Stop or UserPromptSubmit, and `context` beside any of them.
+
+```lua fragment
+-- .timon/tasks.lua
+return {
+  ["no-publish"] = { private = true, run = function()
+    local input = hook.input()
+    if input.tool_input.command and input.tool_input.command:find("cargo publish", 1, true) then
+      return { deny = "releases go through timon release" }
+    end
+  end },
+  status = { private = true, run = function()
+    return "Branch: " .. git.status().branch
+  end },
+}
+```
+
+A hook never stops the host: a handler that fails is skipped, and the user sees why. A project's
+hooks and guard load only once the project is trusted. The guard checks the paths of Write,
+Edit, MultiEdit, NotebookEdit and Codex's apply_patch, and the text of shell commands; it is a
+check on what the agent asks for, not a sandbox. Codex asks the user to review a plugin's hooks
+before they run.

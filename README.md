@@ -22,7 +22,7 @@ Design: [docs/design.md](docs/design.md).
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite`, data formats, `eval -i`/`-I`; release tasks | done |
 | 8 | Workflow patterns: `flow` with gates, verify, vote, best_of, refine, pipeline, retry, plan | done |
 | 9 | MCP: the client (`mcp.connect`, `timon mcp`) and `timon serve` with tasks as tools | done |
-| 10 | Hooks, memory, queues, schedules | to discuss |
+| 10 | Hooks: `timon hook`, the session-start brief, the pre-tool guard; memory, queues, schedules | hooks done; the rest to discuss |
 
 ## Install
 
@@ -46,7 +46,11 @@ codex plugin marketplace add joshrotenberg/timon
 codex plugin add timon@timon
 ```
 
-The plugin runs the installed binary; `TIMON_BIN` points it at another one.
+The plugin runs the installed binary; `TIMON_BIN` points it at another one. It also adds
+hooks for both hosts: at session start, a brief of this project's recent sessions and tasks;
+before edits and shell commands, a guard that does nothing until a project configures it (see
+[the tasks skill](skills/timon-tasks/SKILL.md#as-hooks)). Codex asks you to review the hooks
+first.
 
 ## Use
 
@@ -63,6 +67,7 @@ timon eval 'return git.status().files'     # git's output as data: status, log, 
 timon eval 'return gh.prs{ state = "open" }'                          # GitHub, with GH_TOKEN or gh's login
 timon mcp call crates get_crate_info name=mlua   # an MCP server's tool; mcp.connect in Lua
 timon serve                                # this project's tasks as MCP tools, over stdio
+timon hook < event.json                    # a Claude Code or Codex hook: the brief, the guard, tasks
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated

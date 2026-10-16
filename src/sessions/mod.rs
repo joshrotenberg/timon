@@ -186,6 +186,9 @@ pub struct ListOptions {
     pub backend: Option<Backend>,
     /// A substring of the session's directory, case-insensitive.
     pub project: Option<String>,
+    /// Only sessions that ran in this directory or below it. Claude sessions are matched by
+    /// their project directory's name first, so files elsewhere are never read.
+    pub dir: Option<PathBuf>,
     pub since: Option<DateTime<Utc>>,
     pub limit: usize,
     pub subagents: bool,
@@ -240,6 +243,21 @@ fn automated(meta: &SessionMeta, id: &str, started_by_timon: &HashSet<String>) -
 /// session timon started) are left out unless asked for, and counted.
 pub fn list(roots: &Roots, started_by_timon: &HashSet<String>, opts: &ListOptions) -> Json {
     let project = opts.project.as_ref().map(|p| p.to_ascii_lowercase());
+    // The directory as given and as resolved, since a host may record either.
+    let dirs = opts.dir.as_ref().map(|d| {
+        let mut dirs = vec![d.clone()];
+        if let Ok(real) = d.canonicalize()
+            && real != *d
+        {
+            dirs.push(real);
+        }
+        dirs
+    });
+    let dir_key = dirs.as_ref().map(|dirs| {
+        dirs.iter()
+            .map(|d| loose(&d.to_string_lossy()))
+            .collect::<Vec<_>>()
+    });
     let (mut hidden_subagents, mut hidden_automated) = (0u64, 0u64);
     let mut rows = Vec::new();
     for e in archive::scan_all(roots) {
@@ -254,7 +272,24 @@ pub fn list(roots: &Roots, started_by_timon: &HashSet<String>, opts: &ListOption
         {
             break;
         }
+        if let (Some(key), Some(dirs)) = (&dir_key, &dirs) {
+            let may_hold = match e.backend {
+                Backend::Claude => claude_dir_may_hold(&e.file, key),
+                Backend::Codex => archive::codex_cwd(&e.file)
+                    .is_none_or(|cwd| dirs.iter().any(|d| Path::new(&cwd).starts_with(d))),
+            };
+            if !may_hold {
+                continue;
+            }
+        }
         let meta = archive::read_meta(&e);
+        if let Some(dirs) = &dirs
+            && !meta
+                .project()
+                .is_some_and(|p| dirs.iter().any(|d| Path::new(p).starts_with(d)))
+        {
+            continue;
+        }
         if let Some(project) = &project {
             let paths = [meta.cwd.as_deref(), meta.relocated_cwd.as_deref()];
             if !paths
@@ -279,6 +314,32 @@ pub fn list(roots: &Roots, started_by_timon: &HashSet<String>, opts: &ListOption
         "sessions": rows,
         "hidden": { "subagents": hidden_subagents, "automated": hidden_automated },
     })
+}
+
+/// The letters and digits of a path, lowercased: what survives Claude's naming of a project
+/// directory, which replaces every other character with `-`.
+fn loose(path: &str) -> String {
+    path.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether a Claude session file's project directory can hold sessions from one of the
+/// directories in `keys`. Claude shortens long directory names, so those are always read.
+fn claude_dir_may_hold(file: &Path, keys: &[String]) -> bool {
+    let Some(name) = file
+        .parent()
+        .and_then(Path::file_name)
+        .map(|n| n.to_string_lossy())
+    else {
+        return true;
+    };
+    if name.len() >= 200 {
+        return true;
+    }
+    let name = loose(&name);
+    keys.iter().any(|k| name.starts_with(k.as_str()))
 }
 
 /// One session by id or unambiguous prefix.

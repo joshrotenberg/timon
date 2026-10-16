@@ -264,6 +264,12 @@ impl Runtime {
         self.run_named_script(path, args, &name, None).await
     }
 
+    /// What started the script runs this runtime records (default `manual`), such as
+    /// `hook:SessionStart`.
+    pub fn set_trigger(&self, trigger: &str) {
+        self.lua.set_app_data(Trigger(trigger.to_owned()));
+    }
+
     /// Resumes the next script run from an earlier one: see [`crate::scripts`].
     pub fn set_resume(&self, id: Option<String>) {
         if let Some(id) = id {
@@ -364,7 +370,10 @@ impl Runtime {
             "path": path,
             "source_sha256": crate::scripts::source_hash(source),
             "args": args,
-            "trigger": "manual",
+            "trigger": self
+                .lua
+                .app_data_ref::<Trigger>()
+                .map_or_else(|| "manual".to_owned(), |t| t.0.clone()),
             "cwd": std::env::current_dir().ok(),
         });
         if let Some(serde_json::Value::Object(extra)) = extra {
@@ -418,6 +427,9 @@ pub(crate) fn script_function_in(
 
 /// The script run to resume from, given on the command line.
 struct Resume(String);
+
+/// What started a script run, for its record.
+struct Trigger(String);
 
 /// Runs a script's chunk. A chunk that returns `{ run = function(...) end, ... }` is a script
 /// with metadata: its `description`, `phases` and `budget` go into the run's record, and

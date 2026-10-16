@@ -12,6 +12,7 @@ pub mod docs;
 pub mod error;
 mod fennel;
 pub mod flags;
+pub mod hook;
 pub mod layers;
 pub mod modules;
 pub mod options;

@@ -9,7 +9,7 @@ use crate::layers::Kind;
 use crate::suggest;
 
 /// Top-level settings an `init.lua` may return. Each is a table merged key by key.
-pub const KEYS: &[&str] = &["defaults", "limits", "serve"];
+pub const KEYS: &[&str] = &["defaults", "limits", "serve", "hooks", "guard"];
 
 /// Globals a definition file can use: pure functions only, no I/O.
 const SAFE_GLOBALS: &[&str] = &[

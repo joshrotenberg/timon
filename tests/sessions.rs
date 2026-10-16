@@ -256,6 +256,26 @@ fn filters_by_project_and_since() {
 }
 
 #[test]
+fn filters_by_directory_whole_components_only() {
+    let a = fixture();
+    let ids = |code: &str| -> Vec<String> {
+        a.json(code, &[])["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(ids("sessions.list{ dir = '/work/timon' }"), [ID_A]);
+    assert_eq!(ids("sessions.list{ dir = '/work' }"), [ID_A, ID_B]);
+    assert!(ids("sessions.list{ dir = '/work/tim' }").is_empty());
+    assert_eq!(
+        ids("sessions.list{ dir = '/work/codex', subagents = true, automated = true }"),
+        [ID_B, ID_C]
+    );
+}
+
+#[test]
 fn current_comes_from_the_host_session_variable() {
     let a = fixture();
     let o = a.timon("sessions.current() == nil", &[]);

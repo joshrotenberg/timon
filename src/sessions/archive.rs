@@ -611,6 +611,23 @@ fn push_unique(list: &mut Vec<String>, item: Option<&str>) {
 /// `item_completed` event carrying a `UserMessage` item; older versions emit
 /// `event_msg/user_message`; both also write the model-facing `response_item/message`,
 /// which includes injected context. The first two are what the user typed, so they win.
+/// The directory a Codex session file started in, from its first line alone: a cheap filter
+/// before [`read_meta`]. None when the first line is unreadable or not the session's metadata.
+pub(crate) fn codex_cwd(file: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let mut line = Vec::new();
+    open_buffered(file)
+        .ok()?
+        .take(4 * 1024 * 1024)
+        .read_until(b'\n', &mut line)
+        .ok()?;
+    let first: Value = serde_json::from_slice(&line).ok()?;
+    if str_at(&first, "type") != Some("session_meta") {
+        return None;
+    }
+    str_at(first.get("payload")?, "cwd").map(str::to_owned)
+}
+
 fn parse_codex_head(text: &str, archived: bool, complete: bool) -> SessionMeta {
     let mut meta = SessionMeta::default();
     let (mut from_item, mut from_event, mut from_response) = (None, None, None);
