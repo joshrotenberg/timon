@@ -182,7 +182,10 @@ pub(crate) fn normalize(lua: &Lua, value: Value) -> mlua::Result<Table> {
                 Ok(err)
             }
         }
-        Value::Error(err) => to_table(lua, &Error::from_lua(&err)),
+        Value::Error(err) => match take_raised(lua, &err)? {
+            Some(original) => normalize(lua, original),
+            None => to_table(lua, &Error::from_lua(&err)),
+        },
         Value::String(s) => to_table(lua, &Error::new("lua", s.to_string_lossy())),
         Value::Nil => to_table(lua, &Error::new("lua", "nil raised as an error")),
         other => {
@@ -192,6 +195,69 @@ pub(crate) fn normalize(lua: &Lua, value: Value) -> mlua::Result<Table> {
             )?;
             err.raw_set("data", other)?;
             Ok(err)
+        }
+    }
+}
+
+/// Registry key of the table holding Lua error values raised again from Rust.
+const RAISED: &str = "timon.raised";
+
+/// A Lua error value parked in the registry while it crosses a Rust callback.
+///
+/// mlua turns a table that Rust raises into a string, so Rust code that needs to raise an
+/// existing Lua error (a task's failure, seen again by whoever awaits it) parks the value and
+/// raises this marker; [`normalize`] swaps the original back in.
+#[derive(Debug)]
+pub(crate) struct Raised(i64);
+
+impl fmt::Display for Raised {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "a Lua error value")
+    }
+}
+
+impl std::error::Error for Raised {}
+
+/// Raises `value`, an existing Lua error, from a Rust callback without losing it.
+pub(crate) fn raise(lua: &Lua, value: Value) -> mlua::Error {
+    let park = || -> mlua::Result<i64> {
+        let store: Table = match lua.named_registry_value::<Option<Table>>(RAISED)? {
+            Some(store) => store,
+            None => {
+                let store = lua.create_table()?;
+                store.raw_set("next", 1)?;
+                lua.set_named_registry_value(RAISED, &store)?;
+                store
+            }
+        };
+        let id: i64 = store.raw_get("next")?;
+        store.raw_set("next", id + 1)?;
+        store.raw_set(id, value)?;
+        Ok(id)
+    };
+    match park() {
+        Ok(id) => mlua::Error::external(Raised(id)),
+        Err(err) => err,
+    }
+}
+
+fn take_raised(lua: &Lua, err: &mlua::Error) -> mlua::Result<Option<Value>> {
+    let mut current = err;
+    loop {
+        match current {
+            mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
+                current = cause;
+            }
+            mlua::Error::ExternalError(external) => {
+                let Some(Raised(id)) = external.downcast_ref::<Raised>() else {
+                    return Ok(None);
+                };
+                let store: Table = lua.named_registry_value(RAISED)?;
+                let value: Value = store.raw_get(*id)?;
+                store.raw_set(*id, Value::Nil)?;
+                return Ok(Some(value));
+            }
+            _ => return Ok(None),
         }
     }
 }

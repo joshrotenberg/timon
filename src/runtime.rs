@@ -10,6 +10,10 @@ use crate::strict;
 /// Chunk name of timon's own Lua glue, which tracebacks and strict globals skip.
 pub(crate) const INTERNAL_CHUNK: &str = "=[timon]";
 
+/// Registry key of the top-level runner, which tasks run under to get error tables with a
+/// traceback.
+pub(crate) const RUN: &str = "timon.run";
+
 /// Lua glue: the host-function wrapper, `try`, and the top-level runner.
 ///
 /// `wrap` calls a host function under `pcall` and re-raises its error as an error table at the
@@ -45,7 +49,6 @@ pub struct Runtime {
     lua: Lua,
     env: Table,
     wrap: Function,
-    run: Function,
 }
 
 impl Runtime {
@@ -73,13 +76,9 @@ impl Runtime {
             .set_name(INTERNAL_CHUNK)
             .call((normalize, handler))?;
         lua.globals().set("try", try_fn)?;
+        lua.set_named_registry_value(RUN, &run)?;
         let env = strict::environment(&lua)?;
-        Ok(Self {
-            lua,
-            env,
-            wrap,
-            run,
-        })
+        Ok(Self { lua, env, wrap })
     }
 
     /// The Lua state, for installing modules.
@@ -115,19 +114,14 @@ impl Runtime {
             .map_err(|e| Failure::from(Error::from_lua(&e)))
     }
 
-    /// Calls `f` as a coroutine, so async host functions can yield, and returns its values or
-    /// the error that stopped it with a traceback.
+    /// Calls `f` as the root scope of a run and returns its values, or the error that stopped
+    /// it with a traceback. The run ends when `f` and every task it spawned have finished.
+    ///
+    /// Must be awaited inside a [`tokio::task::LocalSet`], because tasks are `spawn_local`.
     pub async fn call(&self, f: Function, args: MultiValue) -> Result<MultiValue, Failure> {
-        let call_args: MultiValue = std::iter::once(Value::Function(f)).chain(args).collect();
-        let mut out = self
-            .run
-            .call_async::<MultiValue>(call_args)
+        crate::modules::concurrency::run_root(&self.lua, f, args)
             .await
-            .map_err(|e| Failure::from(Error::from_lua(&e)))?;
-        match out.pop_front() {
-            Some(Value::Boolean(true)) => Ok(out),
-            _ => Err(failure(out.pop_front())),
-        }
+            .map_err(|err| failure(Some(err)))
     }
 
     /// Evaluates `source` the way `timon eval` does.

@@ -47,7 +47,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tokio::task::LocalSet::new().block_on(&rt, run(cli))
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        tokio::select! {
+            code = run(cli) => code,
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("timon: interrupted");
+                ExitCode::from(130)
+            }
+        }
+    })
 }
 
 async fn run(cli: Cli) -> ExitCode {
