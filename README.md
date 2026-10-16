@@ -17,8 +17,8 @@ Design: [docs/design.md](docs/design.md).
 | 2 | `agent`: runs, contracts, records, budgets, worktrees, events; script runs as records, resume | done |
 | 3 | `sessions`: list, read, search and summarize every session | done |
 | 4 | Toolbox: `sh` and `proc` | done |
-| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon <task>` | next |
-| 6 | Built-in tasks, typed options, plans | planned |
+| 5 | Tasks: `tasks.lua`, `timon tasks`, `timon NAME`, dependencies | done (release tasks wait for `git`) |
+| 6 | Built-in tasks, typed options, plans | next |
 | 7 | Toolbox: `git`, `gh`, `http`, `sqlite` | planned |
 | 8 | Workflow patterns | planned |
 | 9 | MCP client and server | planned |
@@ -56,12 +56,27 @@ echo 'return ("a,b"):upper()' | timon eval -
 timon review.lua 12 14                     # script; args in `arg` and `...`
 timon eval --fnl '(+ 1 2)'                 # Fennel
 timon eval 'json.query({ a = { 1, 2 } }, "a[-1]")'    # JMESPath, with jpx's functions
-timon run triage                           # a named script from ~/.config/timon or .timon
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
 timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions
 timon sessions search "flaky parser" --since 30d                      # every session's text
+```
+
+Tasks live in `tasks.lua` in `~/.config/timon` or a project's `.timon`, and every script in
+`scripts/` is a task too:
+
+```lua
+return {
+  test = "cargo test",
+  check = { description = "The gates", depends = { "test" }, run = function() return "ok" end },
+}
+```
+
+```sh
+timon tasks                                # the tasks in reach, with descriptions
+timon check                                # test, then check; the first failure stops it
+timon test -- --nocapture                  # words after -- go to the task
 ```
 
 Errors are tables with a kind, a message and a hint; `try(f, ...)` returns `true, ...` or
@@ -77,11 +92,12 @@ timon: undefined_global: undefined global "prnt"
 ## Working on timon
 
 The repository has its own project layer in `.timon/`: a reviewer agent, a naming-audit agent
-and contract, and scripts. Read it, then trust it once:
+and contract, the gates as tasks, and scripts. Read it, then trust it once:
 
 ```sh
-timon trust && timon scripts
-timon run em-dash        # also runs in cargo test
+timon trust && timon tasks
+timon check              # every gate, before a push
+timon em-dash            # also runs in cargo test
 ```
 
 ## License

@@ -10,10 +10,10 @@ Read the design's Rules and API conventions before adding or changing an API.
 ## Rules
 
 - Branch and open a draft PR before changing anything. Never commit to `main`.
-- Before every push: `timon run check`, which runs `cargo fmt --all -- --check`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`, `RUSTDOCFLAGS=-D warnings cargo
-  doc --no-deps` and the plugin check, and exits with the first failure's code. CI runs the
-  same gates.
+- Before every push: `timon check`, which runs the gates in `.timon/tasks.lua`:
+  `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`,
+  `RUSTDOCFLAGS=-D warnings cargo doc --no-deps` and the plugin check, and exits with the first
+  failure's code. CI runs the same gates.
 - No em dashes, no AI attribution, conventional-commit prefixes.
 - Keep `README.md` and the design's phase table current in the same PR as the change.
 - Keep the README and docs tight and terse. Every skill has concrete, runnable examples:
@@ -57,7 +57,7 @@ While bootstrapping:
 
 - `.timon/` is this repository's project layer, and `tests/dogfood.rs` loads and runs it. Use
   it when working on timon, and add to it when a script or agent would help.
-- `timon run em-dash` checks our own text for em dashes; `cargo test` runs it over the
+- `timon em-dash` checks our own text for em dashes; `cargo test` runs it over the
   repository.
 
 ## State and tests

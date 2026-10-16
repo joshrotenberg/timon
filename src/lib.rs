@@ -1,6 +1,7 @@
-//! timon: a self-contained agent harness.
+//! timon: a task runner in one self-contained binary, with agents built in.
 //!
-//! One binary embedding Lua 5.4 over agent, session and tool APIs. See `docs/design.md`.
+//! Tasks and scripts in Lua 5.4 and Fennel over a toolbox and agent and session APIs. See
+//! `docs/design.md`.
 
 pub mod agent;
 pub mod agents;
@@ -20,6 +21,7 @@ pub mod sessions;
 mod settings;
 pub mod skills;
 pub mod suggest;
+pub mod tasks;
 pub mod types;
 pub mod value;
 

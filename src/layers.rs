@@ -4,7 +4,8 @@
 //! ```text
 //! <layer>/
 //! ├── init.lua        settings: defaults, limits, serve
-//! ├── scripts/        timon run NAME
+//! ├── tasks.lua       tasks, or tasks.fnl
+//! ├── scripts/        tasks too: timon NAME
 //! ├── skills/<name>/  SKILL.md, references/
 //! └── lib/            on the module path
 //! ```
@@ -172,7 +173,8 @@ impl Layers {
     }
 }
 
-fn scripts_in(layer: &Layer) -> Vec<Script> {
+/// The scripts in one layer's `scripts/` directory.
+pub fn scripts_in(layer: &Layer) -> Vec<Script> {
     let Ok(entries) = std::fs::read_dir(layer.root.join("scripts")) else {
         return Vec::new();
     };

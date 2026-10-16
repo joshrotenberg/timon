@@ -193,7 +193,8 @@ local prs = tbl.map(arg, tonumber)
 ```
 
 `timon FILE.lua [ARGS]` and `timon FILE.fnl [ARGS]` run a file with the standard `arg` table and
-`...`. `timon run NAME [ARGS]` runs a named script from a `scripts/` directory (see Directories).
+`...`. `timon NAME [ARGS]` runs a named script from a `scripts/` directory, which is a task (see
+Tasks).
 A script's last returned value is printed the way `eval` prints.
 
 ### REPL
@@ -285,60 +286,64 @@ The stock Lua standard library stays intact.
 
 ## Tasks
 
-The planned shape, from #68 (v1) and #70 (`sh` and `proc`, its prerequisite). Nothing here is
-built yet.
+Built in phase 5 (#68); the items marked phase 6 are not.
 
 ```lua
--- .timon/tasks.lua (and ~/.config/timon/tasks.lua)
+-- .timon/tasks.lua (and ~/.config/timon/tasks.lua, or tasks.fnl)
 return {
+  test = "cargo test",                                  -- a command for sh
   check = {
     description = "The gates: format, lint, test, docs",
-    run = function()
-      sh("cargo fmt --all -- --check")
-      sh("cargo clippy --all-targets -- -D warnings")
-      sh("cargo test")
-    end,
+    depends = { "test" },
+    run = function(opts, deps) return "all gates pass" end,
   },
   review = {
-    description = "Review the diff against main",
+    description = "Review the diff against a base",
     depends = { "check" },
-    options = { base = "string?", model = "\"sonnet\" | \"opus\"" },
     budget = { runs = 3, usd = 2 },
-    run = function(deps, opts)
-      return agent.ask{ agent = "reviewer", model = opts.model,
-                        prompt = "Review the diff against " .. (opts.base or "main") }
+    aliases = { "r" },
+    run = function(opts, deps)
+      return agent.ask{ agent = "reviewer",
+                        prompt = "Review the diff against " .. (opts.args[1] or "main") }
     end,
   },
 }
 ```
 
 ```sh
-timon tasks                          # built-in, user and project tasks, with descriptions
-timon check                          # a task, when no built-in has the name
-timon review --base main --model opus
-timon task review                    # always the task
-timon check review --jobs 2          # several tasks as one plan
+timon tasks                          # tasks.lua and scripts/, both layers; --all, --json
+timon check                          # a task, when no timon command has the name
+timon review develop                 # opts.args is { "develop" }
+timon test -- --nocapture            # words after -- are taken as they are
+timon task runs                      # always the task, even when a command has the name
+timon --yes drop-db                  # answers confirm
 ```
 
-- **A task is a table:** `description`, `options` in the type syntax of #29 (parsed from
-  `--key` flags, with `--help` generated from them), `depends`, `budget` and `run`. A script
-  in `scripts/NAME.lua` that returns the same table is a task too, so a short task lives in
-  `tasks.lua` and a long one in its own file.
-- **Built-in tasks:** timon's commands (`sessions search`, `agent run`, `runs`, `skill show`
-  and the rest) are declared as tasks, so their help, options and records come from the same
-  declarations. Plumbing stays native: `eval`, `run`, `tasks`, `trust`.
+- **A task** is a table (`description`, `run`, `depends`, `budget`, `aliases`, `group`,
+  `private`, `confirm`, `platforms`), a command string for `sh`, or a function. The fields are
+  declared like options and checked when tasks load, with did-you-mean. So are unknown
+  dependencies, cycles, and aliases that clash with a task, another alias or a command.
+- **`run(opts, deps)`.** `opts.args` holds the words after the task name; `deps.NAME` is each
+  dependency's first result. A string `run` gets the words appended. Words before `--` that
+  start with `-` are refused, because typed options (phase 6) will parse them.
+- **Scripts are tasks.** Every script in `scripts/` is a task whose description is its leading
+  comment, and on its own it runs as a script always has. The other fields are declared in
+  `tasks.lua`, because listing reads scripts without running them; long task bodies go in
+  `lib/`. A name in both `tasks.lua` and `scripts/` of one layer is an error.
+- **Loading.** `tasks.lua` runs with every module, because its `run` functions use them. Its
+  top level runs whenever tasks are listed, so programs and agent runs raise there.
 - **Layers:** project tasks replace user tasks by name, like skills; a project's tasks load
-  only after `timon trust`. Built-in tasks take precedence over both, and `timon tasks` marks
-  a task one of them hides.
-- **Runs:** each task run is a script run (#32), so it is recorded, resumable (#57) and
-  budgeted (#56). A dependency runs once per plan, depth first, and its result goes to the
-  task in `deps`. The first failure stops the plan. `--jobs N` lets independent tasks
-  overlap, as voga's does. A task can call another with `task.run(name, opts)`.
-- **Exit codes:** an error with `exit` sets the process's exit status (#39). `--dry-run`
-  prints the plan without running it (#38).
-
-Open, in #68: whether built-in tasks can be overridden, how built-in task names nest
-(`sessions search`), and whether `tasks.lua`'s top level must be free of side effects.
+  only after `timon trust`. timon's commands take precedence over both, and `timon tasks`
+  marks a task one of them hides.
+- **Plans and records:** dependencies run once each, depth first in declared order, then the
+  task; the first failure stops the plan, and an error with `exit` sets the exit status (#39).
+  A plan is one script run (#32) named after the task, with the plan in its request and each
+  task's status and time in its result, so it is resumable (#57). A task's `budget` scopes the
+  agent runs inside it (#56). `confirm` asks before anything runs, and `--yes` answers it;
+  `platforms` stops a plan with an unavailable task before anything runs.
+- **Phase 6:** timon's commands declared as tasks; typed `options` in the #29 syntax, parsed
+  from `--key` flags with generated `--help`, shared with scripts; several tasks per
+  invocation with `--jobs`; `task.run(name, opts)`; `--dry-run` (#38).
 
 ## agent
 
@@ -475,7 +480,7 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   `reserve = true` takes a scope's runs from the enclosing budget up front and gives back the
   unused ones when it ends. Codex reports tokens only, so a USD budget counts Claude runs and
   says so.
-- **Script runs and resume.** `timon run NAME` and `timon FILE` are script runs, recorded
+- **Script runs and resume.** `timon NAME`, `timon FILE` and task plans are script runs, recorded
   with their source's sha256 and totals; their agent runs record `parent`. Each agent run in
   a script gets a key: the sha256 of what decides its answer, and how many identical requests
   came before it in the script run. `--resume ID` reruns the script, and a run whose key
@@ -605,6 +610,7 @@ Two layers share one format, over what is built into the binary:
 ```
 ~/.config/timon/  and  <project>/.timon/
 ├── init.lua              settings for this layer: defaults, limits, serve (optional)
+├── tasks.lua             tasks (or tasks.fnl): `timon NAME`
 ├── agents/
 │   └── reviewer.lua      one agent per file; the file name is the name
 ├── contracts/
@@ -615,7 +621,7 @@ Two layers share one format, over what is built into the binary:
 │       ├── skill.lua     optional: makes it runnable with `timon skill run release`
 │       └── references/   optional: sections `timon skill show release --ref NAME` prints
 ├── scripts/
-│   └── triage.lua        `timon run triage [ARGS]`
+│   └── triage.lua        a task too: `timon triage [ARGS]`
 ├── lib/
 │   └── util.lua          on package.path for every layer's scripts: require "util"
 └── mcp/
@@ -679,7 +685,7 @@ return {
   `json` (and `schema` once contracts exist), and no I/O. Each must return a table, which is validated; an error names the file and
   the field. Settings in `init.lua` merge key by key, project over user over built in.
 - **Scripts are programs.** A script runs with every module available. Its description for
-  `timon scripts` is its leading `--` comment, read without running it. A script that returns
+  `timon tasks` and `timon scripts` is its leading `--` comment, read without running it. A script that returns
   `{ params = schema, run = function(p) ... end }` gets typed parameters, parsed from flags on
   the command line and from arguments over MCP; any other script gets `arg`.
 - **Trust.** Project files load only after `timon trust` records the directory (in

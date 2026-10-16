@@ -1,6 +1,6 @@
 ---
 name: timon
-description: Use timon when a task is easier as a few lines of code than as many tool calls - reading and reshaping files and JSON, querying with JMESPath, running programs and concurrent work, or scripting in Lua or Fennel. Run `timon eval 'CODE'` from the shell; `help()` documents every module.
+description: Use timon when a task is easier as a few lines of code than as many tool calls - reading and reshaping files and JSON, querying with JMESPath, running programs and concurrent work, or scripting in Lua or Fennel - and to run a project's tasks (timon tasks, timon NAME). Run `timon eval 'CODE'` from the shell; `help()` documents every module.
 ---
 
 # timon
@@ -12,6 +12,8 @@ timon eval '1 + 1'                 # 2: an expression returns its value
 timon eval '{ a = 1, b = { 2 } }'  # tables print as JSON: {"a":1,"b":[2]}
 timon eval -f job.lua              # run a Lua file; read data with fs.read
 timon job.lua 12 14                # a script; arguments in `arg` and `...`
+timon tasks                        # the tasks in reach: tasks.lua and scripts/
+timon check                        # run a task, after its dependencies
 timon eval --fnl '(+ 1 2)'         # Fennel
 echo 'return 6 * 7' | timon eval - # stdin
 ```
@@ -113,5 +115,6 @@ end
 - `try(f, ...)` returns `true, ...` or `false, err`.
 - Lists from modules are arrays; `json.null` is JSON null; an empty `json.array{}` encodes as `[]`.
 - `scope`, `spawn` and `par` run work concurrently; a failure cancels the rest and is raised.
-- Write scripts and reusable code with the `timon-scripting` skill, run subagents with
-  `timon-agents`, and find earlier work with `timon-sessions`.
+- Define tasks with the `timon-tasks` skill, write scripts and reusable code with
+  `timon-scripting`, run subagents with `timon-agents`, and find earlier work with
+  `timon-sessions`.

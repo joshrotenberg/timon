@@ -3,7 +3,7 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use mlua::MultiValue;
 use timon::dirs::Dirs;
 use timon::layers::{self, Layers};
@@ -14,8 +14,9 @@ use timon::{Error, Failure, Runtime};
 #[command(
     name = "timon",
     version,
-    about = "A self-contained agent harness: Lua over agent, session and tool APIs",
-    after_help = "Run a script with `timon FILE.lua [ARGS]` or `timon FILE.fnl [ARGS]`.",
+    about = "A task runner with agents built in: tasks and scripts in Lua or Fennel",
+    after_help = "Run a task with `timon NAME [WORDS]` (`timon tasks` lists them), or a script \
+                  with `timon FILE.lua [ARGS]` or `timon FILE.fnl [ARGS]`.",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -34,6 +35,9 @@ struct Cli {
     /// reused (read-only, idempotent, or in an unchanged worktree)
     #[arg(long, global = true, value_name = "SCRIPT_RUN")]
     resume: Option<String>,
+    /// Answer yes to every confirm question of the tasks that run
+    #[arg(long, global = true)]
+    yes: bool,
 }
 
 // Built once per process from the command line, so a large variant costs nothing.
@@ -52,12 +56,21 @@ enum Command {
         #[arg(long)]
         fnl: bool,
     },
-    /// Run a named script from a scripts/ directory
-    Run {
+    /// Run a task after its dependencies, even one a timon command shares a name with
+    #[command(alias = "run")]
+    Task {
         name: String,
-        /// Arguments for the script, available as `arg` and `...`
+        /// Words for the task (`opts.args`), or a script's arguments (`arg` and `...`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// List the tasks in reach: tasks.lua and scripts/, in the user and project layers
+    Tasks {
+        /// Include private tasks
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// List the scripts in reach
     Scripts {
@@ -356,6 +369,7 @@ async fn run(cli: Cli) -> ExitCode {
         Ok(layers) => layers,
         Err(err) => return fail(&err.into()),
     };
+    let yes = cli.yes;
     match cli.command {
         Command::Scripts { json } => return scripts(&layers, json),
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
@@ -379,7 +393,8 @@ async fn run(cli: Cli) -> ExitCode {
         }
         Command::Plugin(PluginCommand::Build { dir, check }) => return plugin_build(&dir, check),
         Command::Eval { .. }
-        | Command::Run { .. }
+        | Command::Task { .. }
+        | Command::Tasks { .. }
         | Command::Script(_)
         | Command::Agent(_)
         | Command::Sessions(_) => {}
@@ -400,20 +415,19 @@ async fn run(cli: Cli) -> ExitCode {
     });
     let command = match cli.command {
         Command::Sessions(command) => return sessions(&rt, command).await,
+        Command::Tasks { all, json } => return tasks(&rt, &layers, all, json),
         command => command,
     };
     let result = match command {
         Command::Eval { code, file, fnl } => eval(&rt, code, file, fnl).await,
-        Command::Run { name, args } => match layers.script(&name) {
-            Ok(script) => {
-                rt.run_named_script(&script.path, &args, &script.name, Some(script.layer.name()))
-                    .await
-            }
-            Err(err) => Err(err.into()),
+        Command::Task { name, args } => match catalog(&rt, &layers) {
+            Ok(catalog) => timon::tasks::run(&rt, &catalog, &name, &args, yes).await,
+            Err(failure) => Err(failure),
         },
-        Command::Script(argv) => script(&rt, argv).await,
+        Command::Script(argv) => external(&rt, &layers, argv, yes).await,
         Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
         Command::Scripts { .. }
+        | Command::Tasks { .. }
         | Command::Trust { .. }
         | Command::Defs { .. }
         | Command::Skill(_)
@@ -467,27 +481,81 @@ async fn eval(
     }
 }
 
-async fn script(runtime: &Runtime, argv: Vec<OsString>) -> Result<MultiValue, Failure> {
-    let mut argv = argv.into_iter();
-    let first = argv.next().unwrap_or_default();
-    let path = PathBuf::from(&first);
-    if !looks_like_script(&path) {
-        return Err(Error::new(
-            "usage",
-            format!("unknown command \"{}\"", first.to_string_lossy()),
-        )
-        .with_hint("run timon --help, or give the path to a .lua file")
-        .into());
+/// timon's own command names and aliases, which take precedence over a task's name.
+fn builtins() -> Vec<String> {
+    let mut names = vec!["help".to_owned()];
+    for c in Cli::command().get_subcommands() {
+        names.push(c.get_name().to_owned());
+        names.extend(c.get_all_aliases().map(str::to_owned));
     }
-    let args: Vec<String> = argv.map(|a| a.to_string_lossy().into_owned()).collect();
-    runtime.run_script(&path, &args).await
+    names
 }
 
-fn looks_like_script(path: &Path) -> bool {
+fn catalog(rt: &Runtime, layers: &Layers) -> Result<timon::tasks::Catalog, Failure> {
+    timon::tasks::Catalog::load(rt, layers, &builtins())
+}
+
+/// `timon NAME [WORDS]` or `timon FILE [ARGS]`: a path runs as a script, a name as a task.
+async fn external(
+    rt: &Runtime,
+    layers: &Layers,
+    argv: Vec<OsString>,
+    yes: bool,
+) -> Result<MultiValue, Failure> {
+    let mut argv = argv.into_iter();
+    let first = argv.next().unwrap_or_default();
+    let words: Vec<String> = argv.map(|a| a.to_string_lossy().into_owned()).collect();
+    let path = PathBuf::from(&first);
+    if is_path(&path) {
+        return rt.run_script(&path, &words).await;
+    }
+    let name = first.to_string_lossy().into_owned();
+    let catalog = catalog(rt, layers)?;
+    if catalog.resolve(&name).is_some() {
+        return timon::tasks::run(rt, &catalog, &name, &words, yes).await;
+    }
+    if path.is_file() {
+        return rt.run_script(&path, &words).await;
+    }
+    match catalog.find(&name) {
+        Err(err) if err.kind == "untrusted" => Err(err.into()),
+        _ => {
+            let builtins = builtins();
+            let names = builtins
+                .iter()
+                .map(String::as_str)
+                .chain(catalog.tasks.iter().map(|t| t.name.as_str()));
+            let err = Error::new("usage", format!("unknown command or task \"{name}\""));
+            Err(match timon::suggest::closest(&name, names) {
+                Some(close) => err.with_hint(format!("did you mean \"{close}\"?")),
+                None => err.with_hint("timon --help lists the commands and timon tasks the tasks"),
+            }
+            .into())
+        }
+    }
+}
+
+/// A script path rather than a task name: it has a .lua or .fnl extension or a directory.
+fn is_path(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext == "lua" || ext == "fnl")
         || path.components().count() > 1
-        || path.is_file()
+}
+
+fn tasks(rt: &Runtime, layers: &Layers, all: bool, json: bool) -> ExitCode {
+    let catalog = match catalog(rt, layers) {
+        Ok(catalog) => catalog,
+        Err(failure) => return fail(&failure),
+    };
+    if json {
+        println!("{}", catalog.to_json(all));
+    } else {
+        print!("{}", catalog.listing(all));
+    }
+    if let Some(note) = catalog.untrusted_note() {
+        eprintln!("{note}");
+    }
+    ExitCode::SUCCESS
 }
 
 fn scripts(layers: &Layers, json: bool) -> ExitCode {
