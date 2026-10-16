@@ -1,5 +1,5 @@
 -- Audits names across timon's public surface with the namer agent (#52). Spends tokens.
--- Usage: timon run naming-audit [OUT], OUT defaults to target/naming-audit.json
+-- Usage: timon naming-audit [OUT], OUT defaults to target/naming-audit.json
 local areas = {
   "Lua modules, functions and options: src/modules/*.rs (the DOC declarations)",
   "CLI subcommands and flags: src/main.rs",

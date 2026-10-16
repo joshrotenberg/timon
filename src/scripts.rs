@@ -1,8 +1,8 @@
-//! Script runs as records. `timon run NAME` and `timon FILE` write `state/scripts/<id>/`:
+//! Script runs as records. `timon NAME`, `timon FILE` and task runs write `state/scripts/<id>/`:
 //!
 //! ```text
 //! request.json   the script, its arguments, its source's sha256, the trigger, metadata
-//! result.json    status and totals
+//! result.json    status and totals; for a task run, each task's status and time
 //! runs.jsonl     { id, key, status, usd, cached } per agent run
 //! ```
 //!
@@ -47,6 +47,8 @@ pub struct ScriptRun {
     seen: RefCell<HashMap<String, u32>>,
     /// Reusable runs of the script run being resumed, by key.
     cache: HashMap<String, String>,
+    /// `{ name, status, ms }` for each task of a task run, in the order they ran.
+    tasks: RefCell<Vec<Json>>,
     done: Cell<bool>,
 }
 
@@ -123,6 +125,7 @@ impl ScriptRun {
             totals: RefCell::default(),
             seen: RefCell::default(),
             cache,
+            tasks: RefCell::default(),
             done: Cell::new(false),
         };
         let own = run.dir.join(&run.id);
@@ -187,6 +190,13 @@ impl ScriptRun {
         }
     }
 
+    /// Records how one task of a task run ended.
+    pub fn task(&self, name: &str, status: &str, ms: u64) {
+        self.tasks
+            .borrow_mut()
+            .push(json!({ "name": name, "status": status, "ms": ms }));
+    }
+
     fn write_result(&self, status: &str, error: Option<Json>) -> Result<(), Error> {
         let t = self.totals.borrow();
         let request = self.request.borrow();
@@ -204,6 +214,10 @@ impl ScriptRun {
             "run_ids": t.ids,
             "error": error,
         });
+        let tasks = self.tasks.borrow();
+        if !tasks.is_empty() {
+            result["tasks"] = json!(*tasks);
+        }
         redact_value(&mut result);
         write_private(
             &self.dir.join(&self.id).join("result.json"),

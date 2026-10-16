@@ -86,7 +86,7 @@ fn err(o: &Output) -> String {
 }
 
 #[test]
-fn the_project_layer_loads_agents_scripts_and_skills() {
+fn the_project_layer_loads_agents_tasks_scripts_and_skills() {
     let p = Project::new();
     let agents = p.names(&["agents", "--json"]);
     assert_eq!(
@@ -102,8 +102,29 @@ fn the_project_layer_loads_agents_scripts_and_skills() {
     let scripts = p.names(&["scripts", "--json"]);
     assert_eq!(
         scripts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-        ["check", "em-dash", "naming-audit", "recent"]
+        ["em-dash", "naming-audit", "recent"]
     );
+    let tasks = p.timon(&["tasks", "--json"], &[]);
+    assert!(tasks.status.success(), "{}", err(&tasks));
+    let tasks: serde_json::Value = serde_json::from_slice(&tasks.stdout).unwrap();
+    let check = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "check")
+        .unwrap();
+    assert_eq!(
+        check["depends"],
+        serde_json::json!(["format", "lint", "test", "docs", "plugin-check"])
+    );
+    let gates: Vec<&str> = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["group"] == "gates")
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(gates, ["docs", "format", "lint", "plugin-check", "test"]);
     let skills = p.names(&["skill", "list", "--json"]);
     assert!(skills.iter().any(|(n, _)| n == "timon-dev"), "{skills:?}");
 }

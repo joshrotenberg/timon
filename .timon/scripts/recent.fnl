@@ -1,5 +1,5 @@
 ; Recent work on timon: sessions run in a timon directory, and the agent runs timon recorded.
-; Usage: timon run recent [SINCE], SINCE such as 2d (the default) or 6h
+; Usage: timon recent [SINCE], SINCE such as 2d (the default) or 6h
 (local since (or (. arg 1) "2d"))
 (local found (sessions.list {:project "timon" : since :limit 10}))
 (print (.. "sessions since " since ": " (length found.sessions)))

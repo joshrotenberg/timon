@@ -25,19 +25,23 @@ pub fn shape(path: &str) -> Result<Rc<Shape>, Error> {
     }
     let (_, func) = docs::function(path)
         .ok_or_else(|| Error::new("internal", format!("{path} has no declaration")))?;
+    let shape = object(func.options).map_err(|e| Error::new("internal", format!("{path}: {e}")))?;
+    SHAPES.with(|s| s.borrow_mut().insert(path.to_owned(), shape.clone()));
+    Ok(shape)
+}
+
+/// The object shape of declared options: required ones as declared, the rest optional.
+pub fn object(options: &[docs::Opt]) -> Result<Rc<Shape>, String> {
     let mut fields = Vec::new();
-    for o in func.options {
-        let mut ty = crate::types::parse(o.ty)
-            .map_err(|e| Error::new("internal", format!("{path}: option {}: {e}", o.name)))?;
+    for o in options {
+        let mut ty = crate::types::parse(o.ty).map_err(|e| format!("option {}: {e}", o.name))?;
         if !o.required && !matches!(ty.node, Node::Optional(_)) {
             ty = Shape::new(Node::Optional(ty));
         }
         fields.push((o.name.to_owned(), ty));
     }
     fields.sort_by(|a, b| a.0.cmp(&b.0));
-    let shape = Shape::new(Node::Object(fields));
-    SHAPES.with(|s| s.borrow_mut().insert(path.to_owned(), shape.clone()));
-    Ok(shape)
+    Ok(Shape::new(Node::Object(fields)))
 }
 
 /// Checks `opts` against the options declared for `path`.

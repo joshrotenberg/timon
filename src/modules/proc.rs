@@ -187,6 +187,7 @@ fn spec(
     opts: Option<Table>,
     defaults: (Stream, Stream, bool),
 ) -> mlua::Result<Spec> {
+    crate::tasks::refuse_while_loading(lua, path)?;
     let merged = lua.create_table()?;
     let mut argv: Option<Vec<String>> = None;
     let mut text: Option<String> = None;

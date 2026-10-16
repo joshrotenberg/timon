@@ -23,19 +23,21 @@ timon double.lua 1 2 3   # [2,4,6]
 
 ## Named scripts and layers
 
-Put scripts where `timon run` finds them. The same layout works for you and for a project:
+A named script is a task: `timon NAME` runs it. The same layout works for you and for a
+project:
 
 ```
 ~/.config/timon/      (everywhere)      <project>/.timon/   (one project)
 ├── init.lua          settings
-├── scripts/NAME.lua  timon run NAME [ARGS]
+├── tasks.lua         tasks with dependencies (the timon-tasks skill)
+├── scripts/NAME.lua  timon NAME [ARGS]
 ├── lib/NAME.lua      require "NAME"
 └── skills/NAME/      SKILL.md, references/
 ```
 
 ```sh
-timon scripts             # what is in reach, with the first line of each script's comment
-timon run triage --all    # runs scripts/triage.lua with "--all" in arg
+timon tasks               # what is in reach, with the first line of each script's comment
+timon triage --all        # runs scripts/triage.lua with "--all" in arg
 timon defs                # layers, settings, scripts, lib directories
 ```
 
@@ -65,11 +67,11 @@ return {
 }
 ```
 
-Every `timon run NAME` and `timon FILE` is recorded, with its arguments, the sha256 of its
+Every `timon NAME` and `timon FILE` is recorded, with its arguments, the sha256 of its
 source and its totals. Its agent runs point to it with `parent`:
 
 ```sh
-timon run review src/a.rs src/b.rs
+timon review src/a.rs src/b.rs
 timon runs --scripts                 # script runs: status, runs, cached, cost
 timon runs show s_1a2b               # one script run: request, result, agent runs
 timon --resume s_1a2b run review src/a.rs src/b.rs

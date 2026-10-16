@@ -107,7 +107,7 @@ fn a_script_error_names_the_file_and_line() {
 fn an_unknown_command_is_a_usage_error() {
     let output = timon(&["frobnicate"], None);
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("unknown command \"frobnicate\""));
+    assert!(stderr(&output).contains("unknown command or task \"frobnicate\""));
 }
 
 #[test]

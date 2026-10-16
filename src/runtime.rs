@@ -199,6 +199,18 @@ impl Runtime {
             .map_err(|err| failure(Some(err)))
     }
 
+    /// Calls `f` outside any scope, as a definition file's top level runs, and returns its
+    /// first value, or the error that stopped it with a traceback.
+    pub(crate) fn call_sync(&self, f: Function) -> Result<Value, Failure> {
+        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+        let run: Function = self.lua.named_registry_value(RUN).map_err(lua_err)?;
+        let mut out = run.call::<MultiValue>(f).map_err(lua_err)?.into_iter();
+        match out.next() {
+            Some(Value::Boolean(true)) => Ok(out.next().unwrap_or(Value::Nil)),
+            _ => Err(failure(out.next())),
+        }
+    }
+
     /// Evaluates `source` the way `timon eval` does.
     pub async fn eval(&self, source: &str, name: &str) -> Result<MultiValue, Failure> {
         let f = self.compile(source, name, true)?;
@@ -244,14 +256,8 @@ impl Runtime {
                 format!("cannot read {}: {e}", path.display()),
             ))
         })?;
-        let record = self.begin_script(path, args, name, layer, &source)?;
-        let name = format!("@{}", path.display());
-        let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
-            crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(&source), &name)?
-        } else {
-            strip_shebang(&source).into_owned()
-        };
-        let f = self.compile(&lua_source, &name, false)?;
+        let record = self.begin_script(path, args, name, layer, &source, None)?;
+        let driver = self.script_function(path, &source, true)?;
         let script_args = || -> mlua::Result<MultiValue> {
             let arg = self.lua.create_table()?;
             arg.raw_set(0, path.display().to_string())?;
@@ -264,40 +270,75 @@ impl Runtime {
                 .collect()
         };
         let args = script_args().map_err(|e| Failure::from(Error::from_lua(&e)))?;
-        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
-        let describe = self.lua.create_function(describe_script).map_err(lua_err)?;
-        let driver: Function = self
-            .lua
-            .load(SCRIPT_DRIVER)
-            .set_name(INTERNAL_CHUNK)
-            .call((f, describe))
-            .map_err(lua_err)?;
         let result = self.call(driver, args).await;
-        if let Some(record) = record {
-            match &result {
-                Ok(_) => record.finish("ok", None),
-                Err(failure) => record.finish(
-                    "failed",
-                    Some(serde_json::json!({
-                        "kind": failure.error.kind,
-                        "message": failure.error.message,
-                        "hint": failure.error.hint,
-                    })),
-                ),
-            }
-            self.lua.remove_app_data::<Rc<ScriptRun>>();
-        }
+        self.finish_script(record, &result);
         result
     }
 
+    /// Compiles a script file into a function that runs it: a chunk that returns
+    /// `{ run = function(...) end, ... }` is checked and its `run` called (see
+    /// `SCRIPT_DRIVER`). With `record`, its metadata goes into the script run's record.
+    pub(crate) fn script_function(
+        &self,
+        path: &Path,
+        source: &str,
+        record: bool,
+    ) -> Result<Function, Failure> {
+        let name = format!("@{}", path.display());
+        let lua_source = if path.extension().is_some_and(|ext| ext == "fnl") {
+            crate::fennel::compile(&self.lua, &crate::fennel::strip_shebang(source), &name)?
+        } else {
+            strip_shebang(source).into_owned()
+        };
+        let f = self.compile(&lua_source, &name, false)?;
+        let lua_err = |e: mlua::Error| Failure::from(Error::from_lua(&e));
+        let describe = if record {
+            self.lua.create_function(describe_script)
+        } else {
+            self.lua
+                .create_function(|_, spec: Table| Ok(check_script(&spec)?))
+        }
+        .map_err(lua_err)?;
+        self.lua
+            .load(SCRIPT_DRIVER)
+            .set_name(INTERNAL_CHUNK)
+            .call((f, describe))
+            .map_err(lua_err)
+    }
+
+    /// Settles a script run's record with how the run ended.
+    pub(crate) fn finish_script(
+        &self,
+        record: Option<Rc<ScriptRun>>,
+        result: &Result<MultiValue, Failure>,
+    ) {
+        let Some(record) = record else {
+            return;
+        };
+        match result {
+            Ok(_) => record.finish("ok", None),
+            Err(failure) => record.finish(
+                "failed",
+                Some(serde_json::json!({
+                    "kind": failure.error.kind,
+                    "message": failure.error.message,
+                    "hint": failure.error.hint,
+                })),
+            ),
+        }
+        self.lua.remove_app_data::<Rc<ScriptRun>>();
+    }
+
     /// Starts the record of a script run, when there is a state directory to keep it in.
-    fn begin_script(
+    /// `extra` fields are added to the request.
+    pub(crate) fn begin_script(
         &self,
         path: &Path,
         args: &[String],
         name: &str,
         layer: Option<&str>,
         source: &str,
+        extra: Option<serde_json::Value>,
     ) -> Result<Option<Rc<ScriptRun>>, Failure> {
         let Some(state) = self
             .lua
@@ -306,7 +347,7 @@ impl Runtime {
         else {
             return Ok(None);
         };
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "name": name,
             "layer": layer,
             "path": path,
@@ -315,6 +356,11 @@ impl Runtime {
             "trigger": "manual",
             "cwd": std::env::current_dir().ok(),
         });
+        if let Some(serde_json::Value::Object(extra)) = extra {
+            for (k, v) in extra {
+                request[k] = v;
+            }
+        }
         let resume = self.lua.app_data_ref::<Resume>().map(|r| r.0.clone());
         let run = Rc::new(ScriptRun::begin(
             Path::new(&state),
@@ -356,6 +402,25 @@ const SCRIPT_SHAPE: &str = "{ description: string?, phases: string[]?, budget: {
 
 /// Checks a script's metadata and adds it to the script run's record.
 fn describe_script(lua: &Lua, spec: Table) -> mlua::Result<()> {
+    check_script(&spec)?;
+    if let Some(run) = lua.app_data_ref::<Rc<ScriptRun>>() {
+        let mut metadata = serde_json::Map::new();
+        for key in ["description", "phases", "budget"] {
+            let value: Value = spec.raw_get(key)?;
+            if !value.is_nil() {
+                metadata.insert(
+                    key.to_owned(),
+                    crate::value::to_json(&value, crate::value::Mode::Display)?,
+                );
+            }
+        }
+        run.describe(serde_json::Value::Object(metadata))?;
+    }
+    Ok(())
+}
+
+/// Checks a script's metadata against `SCRIPT_SHAPE`.
+fn check_script(spec: &Table) -> Result<(), Error> {
     use crate::modules::schema::Problem;
     let shape = crate::types::parse(SCRIPT_SHAPE).map_err(|e| Error::new("internal", e))?;
     if let Some(problem) = shape
@@ -395,20 +460,7 @@ fn describe_script(lua: &Lua, spec: Table) -> mlua::Result<()> {
                 format!("a script with metadata needs \"{name}\""),
             ),
         };
-        return Err(err.into());
-    }
-    if let Some(run) = lua.app_data_ref::<Rc<ScriptRun>>() {
-        let mut metadata = serde_json::Map::new();
-        for key in ["description", "phases", "budget"] {
-            let value: Value = spec.raw_get(key)?;
-            if !value.is_nil() {
-                metadata.insert(
-                    key.to_owned(),
-                    crate::value::to_json(&value, crate::value::Mode::Display)?,
-                );
-            }
-        }
-        run.describe(serde_json::Value::Object(metadata))?;
+        return Err(err);
     }
     Ok(())
 }

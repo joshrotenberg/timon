@@ -1,5 +1,5 @@
 -- Finds em dashes in timon's own text; fails if there are any (AGENTS.md: no em dashes).
--- Usage: timon run em-dash [ROOT]
+-- Usage: timon em-dash [ROOT]
 local repo = require("repo")
 
 local DASH = "\u{2014}"

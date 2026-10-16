@@ -505,6 +505,7 @@ impl Drop for Settle {
 
 /// Runs one agent turn for the task on `thread`, charging that task's budgets.
 async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
+    crate::tasks::refuse_while_loading(&lua, "an agent run")?;
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
     let request = request(&lua, &fields)?;

@@ -1,6 +1,6 @@
 ---
 name: timon-dev
-description: Use when changing timon itself - where things live, the gates, and the dogfood scripts in this repository's .timon. Read AGENTS.md first.
+description: Use when changing timon itself - where things live, the gates as tasks, and the dogfood scripts in this repository's .timon. Read AGENTS.md first.
 ---
 
 # Working on timon with timon
@@ -12,12 +12,16 @@ timon trust        # from the repository root
 timon defs         # the layers, settings, agents, scripts and lib in effect
 ```
 
-## Scripts
+## Tasks
 
 ```sh
-timon run em-dash             # fails on any em dash in our own text; also runs in cargo test
-timon run recent 6h           # recent timon sessions and recorded agent runs
-timon run naming-audit        # the namer agent over six areas; spends tokens (limit $2)
+timon tasks                   # the gates (tasks.lua) and the scripts, with descriptions
+timon check                   # every gate before a push; exits with the first failure's code
+timon quick                   # format and lint only
+timon test -- --test tasks    # one gate; words after -- go to cargo test
+timon em-dash                 # fails on any em dash in our own text; also runs in cargo test
+timon recent 6h               # recent timon sessions and recorded agent runs
+timon naming-audit            # the namer agent over six areas; spends tokens (limit $2)
 ```
 
 ## Agents
