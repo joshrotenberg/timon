@@ -572,6 +572,80 @@ fn live_1_continue_in_the_kept_worktree() {
 
 #[test]
 #[ignore = "live: spends tokens"]
+fn live_1_a_fan_out_of_eight_at_concurrency_four() {
+    // The scale timon aims at (design rule 10): a handful of runs at once. Progress lines show
+    // how many overlapped; every run must succeed, with no rate-limit failures.
+    require_live!();
+    let live = Live::new();
+    let config = live.dir.path().join("timon/config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("init.lua"),
+        "return { limits = { concurrency = 4 } }\n",
+    )
+    .unwrap();
+    let code = format!(
+        "phase('fan-out')
+         local started = os.time()
+         local runs = par.map({{ 1, 2, 3, 4, 5, 6, 7, 8 }}, function(i)
+           return agent.run{{ {CLAUDE}, ephemeral = true, events = true, label = 'n' .. i,
+             prompt = 'Read README.md, then reply with its first line followed by the number ' .. i .. '.' }}
+         end)
+         return {{ runs = runs, seconds = os.time() - started }}"
+    );
+    let o = live.timon(
+        &["--max-usd", "0.50", "--progress", "json", "eval", &code],
+        &[],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let runs = r["runs"].as_array().unwrap();
+    let statuses: Vec<&str> = runs.iter().map(|r| r["status"].as_str().unwrap()).collect();
+    assert!(
+        statuses.iter().all(|s| *s == "ok"),
+        "{statuses:?}: {}",
+        runs.iter()
+            .map(|r| r["error"].to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    let (mut running, mut most) = (0i32, 0i32);
+    for line in err(&o).lines() {
+        let Ok(e) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match e["event"].as_str() {
+            Some("run_started") => running += 1,
+            Some("run_finished") => running -= 1,
+            _ => {}
+        }
+        most = most.max(running);
+    }
+    let ms: Vec<u64> = runs.iter().map(|r| r["ms"].as_u64().unwrap()).collect();
+    let tools = runs
+        .iter()
+        .filter(|r| {
+            r["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "tool_call")
+        })
+        .count();
+    eprintln!(
+        "8 runs in {} s wall, {} to {} ms each ({} ms in all); at most {most} at once; {tools} of 8 used a tool",
+        r["seconds"],
+        ms.iter().min().unwrap(),
+        ms.iter().max().unwrap(),
+        ms.iter().sum::<u64>(),
+    );
+    assert!(most <= 4, "the concurrency limit was passed: {most}");
+    assert!(most >= 2, "the runs did not overlap: {most}");
+    live.costs("fan-out of eight");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
 fn live_1_events_from_both_providers() {
     require_live!();
     let live = Live::new();
