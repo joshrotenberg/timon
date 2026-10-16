@@ -278,6 +278,31 @@ fn classify(err: &codex_wrapper::Error) -> Option<(Status, Error)> {
     };
     Some((
         Status::Failed,
-        Error::new(kind, err.to_string()).with_hint(hint),
+        Error::new(kind, untraced(&err.to_string())).with_hint(hint),
     ))
+}
+
+/// A message without the tracing prefixes Codex logs with, such as
+/// `2026-10-16T14:50:37.166Z ERROR codex_api::endpoint::responses_websocket: `.
+fn untraced(message: &str) -> String {
+    static PREFIX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"\d{4}-\d\d-\d\dT[\d:.]+Z\s+(?:ERROR|WARN|INFO|DEBUG|TRACE)\s+[\w:]+:\s*",
+        )
+        .expect("a valid pattern")
+    });
+    PREFIX.replace_all(message, "").into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tracing_prefixes_are_dropped() {
+        assert_eq!(
+            super::untraced(
+                "codex authentication failed: 2026-10-16T14:50:37.166759Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized"
+            ),
+            "codex authentication failed: failed to connect to websocket: HTTP error: 401 Unauthorized"
+        );
+    }
 }

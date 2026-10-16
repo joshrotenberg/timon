@@ -176,6 +176,11 @@ fn answer(mut result: QueryResult) -> Outcome {
     };
     let session = Some(result.session_id.clone()).filter(|s| !s.is_empty());
     if result.is_error || subtype != "success" {
+        // A login problem ends with an error result too (on stdout, exit 1); in stream mode
+        // timon sees that result first, so it is classified here as well as in `failure`.
+        if let Some(kind) = claude_wrapper::auth::classify_failure(1, &result.result, "") {
+            return Err(auth(kind, result.result.clone()));
+        }
         let (kind, hint) = match subtype.as_str() {
             "error_max_turns" => ("max_turns", "raise budget.turns, or split the task"),
             "error_max_budget_usd" => ("max_budget", "raise budget.usd"),
@@ -212,18 +217,7 @@ fn failure(err: &claude_wrapper::Error) -> (Status, Error) {
             Error::new("not_installed", "claude is not installed or not on PATH")
                 .with_hint("install Claude Code, or set TIMON_CLAUDE_BIN"),
         ),
-        E::Auth { kind, message, .. } => {
-            let (kind, hint) = match kind {
-                AuthErrorKind::NotAuthenticated => ("not_logged_in", "run claude, then /login"),
-                AuthErrorKind::Expired => ("auth_expired", "run claude, then /login"),
-                AuthErrorKind::RateLimit => ("rate_limited", "wait, then try again"),
-                _ => ("auth", "check claude's login with: claude auth status"),
-            };
-            (
-                Status::Failed,
-                Error::new(kind, message.clone()).with_hint(hint),
-            )
-        }
+        E::Auth { kind, message, .. } => auth(*kind, readable(message)),
         E::MaxTurnsExceeded { .. } => (
             Status::Failed,
             Error::new("max_turns", "claude reached its turn limit")
@@ -247,6 +241,26 @@ fn failure(err: &claude_wrapper::Error) -> (Status, Error) {
             Error::new("provider_failed", other.to_string()),
         ),
     }
+}
+
+fn auth(kind: AuthErrorKind, message: String) -> (Status, Error) {
+    let (kind, hint) = match kind {
+        AuthErrorKind::NotAuthenticated => ("not_logged_in", "run claude, then /login"),
+        AuthErrorKind::Expired => ("auth_expired", "run claude, then /login"),
+        AuthErrorKind::RateLimit => ("rate_limited", "wait, then try again"),
+        _ => ("auth", "check claude's login with: claude auth status"),
+    };
+    (Status::Failed, Error::new(kind, message).with_hint(hint))
+}
+
+/// The human part of a CLI message: the `result` text when the message is Claude's result
+/// JSON, as it is when the CLI exits 1 after printing an error result.
+fn readable(message: &str) -> String {
+    serde_json::from_str::<Json>(message.trim())
+        .ok()
+        .and_then(|j| j["result"].as_str().map(str::to_owned))
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| message.trim().to_owned())
 }
 
 /// The last few lines of a stream, for an error message.

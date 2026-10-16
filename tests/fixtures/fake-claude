@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A fake `claude -p` for tests. Never contacts a model.
 
-FAKE_MODE: ok (default), auth, max_turns, is_error
+FAKE_MODE: ok (default), auth (replays recorded/claude-not-logged-in.*), max_turns, is_error
 FAKE_TEXT: the result text (default: "echo: " + the prompt)
 FAKE_STRUCTURED: JSON for structured_output
 FAKE_AUTO_ANSWER: with --json-schema and no FAKE_STRUCTURED, answer with the smallest valid value
@@ -73,10 +73,14 @@ if os.environ.get("FAKE_STRUCTURED"):
 elif os.environ.get("FAKE_AUTO_ANSWER") and "--json-schema" in args:
     result["structured_output"] = example(json.loads(args[args.index("--json-schema") + 1]))
 
-if mode == "auth":
-    sys.stderr.write("Not logged in · Please run /login\n")
-    sys.exit(1)
 stream = "--output-format" in args and args[args.index("--output-format") + 1] == "stream-json"
+if mode == "auth":
+    # Replays what Claude Code 2.1.301 prints when not logged in: the result on stdout, exit 1.
+    recorded = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recorded",
+                            "claude-not-logged-in.stream.jsonl" if stream else "claude-not-logged-in.json")
+    with open(recorded) as f:
+        sys.stdout.write(f.read())
+    sys.exit(1)
 if stream:
     for event in [
         {"type": "system", "subtype": "init", "session_id": session, "model": "fake"},

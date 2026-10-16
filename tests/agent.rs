@@ -209,6 +209,8 @@ fn claude_failures_are_classified() {
     assert_eq!(r["status"], "failed");
     assert_eq!(r["error"]["kind"], "not_logged_in");
     assert_eq!(r["error"]["hint"], "run claude, then /login");
+    // The real CLI prints its result JSON and exits 1; the message is the result's text.
+    assert_eq!(r["error"]["message"], "Not logged in · Please run /login");
 
     let r = s.json("agent.run{ prompt = 'x' }", &[("FAKE_MODE", "max_turns")]);
     assert_eq!(r["error"]["kind"], "max_turns");
@@ -943,8 +945,10 @@ fn a_failed_claude_turn_keeps_its_events_and_its_classification() {
         "agent.run{ prompt = 'x', events = true }",
         &[("FAKE_MODE", "auth")],
     );
-    assert_eq!(r["error"]["kind"], "not_logged_in");
-    assert_eq!(r["events"], serde_json::json!([]));
+    // In stream mode the error result comes first, and is classified as a login problem too.
+    assert_eq!(r["error"]["kind"], "not_logged_in", "{r}");
+    assert_eq!(r["error"]["message"], "Not logged in · Please run /login");
+    assert!(!kinds(&r).iter().any(|k| k == "tool_call"), "{r}");
 }
 
 #[test]
