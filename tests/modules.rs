@@ -273,3 +273,44 @@ fn path_names() {
         ["src/main.rs", "main.rs", "src", ".", "lua", ""]
     );
 }
+
+// json.query (#15)
+
+#[test]
+fn json_query_filters_and_projects() {
+    assert_eq!(
+        one(
+            "json.query({ prs = { { number = 12, draft = false }, { number = 14, draft = true } } }, 'prs[?draft == `false`].number')"
+        ),
+        "[12]"
+    );
+    assert_eq!(
+        one("json.encode(json.query({ items = {} }, 'items'))"),
+        "{}"
+    );
+    assert_eq!(
+        one("json.encode(json.query(json.decode('{\"items\":[]}'), 'items'))"),
+        "[]"
+    );
+}
+
+#[test]
+fn json_query_has_the_jpx_extensions() {
+    assert_eq!(
+        one("json.query({ 'b', 'a', 'c' }, \"sort(@) | join(', ', @)\")"),
+        "a, b, c"
+    );
+    assert_eq!(
+        one("json.query({ name = 'timon' }, 'upper(name)')"),
+        "TIMON"
+    );
+}
+
+#[test]
+fn json_query_reports_bad_expressions_and_null_results() {
+    let err = fails("json.query({}, 'foo[')");
+    assert_eq!(err.kind, "bad_query");
+    assert!(err.message.contains("foo["), "{err}");
+    assert_eq!(one("json.query({ a = 1 }, 'missing') == json.null"), "true");
+    assert_eq!(fails("json.query({ f = print }, 'f')").kind, "not_json");
+}

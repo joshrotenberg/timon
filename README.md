@@ -31,6 +31,8 @@ timon eval '1 + 1'                         # 2
 timon eval '{ name = "timon" }'            # {"name":"timon"}
 echo 'return ("a,b"):upper()' | timon eval -
 timon review.lua 12 14                     # script; args in `arg` and `...`
+timon eval --fnl '(+ 1 2)'                 # Fennel
+timon eval 'json.query({ a = { 1, 2 } }, "a[-1]")'    # JMESPath, with jpx's functions
 ```
 
 Errors are tables with a kind, a message and a hint; `try(f, ...)` returns `true, ...` or
