@@ -36,7 +36,7 @@ unambiguous prefixes everywhere.
 ```lua
 local r = sessions.search{ query = "flaky parser", since = "30d" }
 if #r.hits == 0 then
-  return r.absence_is_proof and "no indexed text in scope has these words" or r.note
+  return r.absence_is_proof and "no session from the last 30 days has both words" or r.note
 end
 local hit = r.hits[1]
 local at = hit.matches[1].index
@@ -57,10 +57,34 @@ return r.returned, r.exhaustive
 ```
 
 The current session and sessions written in the last 10 minutes are left out unless
-`exclude = false` and `active = true`. No hits proves nothing unless `absence_is_proof` is
-true; `note` says what was not covered. A record is indexed up to 4,000 characters (600 for
-tool calls and results), so a search that finds nothing in a session with a longer one is not
-proof, and `coverage.truncated` counts them.
+`exclude = false` and `active = true`.
+
+## What no hits proves
+
+No hits proves nothing unless `absence_is_proof` is true, and then only this: no indexed record
+in the archives read, within the filters given (`since`, `until`, `project`, `backend`), holds
+the query as the mode reads it. It says nothing about other words for the same subject, other
+periods, or archives not read, so it is never proof a subject was not discussed. `note` says
+what was not covered. A record is indexed up to 4,000 characters (600 for tool calls and
+results), and a miss over a session holding a longer one is not proof; `coverage.truncated`
+counts them.
+
+`terms` and `phrase` match whole tokens: runs of letters and digits, split at spaces and
+punctuation, ignoring case and accents. `pars` does not find `parser`. Chinese or Japanese
+written without spaces is one token per run, so a word inside a sentence is not found. Use
+`fts` with `pars*` for a prefix, and `regex` for a substring, punctuation such as `--verbose`,
+or unsegmented text:
+
+```lua
+local word = sessions.search{ query = "pars" }                   -- no token is "pars"
+local prefix = sessions.search{ query = "pars*", mode = "fts" }  -- parser, parse.rs
+local cjk = sessions.search{ query = "解析器" }                    -- inside 今天修复了解析器的错误
+local sub = sessions.search{ query = "解析器", mode = "regex" }    -- any substring
+return #word.hits, #prefix.hits, #cjk.hits, #sub.hits            -- 0 1 0 1
+```
+
+A regex miss is read the same way: it covers the indexed text in scope, with the same `note`,
+`coverage` and `absence_is_proof`.
 
 ## Read a whole transcript
 
