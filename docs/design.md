@@ -607,7 +607,12 @@ sessions.summarize(id, { model = "haiku" })
   incrementally from file sizes and modification times, so it is never stale and never needs a
   daemon. `timon sessions index --rebuild` starts over.
 - `exhaustive = false` means finding nothing proves nothing, and `note` says what was not
-  covered.
+  covered. `absence_is_proof = true` is lexical and scoped: no indexed record in the archives
+  read, within the filters, holds the query's tokens (or matches the regex). It does not prove
+  a subject was never discussed.
+- A record is indexed up to 4,000 characters (600 for tool calls and results). When
+  nothing matches and a session in scope has a cut record, `absence_is_proof` is false and
+  `coverage.truncated` counts the sessions and records.
 - Transcript text is redacted (`[redacted:<kind>]`) and untrusted.
 - Summaries run through `agent.run` (`ephemeral`, no tools, one turn), so budgets and run
   records apply. The transcript is redacted before it is sent; a long one is summarized in

@@ -69,6 +69,8 @@ fn seed_archives(home: &Path) {
                 "originator": "codex_cli_rs", "source": "cli" } }),
             serde_json::json!({ "type": "event_msg",
                 "payload": { "type": "user_message", "message": "add a --verbose flag" } }),
+            serde_json::json!({ "type": "event_msg",
+                "payload": { "type": "user_message", "message": "今天修复了解析器的错误" } }),
         ],
     );
 }

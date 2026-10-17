@@ -85,12 +85,16 @@ impl Draft {
     }
 }
 
+/// What `cap` appends to text it cut. The index counts records that end with it, since text
+/// past the cap is not searchable (#122).
+pub(crate) const TRUNCATED: &str = " ...[truncated]";
+
 fn cap(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
         let mut out: String = s.chars().take(n).collect();
-        out.push_str(" ...[truncated]");
+        out.push_str(TRUNCATED);
         out
     }
 }

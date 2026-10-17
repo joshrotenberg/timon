@@ -1507,7 +1507,7 @@ Sessions newest first, each with id, backend, title, snippet, project, modified,
 | `backend` | `"claude" \| "codex"` | only this backend (default: both) |
 | `project` | `string` | part of the session's directory |
 | `dir` | `string` | only sessions that ran in this directory or below it; faster than project |
-| `since` | `string \| number` | a duration back ("2d"), a date, or an RFC 3339 time |
+| `since` | `string \| number` | a duration back ("2d", "1w"), a date, or an RFC 3339 time |
 | `limit` | `integer` | most sessions to return (default 20) |
 | `subagents` | `boolean` | include sessions another session started |
 | `automated` | `boolean` | include claude -p, codex exec and timon's own runs |
@@ -1557,7 +1557,7 @@ Searches every session's text. Returns hits (session rows with match_count and m
 | `mode` | `"terms" \| "phrase" \| "fts" \| "regex"` | terms (default): every word; phrase: the words in order; fts: FTS5 syntax; regex |
 | `backend` | `"claude" \| "codex"` | only this backend (default: both) |
 | `project` | `string` | part of the session's directory |
-| `since` | `string \| number` | a duration back ("7d"), a date, or an RFC 3339 time |
+| `since` | `string \| number` | a duration back ("7d", "1w"), a date, or an RFC 3339 time |
 | `until` | `string \| number` | the same forms as since |
 | `limit` | `integer` | most sessions (default 20) |
 | `per_session` | `integer` | most matches shown per session (default 3) |

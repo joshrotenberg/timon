@@ -255,6 +255,62 @@ fn filters_by_project_and_since() {
     assert_eq!(ids, [ID_A]);
 }
 
+/// #131: a week count that is negative, not finite or too large is a bad option, not a panic.
+#[test]
+fn week_filters_take_fractions_and_reject_what_is_not_a_time() {
+    let a = fixture();
+    let ids = |r: &serde_json::Value| -> Vec<String> {
+        r["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // 0.0007 weeks is about 7 minutes.
+    assert_eq!(
+        ids(&a.json("sessions.list{ since = '0.0007w' }", &[])),
+        [ID_A]
+    );
+    assert_eq!(
+        ids(&a.json("sessions.list{ since = '1.5w' }", &[])),
+        [ID_A, ID_B]
+    );
+
+    let rejected = |o: Output| {
+        let (_, stderr) = out(&o);
+        assert_eq!(o.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("bad_option"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    };
+    for week in ["-1w", "nanw", "infw", "-infw", "1e300w", "100000000w"] {
+        rejected(a.timon(&format!("sessions.list{{ since = '{week}' }}"), &[]));
+        for opt in ["since", "until"] {
+            rejected(a.timon(
+                &format!("sessions.search{{ query = 'build', [\"{opt}\"] = '{week}' }}"),
+                &[],
+            ));
+            rejected(a.cli(
+                &["sessions", "search", "build", &format!("--{opt}={week}")],
+                &[],
+            ));
+        }
+        rejected(a.cli(&["sessions", "list", &format!("--since={week}")], &[]));
+    }
+    // The same for other units and for a number of seconds: too large is an error, not a panic.
+    for since in ["'99999999999999999999999d'", "'1e300h'", "1e300", "1e18"] {
+        rejected(a.timon(&format!("sessions.list{{ since = {since} }}"), &[]));
+        rejected(a.timon(
+            &format!("sessions.search{{ query = 'build', ['until'] = {since} }}"),
+            &[],
+        ));
+    }
+    let o = a.timon("sleep(1e300)", &[]);
+    let (_, stderr) = out(&o);
+    assert!(stderr.contains("bad_argument: a duration is"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
 #[test]
 fn filters_by_directory_whole_components_only() {
     let a = fixture();
@@ -605,6 +661,37 @@ fn search_modes() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("bad_query"));
 }
 
+/// #132: a phrase is checked as a whole, so a piece of punctuation inside it is skipped as
+/// FTS5 skips it; a phrase with no tokens at all and a tokenless term are still rejected.
+#[test]
+fn a_phrase_may_hold_punctuation_between_its_words() {
+    let a = Archive::new();
+    a.claude(
+        "-work-p",
+        ID_A,
+        &[claude_user("run cargo test -- --nocapture now", "/work/p")],
+        60,
+    );
+    let r = a.json(
+        "sessions.search{ query = 'cargo test -- --nocapture', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(hit_ids(&r), [ID_A], "{r}");
+    let r = a.json(
+        "sessions.search{ query = 'test -- now', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(r["returned"], 0, "the words are not adjacent: {r}");
+    assert_eq!(r["absence_is_proof"], true, "{r}");
+    for code in [
+        "sessions.search{ query = '-- ::', mode = 'phrase' }",
+        "sessions.search{ query = 'cargo --' }",
+    ] {
+        let stderr = out(&a.timon(code, &[])).1;
+        assert!(stderr.contains("bad_query"), "{code}: {stderr}");
+    }
+}
+
 #[test]
 fn the_current_session_and_recent_ones_are_left_out_and_counted() {
     let a = searchable();
@@ -760,6 +847,70 @@ fn an_index_built_in_pieces_counts_what_a_fresh_one_does() {
             assert_eq!(r["coverage"]["refresh"]["appended"], 1, "{r}");
         }
     }
+}
+
+/// #122: text past a record's cap is not indexed, so a search that finds nothing in a
+/// session holding such a record proves nothing, whichever kind of record was cut.
+#[test]
+fn text_cut_from_the_index_is_not_proven_absent() {
+    let a = Archive::new();
+    a.claude(
+        "-work-long",
+        ID_A,
+        &[
+            claude_user(&format!("{} zebracorn", "a".repeat(4100)), "/work/long"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": format!("{} okapicorn", "b".repeat(4100)) },
+                { "type": "tool_use", "id": "t1", "name": "Bash", "input": { "command": "ls" } } ] } }),
+            serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1",
+                  "content": format!("{} narwhalcorn", "c".repeat(700)) } ] } }),
+        ],
+        60,
+    );
+    a.claude(
+        "-work-short",
+        ID_B,
+        &[claude_user("a short note", "/work/short")],
+        60,
+    );
+    for word in ["zebracorn", "okapicorn", "narwhalcorn"] {
+        let r = a.json(
+            &format!("sessions.search{{ query = '{word}', active = true, exclude = false }}"),
+            &[],
+        );
+        assert_eq!(r["returned"], 0, "{word}");
+        assert_eq!(r["absence_is_proof"], false, "{word}: {r}");
+        assert!(r["note"].as_str().unwrap().contains("truncated"), "{r}");
+        assert_eq!(r["coverage"]["truncated"]["sessions"], 1, "{r}");
+        assert_eq!(r["coverage"]["truncated"]["records"], 3, "{r}");
+    }
+    // A scope that leaves out the cut session can still prove absence.
+    let r = a.json(
+        "sessions.search{ query = 'zebracorn', project = 'short', active = true, exclude = false }",
+        &[],
+    );
+    assert_eq!(r["absence_is_proof"], true, "{r}");
+    assert_eq!(r["coverage"]["truncated"]["sessions"], 0, "{r}");
+
+    // An append keeps the count of what was cut before it.
+    let file = a
+        .home()
+        .join(".claude/projects/-work-long")
+        .join(format!("{ID_A}.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(f, "{}", claude_user("one more short line", "/work/long")).unwrap();
+    drop(f);
+    let r = a.json(
+        "sessions.search{ query = 'zebracorn', active = true, exclude = false }",
+        &[],
+    );
+    assert_eq!(r["coverage"]["refresh"]["appended"], 1, "{r}");
+    assert_eq!(r["coverage"]["truncated"]["records"], 3, "{r}");
+    assert_eq!(r["absence_is_proof"], false, "{r}");
 }
 
 // Summaries (#43)

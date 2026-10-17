@@ -32,7 +32,7 @@ pub const DOC: Module = Module {
             Opt::new("backend", "\"claude\" | \"codex\"", "only this backend (default: both)"),
             Opt::new("project", "string", "part of the session's directory"),
             Opt::new("dir", "string", "only sessions that ran in this directory or below it; faster than project"),
-            Opt::new("since", "string | number", "a duration back (\"2d\"), a date, or an RFC 3339 time"),
+            Opt::new("since", "string | number", "a duration back (\"2d\", \"1w\"), a date, or an RFC 3339 time"),
             Opt::new("limit", "integer", "most sessions to return (default 20)"),
             Opt::new("subagents", "boolean", "include sessions another session started"),
             Opt::new("automated", "boolean", "include claude -p, codex exec and timon's own runs"),
@@ -67,7 +67,7 @@ pub const DOC: Module = Module {
             Opt::new("mode", "\"terms\" | \"phrase\" | \"fts\" | \"regex\"", "terms (default): every word; phrase: the words in order; fts: FTS5 syntax; regex"),
             Opt::new("backend", "\"claude\" | \"codex\"", "only this backend (default: both)"),
             Opt::new("project", "string", "part of the session's directory"),
-            Opt::new("since", "string | number", "a duration back (\"7d\"), a date, or an RFC 3339 time"),
+            Opt::new("since", "string | number", "a duration back (\"7d\", \"1w\"), a date, or an RFC 3339 time"),
             Opt::new("until", "string | number", "the same forms as since"),
             Opt::new("limit", "integer", "most sessions (default 20)"),
             Opt::new("per_session", "integer", "most matches shown per session (default 3)"),
@@ -138,10 +138,14 @@ pub(crate) fn since_opt(value: &Value) -> Result<Option<chrono::DateTime<chrono:
         Value::Nil => Ok(None),
         Value::String(s) => sessions::parse_since(&s.to_string_lossy()).map(Some),
         Value::Integer(_) | Value::Number(_) => {
-            let back = crate::modules::concurrency::duration(value)?;
-            let back = chrono::Duration::from_std(back)
-                .map_err(|e| Error::new("bad_option", e.to_string()))?;
-            Ok(Some(chrono::Utc::now() - back))
+            let too_far = || Error::new("bad_option", "that many seconds back is not a time");
+            let back = crate::modules::concurrency::duration(value)
+                .map_err(|e| Error::new("bad_option", e.message))?;
+            let back = chrono::Duration::from_std(back).map_err(|_| too_far())?;
+            chrono::Utc::now()
+                .checked_sub_signed(back)
+                .map(Some)
+                .ok_or_else(too_far)
         }
         other => Err(Error::new(
             "bad_option",

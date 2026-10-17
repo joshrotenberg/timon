@@ -618,10 +618,8 @@ pub(crate) fn duration(value: &Value) -> Result<Duration, Error> {
         Value::String(s) => return parse_duration(&s.to_string_lossy()),
         _ => return Err(bad_duration()),
     };
-    if !seconds.is_finite() || seconds < 0.0 {
-        return Err(bad_duration());
-    }
-    Ok(Duration::from_secs_f64(seconds))
+    // A negative, infinite or too large number is an error, not a panic (#131).
+    Duration::try_from_secs_f64(seconds).map_err(|_| bad_duration())
 }
 
 fn bad_duration() -> Error {
@@ -647,11 +645,7 @@ pub fn parse_duration(text: &str) -> Result<Duration, Error> {
         "d" => 86400.0,
         _ => return Err(bad_duration()),
     };
-    let seconds = n * scale;
-    if !seconds.is_finite() || seconds < 0.0 {
-        return Err(bad_duration());
-    }
-    Ok(Duration::from_secs_f64(seconds))
+    Duration::try_from_secs_f64(n * scale).map_err(|_| bad_duration())
 }
 
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {

@@ -422,15 +422,20 @@ pub fn parse_since(text: &str) -> Result<DateTime<Utc>, Error> {
     if let Ok(date) = chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d") {
         return Ok(date.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc());
     }
-    let back = match t.strip_suffix('w').and_then(|n| n.parse::<f64>().ok()) {
-        Some(weeks) => std::time::Duration::from_secs_f64(weeks * 7.0 * 86400.0),
-        None => crate::modules::concurrency::parse_duration(t).map_err(|_| {
-            Error::new("bad_option", format!("cannot read since \"{text}\"")).with_hint(
-                "use a duration such as 2d or 36h, a date such as 2026-10-15, or an RFC 3339 time",
-            )
-        })?,
+    let bad = || {
+        Error::new("bad_option", format!("cannot read since \"{text}\"")).with_hint(
+            "use a duration such as 2d or 36h, a date such as 2026-10-15, or an RFC 3339 time",
+        )
     };
-    let back =
-        chrono::Duration::from_std(back).map_err(|e| Error::new("bad_option", e.to_string()))?;
-    Ok(Utc::now() - back)
+    // Issue #131: a negative, infinite or huge count is an error rather than a panic.
+    let back = match t.strip_suffix('w').and_then(|n| n.parse::<f64>().ok()) {
+        Some(weeks) => {
+            std::time::Duration::try_from_secs_f64(weeks * 7.0 * 86400.0).map_err(|_| bad())?
+        }
+        None => crate::modules::concurrency::parse_duration(t).map_err(|_| bad())?,
+    };
+    chrono::Duration::from_std(back)
+        .ok()
+        .and_then(|back| Utc::now().checked_sub_signed(back))
+        .ok_or_else(bad)
 }
