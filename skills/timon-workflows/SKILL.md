@@ -55,6 +55,45 @@ local r = flow.verify{
 return #r.kept, r.usage.runs
 ```
 
+`majority` refutes: it keeps an item unless most of the gates reject it, so a tie keeps it, and
+a gate that failed to run counts as no rejection. Kept is not verified. `all` keeps an item
+only when every gate ran and passed; `any` keeps one when at least one gate ran and passed.
+
+```lua
+local yes = function() return true end
+local no = function() return false, "not a bug" end
+local down = function() error("reviewer unavailable", 0) end
+local function kept(keep, checks)
+  return #flow.verify{ items = { "finding" }, keep = keep, checks = checks }.kept
+end
+assert(kept("majority", { yes, no }) == 1)    -- a tie keeps
+assert(kept("majority", { no, down }) == 1)   -- one rejection is not most of two gates
+assert(kept("majority", { down, down }) == 1) -- no gate ran, so none rejected
+assert(kept("all", { yes, down }) == 0)       -- every gate must run and pass
+assert(kept("any", { no, down }) == 0)        -- no gate passed
+assert(kept("any", { no, yes }) == 1)         -- one gate passed
+```
+
+`status = "ok"` says the pattern ran to the end, not that a gate accepted anything. Read
+each item's `passed` and `rejected` counts and its `verdicts` to tell an accepted item from an
+inconclusive one:
+
+```lua
+local down = function() error("reviewer unavailable", 0) end
+local r = flow.verify{ items = { "critical finding" }, checks = { down, down } }
+local item = r.items[1]
+local inconclusive = {}
+for _, v in ipairs(item.verdicts) do
+  if v.status ~= "ok" then inconclusive[#inconclusive + 1] = v.status .. ": " .. v.error.message end
+end
+assert(r.status == "ok" and #r.kept == 1 and item.passed == 0 and item.rejected == 0)
+assert(#inconclusive == 2 and inconclusive[1] == "failed: reviewer unavailable")
+return inconclusive
+```
+
+Use `keep = "all"` when every gate must accept an item; an item no gate could judge is then
+rejected, not kept.
+
 ## Vote
 
 ```lua

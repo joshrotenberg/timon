@@ -75,7 +75,7 @@ pub const DOC: Module = Module {
         Func::new(
             "verify",
             "flow.verify{ items, check | checks, keep, limit } -> { status, kept, rejected, items }",
-            "Checks every item with each gate and keeps or rejects it: majority (default) keeps an item unless most gates reject it, all keeps one every gate passes, any keeps one at least one passes. A gate that did not run neither keeps nor rejects.",
+            "Checks every item with each gate and keeps or rejects it: majority (default) keeps an item unless most gates reject it, all keeps one every gate passes, any keeps one at least one passes. A gate that did not run counts as no rejection under majority, blocks the keep under all, and adds nothing under any.",
             "local findings = { { line = 3, text = \"off by one\" }, { line = 0, text = \"style\" } }\nlocal r = flow.verify{ items = findings, check = function(f) return f.line > 0 end }\nreturn #r.kept, #r.rejected  -- 1, 1",
         )
         .with_options(&[
