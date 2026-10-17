@@ -36,14 +36,15 @@ local function gate(cwd)
   return { passed = true }
 end
 
-local runs = {}  -- the fixer's record for each group, for its worktree
+local runs, texts = {}, {}  -- each group's fixer record (for its worktree) and issue text
 local result = flow.pipeline(groups, {
   { name = "fix", run = function(group, _, i)
-    local texts = {}
-    for _, n in ipairs(group) do texts[#texts + 1] = issue_text(n) end
+    local parts = {}
+    for _, n in ipairs(group) do parts[#parts + 1] = issue_text(n) end
+    texts[i] = table.concat(parts, "\n\n---\n\n")
     local r = agent.run{
       agent = "fixer", worktree = true, label = "fix " .. table.concat(group, ","),
-      prompt = "Fix these issues, one commit each:\n\n" .. table.concat(texts, "\n\n---\n\n"),
+      prompt = "Fix these issues, one commit each:\n\n" .. texts[i],
     }
     runs[i] = r
     return r
@@ -55,10 +56,17 @@ local result = flow.pipeline(groups, {
   end },
   { name = "review", run = function(checked, group, i)
     if not checked.passed then return checked end
+    -- The reviewer reads files but runs nothing, so it gets the change and the issues here.
+    local wt = runs[i].worktree.path
+    local base = git.run({ "merge-base", "HEAD", "main" }, { cwd = wt })
+    local log = git.run({ "log", "--format=%h %s%n%n%b", base .. "..HEAD" }, { cwd = wt })
+    local diff = git.run({ "diff", base .. "..HEAD" }, { cwd = wt })
+    if #diff > 80000 then diff = diff:sub(1, 80000) .. "\n[diff cut at 80,000 characters; read the files for the rest]" end
     return agent.run{
-      agent = "reviewer", cwd = runs[i].worktree.path, label = "review " .. table.concat(group, ","),
-      prompt = "Review the commits on this branch that are not on main (git log main..HEAD, git diff main...HEAD) "
-        .. "against issues " .. table.concat(group, ", ") .. ". Read the issues with gh issue view if you need them.",
+      agent = "reviewer", cwd = wt, label = "review " .. table.concat(group, ","),
+      prompt = "Review this branch's commits against the issues they close. The worktree is the "
+        .. "current directory; read any file you need.\n\n# Issues\n\n" .. texts[i]
+        .. "\n\n# Commits\n\n" .. log .. "\n\n# Diff\n\n```diff\n" .. diff .. "\n```",
     }
   end },
 }, { limit = #groups })
