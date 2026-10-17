@@ -174,6 +174,35 @@ fn the_brief_lists_this_projects_sessions_and_tasks() {
 }
 
 #[test]
+fn the_brief_lists_tasks_with_names_as_long_as_its_lines() {
+    let s = Sandbox::new();
+    s.file(
+        ".timon/tasks.lua",
+        "local function run() end\n\
+         return {\n\
+           [string.rep('a', 99)] = { description = 'just fits', run = run },\n\
+           [string.rep('b', 100)] = { description = 'at the line', run = run },\n\
+           [string.rep('c', 101)] = { description = 'past the line', run = run },\n\
+           [string.rep('d', 101)] = { run = run },\n\
+         }\n",
+    );
+    s.trust();
+    let out = s.hook(start(A));
+    let brief = context(&out);
+    let tasks: Vec<&str> = brief.lines().skip(2).collect();
+    assert_eq!(
+        tasks,
+        [
+            format!("- {}: ...", "a".repeat(99)),
+            format!("- {}: ...", "b".repeat(100)),
+            format!("- {}: ...", "c".repeat(101)),
+            format!("- {}", "d".repeat(101)),
+        ],
+        "{out}"
+    );
+}
+
+#[test]
 fn the_brief_says_nothing_when_there_is_nothing() {
     let s = Sandbox::new();
     std::fs::remove_dir(s.project().join(".timon")).unwrap();
@@ -277,6 +306,41 @@ fn the_guard_keeps_edits_inside_the_allowed_directories() {
     let mut relative = pre("Write", json!({ "file_path": "../outside.txt" }));
     relative["cwd"] = json!(proj);
     assert!(denied(&s.hook(relative)).is_some());
+}
+
+#[test]
+fn the_guard_follows_a_symlink_before_its_parent_segment() {
+    let s = Sandbox::new();
+    s.file(
+        ".timon/init.lua",
+        "return { guard = { writes = { '.' } } }\n",
+    );
+    s.trust();
+    let proj = s.project();
+    let outside = s.home().join("outside");
+    std::fs::create_dir_all(outside.join("a/b")).unwrap();
+    std::os::unix::fs::symlink(outside.join("a/b"), proj.join("link")).unwrap();
+    let write = |path: &str| {
+        let mut input = pre("Write", json!({ "file_path": path }));
+        input["cwd"] = json!(proj);
+        s.hook(input)
+    };
+
+    let direct = outside.join("a/x.txt").display().to_string();
+    assert!(denied(&write(&direct)).is_some());
+    let reason = denied(&write("link/../x.txt"))
+        .expect("link/.. is outside/a, not the project")
+        .to_owned();
+    assert!(reason.contains(&direct), "{reason}");
+    assert!(denied(&write(&proj.join("link/../x.txt").display().to_string())).is_some());
+    assert!(denied(&write("link/new/../../x.txt")).is_some());
+
+    assert_eq!(write("src/new/../x.txt"), Json::Null, "a missing directory");
+    assert_eq!(write("link/../../../proj/x.txt"), Json::Null, "back inside");
+    assert!(
+        denied(&write("src/../../x.txt")).is_some(),
+        "a lexical escape"
+    );
 }
 
 #[test]

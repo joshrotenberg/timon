@@ -373,6 +373,16 @@ fn one_line(text: &str, max: usize) -> String {
     }
 }
 
+/// A task's line in the brief: its name, and as much of its description as fits the line.
+fn task_line(name: &str, description: &str) -> String {
+    if description.trim().is_empty() {
+        format!("- {name}")
+    } else {
+        let room = BRIEF_LINE.saturating_sub(name.chars().count());
+        format!("- {name}: {}", one_line(description, room))
+    }
+}
+
 fn age(modified: &str) -> String {
     let Ok(at) = chrono::DateTime::parse_from_rfc3339(modified) else {
         return "?".into();
@@ -450,15 +460,7 @@ fn brief(
         lines
             .push("Tasks (timon NAME runs one; timon tasks lists them with their options):".into());
         for t in public.iter().take(BRIEF_TASKS) {
-            if t.description.trim().is_empty() {
-                lines.push(format!("- {}", t.name));
-            } else {
-                lines.push(format!(
-                    "- {}: {}",
-                    t.name,
-                    one_line(&t.description, BRIEF_LINE - t.name.len())
-                ));
-            }
+            lines.push(task_line(&t.name, &t.description));
         }
         if public.len() > BRIEF_TASKS {
             lines.push(format!("- and {} more", public.len() - BRIEF_TASKS));
@@ -479,42 +481,55 @@ fn brief(
 
 // --- the guard ---------------------------------------------------------------------------
 
-/// `~/` expanded, joined onto `base` when relative, `.` and `..` resolved, and symlinks
-/// resolved for the part of the path that exists.
+/// `~/` expanded, joined onto `base` when relative, and `.`, `..` and symlinks resolved in
+/// the order the filesystem resolves them: a symlink is followed before the `..` after it.
+/// Past the first component that does not exist, the rest is resolved lexically.
 fn resolve(base: &Path, path: &str) -> PathBuf {
     let path = match path.strip_prefix("~/") {
         Some(rest) => std::env::home_dir().unwrap_or_default().join(rest),
         None => PathBuf::from(path),
     };
+    resolve_in(base, &path, 0)
+}
+
+/// Symlinks followed before a path is taken as it is, as the kernel's own limit does.
+const MAX_LINKS: usize = 40;
+
+fn resolve_in(base: &Path, path: &Path, links: usize) -> PathBuf {
     let joined = if path.is_absolute() {
-        path
+        path.to_path_buf()
     } else {
         base.join(path)
     };
-    let mut clean = PathBuf::new();
+    let mut resolved = PathBuf::new();
+    let mut exists = true;
     for c in joined.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                clean.pop();
+                resolved.pop();
             }
-            other => clean.push(other),
+            Component::Normal(name) if exists => {
+                let next = resolved.join(name);
+                match next.canonicalize() {
+                    Ok(real) => resolved = real,
+                    // A dangling symlink: a write through it lands at its target.
+                    Err(_) => match std::fs::read_link(&next) {
+                        Ok(target) if links < MAX_LINKS => {
+                            resolved = resolve_in(&resolved, &target, links + 1);
+                            exists = resolved.exists();
+                        }
+                        _ => {
+                            resolved = next;
+                            exists = false;
+                        }
+                    },
+                }
+            }
+            other => resolved.push(other),
         }
     }
-    let mut existing = clean.as_path();
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(real) = existing.canonicalize() {
-            return rest.iter().rev().fold(real, |p, part| p.join(part));
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_owned());
-                existing = parent;
-            }
-            _ => return clean,
-        }
-    }
+    resolved
 }
 
 /// The files an `apply_patch` patch adds, updates, deletes or moves to.
@@ -668,9 +683,52 @@ mod tests {
     }
 
     #[test]
+    fn task_lines_fit_names_of_any_length() {
+        assert_eq!(
+            task_line("check", "Run every gate"),
+            "- check: Run every gate"
+        );
+        assert_eq!(
+            task_line(&"x".repeat(101), ""),
+            format!("- {}", "x".repeat(101))
+        );
+        for n in [97, 100, 101, 200] {
+            let name = "x".repeat(n);
+            assert_eq!(task_line(&name, "long name"), format!("- {name}: ..."));
+        }
+        let wide = "é".repeat(60);
+        let line = task_line(&wide, &"ü".repeat(50));
+        assert_eq!(line, format!("- {wide}: {}...", "ü".repeat(37)));
+        assert_eq!(
+            task_line(&"é".repeat(101), "d"),
+            format!("- {}: ...", "é".repeat(101))
+        );
+    }
+
+    #[test]
     fn patches_name_their_files() {
         let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Add File: /etc/b\n+z\n*** Delete File: c\n*** Update File: d\n*** Move to: e\n*** End Patch";
         assert_eq!(patch_paths(patch), ["src/a.rs", "/etc/b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn a_dangling_symlink_resolves_to_where_a_write_would_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(real.join("project")).unwrap();
+        std::fs::create_dir_all(real.join("outside")).unwrap();
+        std::os::unix::fs::symlink(real.join("outside/new.txt"), real.join("project/link"))
+            .unwrap();
+        std::os::unix::fs::symlink("../outside/rel.txt", real.join("project/rel")).unwrap();
+        std::os::unix::fs::symlink("loop", real.join("project/loop")).unwrap();
+        let project = real.join("project");
+        assert_eq!(resolve(&project, "link"), real.join("outside/new.txt"));
+        assert_eq!(resolve(&project, "rel"), real.join("outside/rel.txt"));
+        assert_eq!(
+            resolve(&project, "loop"),
+            project.join("loop"),
+            "a loop stops"
+        );
     }
 
     #[test]
@@ -681,6 +739,33 @@ mod tests {
         assert_eq!(
             resolve(Path::new("/"), &format!("{}/x", dir.path().display())),
             real.join("x")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_followed_before_the_parent_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(real.join("outside/a/b")).unwrap();
+        std::fs::create_dir(real.join("project")).unwrap();
+        std::os::unix::fs::symlink(real.join("outside/a/b"), real.join("project/link")).unwrap();
+        let project = real.join("project");
+        assert_eq!(
+            resolve(&project, "link/../x.txt"),
+            real.join("outside/a/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "link/new/../x.txt"),
+            real.join("outside/a/b/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "missing/dir/../x.txt"),
+            project.join("missing/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "../../x.txt"),
+            real.parent().unwrap().join("x.txt")
         );
     }
 }
