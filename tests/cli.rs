@@ -70,6 +70,33 @@ fn eval_runs_a_file() {
 }
 
 #[test]
+fn eval_file_with_words_says_to_run_the_file_as_a_script() {
+    let (_dir, path) = script("job.lua", "return arg[1]");
+    for words in [&["input.json"][..], &["input.json", "-n", "3"]] {
+        let mut args = vec!["eval", "-f", &path];
+        args.extend_from_slice(words);
+        let output = timon(&args, None);
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+        assert!(stdout(&output).is_empty());
+        assert_eq!(
+            stderr(&output),
+            format!(
+                "timon: usage: eval -f runs a file with no words\n  \
+                 hint: to pass words, run the file as a script: timon {path} {}\n",
+                words.join(" ")
+            )
+        );
+    }
+    let output = timon(&["eval", "return 1", "input.json"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("timon FILE ARGS"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn a_script_gets_its_arguments_and_skips_the_shebang() {
     let (_dir, path) = script(
         "args.lua",

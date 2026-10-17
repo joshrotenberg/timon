@@ -17,8 +17,8 @@ Read files with `fs.read` in Lua instead of piping them in, and skip `$?`: a fai
 ```sh
 timon eval '1 + 1'                 # 2: an expression returns its value
 timon eval '{ a = 1, b = { 2 } }'  # tables print as JSON: {"a":1,"b":[2]}
-timon eval -f job.lua              # run a Lua file; read data with fs.read
-timon job.lua 12 14                # a script; arguments in `arg` and `...`
+timon eval -f job.lua              # run a Lua file with no words; read data with fs.read
+timon job.lua 12 14                # a script; words in `arg` and `...`; eval -f takes none
 timon tasks                        # the tasks in reach: tasks.lua and scripts/
 timon check                        # run a task, after its dependencies
 timon serve                        # the tasks as MCP tools over stdio, for hosts without a shell
