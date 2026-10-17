@@ -58,6 +58,33 @@ impl Sandbox {
         std::fs::read_dir(self.logs()).unwrap().count()
     }
 
+    /// Makes the working directory a git repository with one empty commit.
+    fn git_init(&self) {
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "start",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(self.work())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
     /// The newest script run.
     fn last_script(&self) -> serde_json::Value {
         let list = self.json(&["runs", "--scripts", "--json"]);
@@ -158,29 +185,7 @@ fn a_concurrent_fan_out_resumes_whatever_order_it_finishes_in() {
 #[test]
 fn writes_are_reused_only_when_idempotent_or_in_an_unchanged_worktree() {
     let s = Sandbox::new();
-    for args in [
-        &["init", "-q", "-b", "main"][..],
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@e",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "start",
-        ],
-    ] {
-        assert!(
-            Command::new("git")
-                .args(args)
-                .current_dir(s.work())
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
+    s.git_init();
     let path = s.script(
         "writes.lua",
         "agent.run{ prompt = 'edit here', access = 'write' }
@@ -213,6 +218,125 @@ fn writes_are_reused_only_when_idempotent_or_in_an_unchanged_worktree() {
         6,
         "a worktree changed since the run is not reused"
     );
+}
+
+#[test]
+fn a_worktree_fingerprint_reads_untracked_files_git_quotes() {
+    let mut names = vec!["note.txt", "with space.txt", "caf\u{e9}.txt"];
+    if cfg!(unix) {
+        names.push("quote\"back\\slash\nnewline.txt");
+    }
+    for name in names {
+        let s = Sandbox::new();
+        s.git_init();
+        let path = s.script(
+            "apart.lua",
+            "return agent.run{ prompt = 'synthetic write', access = 'write', worktree = true }.worktree.path",
+        );
+        let path = path.to_str().unwrap();
+        let touch = [("FAKE_TOUCH", name)];
+        let o = s.timon(&[path], &touch);
+        assert!(o.status.success(), "{name:?}: {}", err(&o));
+        let worktree = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
+        let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+
+        let o = s.timon(&["--resume", &id, path], &touch);
+        assert!(o.status.success(), "{name:?}: {}", err(&o));
+        assert_eq!(s.calls(), 1, "{name:?}: an unchanged worktree is reused");
+
+        std::fs::write(worktree.join(name), "changed since\n").unwrap();
+        let o = s.timon(&["--resume", &id, path], &touch);
+        assert!(o.status.success(), "{name:?}: {}", err(&o));
+        assert_eq!(
+            s.calls(),
+            2,
+            "{name:?}: a changed untracked file is not reused"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_worktree_with_content_the_fingerprint_cannot_read_is_not_reused() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Sandbox::new();
+    s.git_init();
+    // Each new worktree gets a nested repository, which git lists as one untracked directory.
+    let hook = s.work().join(".git/hooks/post-checkout");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ngit init -q sub && echo one > sub/f\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = s.script(
+        "apart.lua",
+        "return agent.run{ prompt = 'synthetic write', access = 'write', worktree = true }.worktree.path",
+    );
+    let path = path.to_str().unwrap();
+    let touch = [("FAKE_TOUCH", "note.txt")];
+    let o = s.timon(&[path], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    let worktree = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
+    assert!(
+        worktree.join("sub/f").exists(),
+        "the hook made no nested repository"
+    );
+    let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+
+    std::fs::write(worktree.join("sub/f"), "two\n").unwrap();
+    let o = s.timon(&["--resume", &id, path], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(
+        s.calls(),
+        2,
+        "content the fingerprint cannot read is not reused"
+    );
+}
+
+#[test]
+fn a_resume_that_changes_where_a_run_writes_runs_it_again() {
+    let script = "return agent.run{ prompt = 'edit', access = 'write',
+                    idempotent = arg[2] == 'idempotent', worktree = arg[1] == 'isolated' }";
+    let touch = [("FAKE_TOUCH", "note.txt")];
+
+    // From a kept worktree to the working directory.
+    let s = Sandbox::new();
+    s.git_init();
+    let path = s.script("where.lua", script);
+    let path = path.to_str().unwrap();
+    let o = s.timon(&[path, "isolated"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+    let o = s.timon(&["--resume", &id, path, "direct"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(
+        s.calls(),
+        2,
+        "a run in a worktree is not reused for a direct one"
+    );
+    assert!(
+        s.work().join("note.txt").exists(),
+        "the direct write was not made"
+    );
+
+    // From the working directory to a worktree.
+    let s = Sandbox::new();
+    s.git_init();
+    let path = s.script("where.lua", script);
+    let path = path.to_str().unwrap();
+    let o = s.timon(&[path, "direct", "idempotent"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+    let o = s.timon(&["--resume", &id, path, "isolated", "idempotent"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(
+        s.calls(),
+        2,
+        "a direct run is not reused for one in a worktree"
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["worktree"]["kept"], true, "{r}");
 }
 
 #[test]
