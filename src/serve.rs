@@ -245,6 +245,8 @@ pub(crate) fn protocol_stdout() -> Result<tokio::io::Stdout, Error> {
 
 /// Serves the tasks in reach of `layers` over stdio until the client closes the stream.
 pub async fn serve(layers: Layers, builtins: Vec<String>) -> Result<(), Failure> {
+    // Before any Lua runs, so what a task file prints at load cannot reach the client.
+    let writer = protocol_stdout()?;
     let (tx, mut rx) = mpsc::channel::<Job>(64);
     let catalog = {
         let rt = runtime(&layers)?;
@@ -320,7 +322,6 @@ pub async fn serve(layers: Layers, builtins: Vec<String>) -> Result<(), Failure>
         })
     };
     drop(tx);
-    let writer = protocol_stdout()?;
     let served = StdioTransport::new(router)
         .run_with_streams(tokio::io::stdin(), writer)
         .await;

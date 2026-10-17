@@ -244,3 +244,53 @@ async fn the_skills_are_resources() {
     );
     let _ = Path::new("");
 }
+
+const NOISY: &str = r#"print("loading")
+io.stdout:write("flushed\n")
+io.stdout:flush()
+return {
+  hello = function()
+    print("calling")
+    io.stdout:write("flushed in a call\n")
+    io.stdout:flush()
+    return "ok"
+  end,
+}
+"#;
+
+#[test]
+fn what_task_files_print_at_startup_goes_to_stderr() {
+    let s = Sandbox::new(NOISY);
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_timon"))
+        .arg("serve")
+        .current_dir(s.project())
+        .env("TIMON_HOME", s.dir.path().join("timon"))
+        .env("HOME", s.dir.path().join("home"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("loading\n"), "{stderr}");
+    assert!(stderr.contains("flushed\n"), "{stderr}");
+}
+
+#[tokio::test]
+async fn what_tasks_print_during_a_call_stays_off_the_protocol() {
+    let s = Sandbox::new(NOISY);
+    let client = s.connect().await;
+    let r = client
+        .call_tool("hello", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", r.all_text());
+    assert_eq!(r.all_text(), "ok");
+    let r = client
+        .call_tool("hello", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        r.structured_content,
+        Some(serde_json::json!({ "value": "ok" }))
+    );
+}
