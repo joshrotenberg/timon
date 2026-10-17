@@ -489,8 +489,15 @@ fn resolve(base: &Path, path: &str) -> PathBuf {
         Some(rest) => std::env::home_dir().unwrap_or_default().join(rest),
         None => PathBuf::from(path),
     };
+    resolve_in(base, &path, 0)
+}
+
+/// Symlinks followed before a path is taken as it is, as the kernel's own limit does.
+const MAX_LINKS: usize = 40;
+
+fn resolve_in(base: &Path, path: &Path, links: usize) -> PathBuf {
     let joined = if path.is_absolute() {
-        path
+        path.to_path_buf()
     } else {
         base.join(path)
     };
@@ -506,10 +513,17 @@ fn resolve(base: &Path, path: &str) -> PathBuf {
                 let next = resolved.join(name);
                 match next.canonicalize() {
                     Ok(real) => resolved = real,
-                    Err(_) => {
-                        resolved = next;
-                        exists = false;
-                    }
+                    // A dangling symlink: a write through it lands at its target.
+                    Err(_) => match std::fs::read_link(&next) {
+                        Ok(target) if links < MAX_LINKS => {
+                            resolved = resolve_in(&resolved, &target, links + 1);
+                            exists = resolved.exists();
+                        }
+                        _ => {
+                            resolved = next;
+                            exists = false;
+                        }
+                    },
                 }
             }
             other => resolved.push(other),
@@ -695,6 +709,26 @@ mod tests {
     fn patches_name_their_files() {
         let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Add File: /etc/b\n+z\n*** Delete File: c\n*** Update File: d\n*** Move to: e\n*** End Patch";
         assert_eq!(patch_paths(patch), ["src/a.rs", "/etc/b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn a_dangling_symlink_resolves_to_where_a_write_would_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(real.join("project")).unwrap();
+        std::fs::create_dir_all(real.join("outside")).unwrap();
+        std::os::unix::fs::symlink(real.join("outside/new.txt"), real.join("project/link"))
+            .unwrap();
+        std::os::unix::fs::symlink("../outside/rel.txt", real.join("project/rel")).unwrap();
+        std::os::unix::fs::symlink("loop", real.join("project/loop")).unwrap();
+        let project = real.join("project");
+        assert_eq!(resolve(&project, "link"), real.join("outside/new.txt"));
+        assert_eq!(resolve(&project, "rel"), real.join("outside/rel.txt"));
+        assert_eq!(
+            resolve(&project, "loop"),
+            project.join("loop"),
+            "a loop stops"
+        );
     }
 
     #[test]
