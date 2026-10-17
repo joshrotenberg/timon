@@ -90,6 +90,13 @@ the decisions it shaped and what is still open are in [prior-art.md](prior-art.m
 12. **Discovery does not perform the task.** Listing, help, completion and `--dry-run` run no
     programs, start no agents and spend nothing. Loading a tasks file executes Lua, so this is
     enforced while it loads, not left to convention.
+13. **Enable, don't prescribe.** timon ships primitives, not outcomes. One person calls a few
+    built-in functions and keeps no tasks; another keeps a library of tasks and agents split by
+    model and effort. Both are served by the same tools. A setup that watches a repository's
+    issues, fixes them, reviews the fixes and ships them is a side effect of composing those
+    tools, not a mode or a feature. A proposal that serves one particular outcome belongs in a
+    project's `.timon/` or an example; core takes the primitive under it (a record, a budget, a
+    worktree, a function wherever a choice is made).
 
 ## Shape
 
