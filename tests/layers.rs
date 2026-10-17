@@ -111,6 +111,83 @@ fn a_project_layer_needs_trust_and_then_shadows_the_user_layer() {
     s.assert_state_inside();
 }
 
+#[cfg(unix)]
+#[test]
+fn a_state_directory_without_write_permission_fails_with_a_hint_and_trusts_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Sandbox::new();
+    s.write(s.user().join("scripts/greet.lua"), "return 'hello'");
+    s.write(s.project().join(".timon/scripts/which.lua"), "return 'p'");
+    let home = s.root().join("timon");
+    let state = home.join("state");
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let _restore = Writable(home.clone());
+    if std::fs::create_dir(&state).is_ok() {
+        eprintln!("skipped: running as root, so permissions are not enforced");
+        return;
+    }
+
+    let o = s.timon(&s.project(), &["trust"]);
+    let hint = format!(
+        "timon keeps the trust store, run records, script runs and worktrees in {}; a sandboxed host must allow writes there",
+        state.display()
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(err(&o).contains("timon: io: cannot write"), "{}", err(&o));
+    assert!(err(&o).contains(&hint), "{}", err(&o));
+    assert!(
+        err(&o).contains("TIMON_HOME or XDG_STATE_HOME"),
+        "{}",
+        err(&o)
+    );
+    assert!(!state.join("trusted").exists());
+    let o = s.timon(&s.project(), &["run", "which"]);
+    assert!(err(&o).contains("timon: untrusted:"), "{}", err(&o));
+
+    let o = s.timon(s.root(), &["run", "greet"]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(err(&o).contains("timon: io: cannot create"), "{}", err(&o));
+    assert!(err(&o).contains(&hint), "{}", err(&o));
+}
+
+/// Makes a directory writable again when dropped, so a failed assertion leaves nothing behind
+/// that the temporary directory's cleanup cannot remove.
+struct Writable(PathBuf);
+
+impl Drop for Writable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[test]
+fn a_cache_directory_without_write_permission_fails_with_its_own_hint() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Sandbox::new();
+    let home = s.root().join("timon");
+    std::fs::create_dir_all(home.join("state")).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let _restore = Writable(home.clone());
+    if std::fs::create_dir(home.join("cache")).is_ok() {
+        eprintln!("skipped: running as root, so permissions are not enforced");
+        return;
+    }
+    let o = s.timon(s.root(), &["sessions", "index"]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(err(&o).contains("timon: io:"), "{}", err(&o));
+    assert!(
+        err(&o).contains(&home.join("cache").display().to_string()),
+        "{}",
+        err(&o)
+    );
+    assert!(
+        err(&o).contains("TIMON_HOME or XDG_CACHE_HOME"),
+        "{}",
+        err(&o)
+    );
+}
+
 #[test]
 fn lib_directories_are_on_the_module_path() {
     let s = Sandbox::new();

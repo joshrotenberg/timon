@@ -83,6 +83,54 @@ impl Dirs {
     }
 }
 
+/// One of the directories timon writes to, for the hint on a write it is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Root {
+    /// [`Dirs::state`].
+    State,
+    /// [`Dirs::cache`].
+    Cache,
+}
+
+impl Root {
+    fn holds(self) -> &'static str {
+        match self {
+            Root::State => "the trust store, run records, script runs and worktrees",
+            Root::Cache => "the session index and summaries",
+        }
+    }
+
+    fn variable(self) -> &'static str {
+        match self {
+            Root::State => "XDG_STATE_HOME",
+            Root::Cache => "XDG_CACHE_HOME",
+        }
+    }
+}
+
+/// An `io` error for a failed `action` (`write`, `create`) on `path` under `root`, the
+/// directory `dir`, with [`write_hint`].
+pub fn write_error(root: Root, dir: &Path, action: &str, path: &Path, e: std::io::Error) -> Error {
+    Error::new("io", format!("cannot {action} {}: {e}", path.display()))
+        .with_hint_opt(write_hint(root, dir, &e))
+}
+
+/// For a denied write under `root` (EACCES, EPERM, or EROFS from a read-only mount), the
+/// directory `dir`: what timon keeps there and how a sandboxed host can allow it.
+pub fn write_hint(root: Root, dir: &Path, e: &std::io::Error) -> Option<String> {
+    use std::io::ErrorKind::{PermissionDenied, ReadOnlyFilesystem};
+    matches!(e.kind(), PermissionDenied | ReadOnlyFilesystem).then(|| {
+        format!(
+            "timon keeps {} in {}; a sandboxed host must allow writes there (for Codex, \
+             sandbox_workspace_write.writable_roots), or set TIMON_HOME or {} to a writable \
+             directory",
+            root.holds(),
+            dir.display(),
+            root.variable(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +161,35 @@ mod tests {
             (dirs.config, dirs.state, dirs.cache),
             ("/t/config".into(), "/t/state".into(), "/t/cache".into())
         );
+    }
+
+    #[test]
+    fn only_a_permission_error_names_the_directory_and_how_to_allow_it() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let err = write_error(
+            Root::State,
+            Path::new("/s"),
+            "write",
+            Path::new("/s/trusted"),
+            denied,
+        );
+        assert_eq!(err.kind, "io");
+        assert!(err.message.starts_with("cannot write /s/trusted: "));
+        let hint = err.hint.unwrap();
+        assert!(
+            hint.contains("trust store") && hint.contains("in /s;"),
+            "{hint}"
+        );
+        assert!(hint.contains("TIMON_HOME or XDG_STATE_HOME"), "{hint}");
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let err = write_error(
+            Root::Cache,
+            Path::new("/c"),
+            "create",
+            Path::new("/c"),
+            missing,
+        );
+        assert_eq!(err.hint, None);
     }
 
     #[test]

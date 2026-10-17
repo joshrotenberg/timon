@@ -52,6 +52,20 @@ before edits and shell commands, a guard that does nothing until a project confi
 [the tasks skill](skills/timon-tasks/SKILL.md#as-hooks)). Codex asks you to review the hooks
 first.
 
+In a sandbox that allows writes only to the project, such as Codex's `workspace-write`, timon
+needs write access to its state directory (`~/.local/state/timon`: the trust store, run records,
+script runs and worktrees) and its cache (`~/.cache/timon`: the session index and summaries).
+Add them to Codex's writable roots in `~/.codex/config.toml`, with absolute paths:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/home/me/.local/state/timon", "/home/me/.cache/timon"]
+```
+
+Or point `TIMON_HOME` (or `XDG_STATE_HOME` and `XDG_CACHE_HOME`) at a writable directory. `gh`
+calls there need `GH_TOKEN`, since `gh auth token` may not reach its stored credentials. See
+[Sandboxed hosts](docs/design.md#sandboxed-hosts).
+
 ## Use
 
 ```sh

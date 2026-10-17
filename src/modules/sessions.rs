@@ -258,7 +258,10 @@ async fn summarize(lua: Lua, id: String, opts: Option<Table>) -> mlua::Result<Va
         chunks.len(),
         picked.len(),
     )
-    .map_err(|err| Error::new("io", format!("cannot cache the summary: {err}")))?;
+    .map_err(|err| {
+        let hint = crate::dirs::write_hint(crate::dirs::Root::Cache, &paths.home, &err);
+        Error::new("io", format!("cannot cache the summary: {err}")).with_hint_opt(hint)
+    })?;
     json_module::decode(&lua, &result(&stored, false))
 }
 

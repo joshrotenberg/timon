@@ -774,6 +774,21 @@ return {
   is trusted. Code a person runs directly (`timon eval`, `timon ./file.lua`) needs no trust:
   running it is the person's own act.
 
+### Sandboxed hosts
+
+timon resolves its directories as in Storage: config `$XDG_CONFIG_HOME/timon`, state
+`$XDG_STATE_HOME/timon`, cache `$XDG_CACHE_HOME/timon`, or `config`, `state` and `cache` under
+`TIMON_HOME`. It only reads config. It writes state (the trust store, run records, script runs,
+worktrees) and cache (the session index, summaries), so a host sandbox that allows writes only
+to the project must allow those two. For Codex's `workspace-write`, add their absolute paths to
+`sandbox_workspace_write.writable_roots` in `~/.codex/config.toml`; otherwise set `TIMON_HOME`
+or the XDG variables to a writable directory.
+
+A write timon is denied (EACCES or EPERM) raises `io` with a hint naming the directory, what
+timon keeps there and both remedies. Nothing falls back silently: no state moves elsewhere and
+no trust is granted when a write fails. In the same sandbox `gh auth token` may not reach
+its stored credentials, so `gh` raises `not_authenticated`; `GH_TOKEN` works there.
+
 ## Storage
 
 Definitions are files a person edits. Records timon writes once and reads back whole (runs,

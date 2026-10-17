@@ -13,7 +13,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::dirs::{Dirs, PROJECT_DIR};
+use crate::dirs::{Dirs, PROJECT_DIR, Root, write_error};
 use crate::error::Error;
 
 /// Which layer a definition came from.
@@ -256,7 +256,7 @@ pub fn set_trust(dirs: &Dirs, root: &Path, revoke: bool) -> Result<PathBuf, Erro
         roots.push(root.clone());
     }
     let file = dirs.trust_file();
-    let io = |e: std::io::Error| Error::new("io", format!("cannot write {}: {e}", file.display()));
+    let io = |e| write_error(Root::State, &dirs.state, "write", &file, e);
     create_private_dir(&dirs.state).map_err(io)?;
     let mut out = String::new();
     for r in &roots {

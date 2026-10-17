@@ -121,8 +121,12 @@ async fn token(lua: &Lua) -> Result<String, Error> {
         }
     }
     let Some(token) = found else {
-        return Err(Error::new("not_authenticated", "no GitHub token")
-            .with_hint("set GH_TOKEN or GITHUB_TOKEN, or log in with gh auth login"));
+        return Err(
+            Error::new("not_authenticated", "no GitHub token").with_hint(
+                "set GH_TOKEN or GITHUB_TOKEN, or log in with gh auth login; inside a sandbox gh \
+                 auth token may not reach its credentials, and GH_TOKEN works there",
+            ),
+        );
     };
     lua.set_app_data(Rc::new(Token(token.clone())));
     Ok(token)
