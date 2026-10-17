@@ -801,8 +801,8 @@ fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
     Ok(())
 }
 
-/// Runs steps: each level in order, the steps of a level at most `jobs` at a time, each with
-/// its dependencies' results. Returns the last step's values.
+/// Runs steps, each with its dependencies' results: in plan order with one job, else each
+/// level in order, the steps of a level at most `jobs` at a time. Returns the last step's values.
 const TASK_DRIVER: &str = r#"
 local started, finished, failed, xrun, jobs = ...
 local pack, unpack, rawset, ipairs, error = table.pack, table.unpack, rawset, ipairs, error
@@ -840,6 +840,10 @@ local function run_step(step)
 end
 return function(steps)
   local levels, out = {}, pack()
+  if jobs <= 1 then
+    for _, step in ipairs(steps) do out = run_step(step) end
+    return unpack(out, 1, out.n)
+  end
   for _, step in ipairs(steps) do
     local level = levels[step.level]
     if not level then
@@ -850,7 +854,7 @@ return function(steps)
   end
   for i = 1, #levels do
     local level = levels[i]
-    if jobs > 1 and #level > 1 then
+    if #level > 1 then
       par.map(level, run_step, { limit = jobs })
     else
       for _, step in ipairs(level) do out = run_step(step) end

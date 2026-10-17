@@ -179,6 +179,49 @@ fn dependencies_run_once_each_depth_first_and_pass_their_results() {
 }
 
 #[test]
+fn one_job_runs_the_plan_in_declared_order_not_level_by_level() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "local order = {}
+         local function step(name)
+           return function() order[#order + 1] = name end
+         end
+         return {
+           d = step('d'),
+           b = { depends = { 'd' }, run = step('b') },
+           c = step('c'),
+           a = { depends = { 'b', 'c' }, run = function() return table.concat(order, ',') end },
+           broken = { depends = { 'd' }, run = function() error('broken') end },
+           later = function() io.open('later-ran', 'w'):close() end,
+           stops = { depends = { 'broken', 'later' }, run = 'true' },
+         }",
+    );
+    s.trust();
+    let planned: Vec<String> = s.json(&["--dry-run", "a"])["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(planned, ["d", "b", "c", "a"]);
+    assert_eq!(s.ok(&["a"]), "d,b,c\n", "the order the dry run shows");
+
+    let o = s.timon(&["stops"]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(
+        !s.project().join("later-ran").exists(),
+        "a later sibling does not run after an earlier one fails"
+    );
+    let names: Vec<String> = s.last_run()["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["d", "broken"]);
+}
+
+#[test]
 fn the_first_failure_stops_the_plan_with_its_exit_code() {
     let s = Sandbox::new();
     s.project_tasks(
