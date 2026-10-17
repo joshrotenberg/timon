@@ -292,6 +292,16 @@ fn timon_commands_win_and_timon_task_reaches_a_task_they_hide() {
     let o = s.timon(&["rnus"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("did you mean \"runs\"?"), "{}", err(&o));
+
+    s.project_tasks("return { runs = { confirm = 'Sure?', run = function() return 'mine' end } }");
+    let o = s.timon(&["task", "runs"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("answer it with timon --yes task runs"),
+        "{}",
+        err(&o)
+    );
+    assert_eq!(s.ok(&["--yes", "task", "runs"]), "mine\n");
 }
 
 #[test]

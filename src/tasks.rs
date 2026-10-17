@@ -773,7 +773,7 @@ fn field_error(path: &Path, task: &str, at: &str, problem: Problem) -> Error {
 }
 
 /// Asks each `confirm` question of the plan on stderr, unless `yes`.
-fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
+fn confirm(catalog: &Catalog, plan: &[&Task], yes: bool) -> Result<(), Error> {
     for task in plan {
         let Some(question) = &task.confirm else {
             continue;
@@ -782,14 +782,17 @@ fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
             continue;
         }
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+            let target = plan.last().map_or("", |t| t.name.as_str());
+            let word = if plan.last().is_some_and(|t| catalog.hidden_by_builtin(t)) {
+                "task "
+            } else {
+                ""
+            };
             return Err(Error::new(
                 "confirm",
                 format!("task \"{}\" asks: {question}", task.name),
             )
-            .with_hint(format!(
-                "answer it with timon --yes {}",
-                plan.last().map_or("", |t| t.name.as_str())
-            )));
+            .with_hint(format!("answer it with timon --yes {word}{target}")));
         }
         eprint!("{question} [y/N] ");
         let _ = std::io::stderr().flush();
@@ -1225,7 +1228,7 @@ pub async fn run_given(
         .into());
     }
     let tasks: Vec<&Task> = planned.iter().map(|(t, _)| *t).collect();
-    confirm(&tasks, how.yes)?;
+    confirm(&catalog, &tasks, how.yes)?;
     let built = steps(lua, &catalog, &planned, &task.name, &given, how.jobs)?;
     let file = task.source.path();
     let source = std::fs::read_to_string(file).map_err(|e| bad(file, e))?;
