@@ -46,10 +46,23 @@ Phase 4 runs each host with only timon added:
 - Claude Code runs with `--plugin-dir plugin`, `--setting-sources project` and an empty
   `--mcp-config`, and Bash allows only `timon` commands.
 - Codex has no plugin directory flag. Its skills go in the test repository's `.agents/skills`,
-  which Codex reads, and `timon` goes on `PATH`.
+  which Codex reads, and `timon` goes on `PATH`. Phase 4 installs no Codex plugin.
 
-So the Codex marketplace install itself is not exercised, because it would change the real
-`~/.codex`.
+Phase 10 installs the plugin into each host:
+- Claude Code loads it with `--plugin-dir plugin`, as in phase 4.
+- Codex gets a temporary `CODEX_HOME`, and `codex plugin marketplace add` with this checkout
+  then `codex plugin add timon@timon` install the plugin there, never into the real `~/.codex`.
+  The temporary home's `auth.json` is a link to the real login, and `codex exec` runs with
+  `--dangerously-bypass-hook-trust`. So phase 10 proves that the local marketplace install
+  works and that its hooks run, but not a login from scratch, nor the `/hooks` review a
+  person gives once on a first install.
+
+## Compatibility
+
+Phase 0 prints each CLI's version against the range its wrapper was tested on
+(`claude-wrapper`'s and `codex-wrapper`'s `TESTED_CLI_VERSION_MIN` and `_MAX`). That range is
+the wrapper's claim, and a passing timon run does not widen it: a result below is what timon's
+suite observed on one machine with those versions, not upstream support.
 
 ## Recorded output
 
@@ -77,3 +90,4 @@ records the exact arguments timon passes and the raw output, under `target/tmp/l
 | 2026-10-16 | 4 | 2.1.301 | | Claude 2 of 4 on the first run, after the skills had changed for tasks. Found: agents wrapped timon in shell syntax a `timon`-only host denies (`timon eval -f /dev/stdin <<'EOF' 2>/dev/null`, `timon count-lines; echo "exit=$?"`). The `timon` skill's own one-liners piped into timon, and the rule against it was only in that skill. Fixed: the rule, with what to do instead, now opens every skill, and the pipe examples are marked as for a person's shell. Then 4 of 4: sessions $0.0046, reference $0.0037, reshape $0.0028, script $0.0034 |
 | 2026-10-16 | 10 | 2.1.302 | 0.162.0 | Claude passed on the first run ($0.0023): the model named both tasks from the brief and the guard refused its Write. Codex ran no plugin hooks at first: it reads the root `plugin.json` before `.codex-plugin/plugin.json` and then lists no plugin hooks, with or without a `hooks` entry. Fixed: Codex's manifest moved to `.codex-plugin/plugin.json`. Then both pass; Codex used 33k input tokens (28k cached) and 199 output, and set `PLUGIN_ROOT` and `CLAUDE_PLUGIN_ROOT` for the hook |
 | 2026-10-16 | 0 to 10, the whole suite | 2.1.302 | 0.162.0 | 34 of 34 pass in 651 s on main at ae3a7f1 (hooks v1). $0.24 of Claude usage: the namer $0.15 and the reviewer $0.05 (both sonnet), every other test under $0.01; Codex reports none. No regressions since the per-phase runs |
+| 2026-10-16 | 0 to 10, the whole suite | 2.1.302 | 0.163.0 (`NewerUntested`: codex-wrapper 0.4.4 tested 0.145.0 to 0.147.0) | 33 of 34 pass in 563 s at 460b589, on Darwin arm64; the run exited 101. Failed: `live_5_claude_runs_tasks_through_the_plugin`, where the agent ran the default `users` audience when `developers` was asked for. Both phase 10 tests and the phase 9 task and confirmation test passed. Run once, not repeated until green, so no failure rate is claimed. Codex cost is unknown, not $0 (#84) |
