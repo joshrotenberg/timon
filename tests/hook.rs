@@ -65,12 +65,8 @@ impl Sandbox {
             cmd.env_remove(var);
         }
         let mut child = cmd.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // A child that exits without reading stdin (no timon installed) closes the pipe first.
+        let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
         child.wait_with_output().unwrap()
     }
 
@@ -577,12 +573,8 @@ impl Sandbox {
             cmd.env("TIMON_BIN", bin);
         }
         let mut child = cmd.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // A child that exits without reading stdin (no timon installed) closes the pipe first.
+        let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
         child.wait_with_output().unwrap()
     }
 }
