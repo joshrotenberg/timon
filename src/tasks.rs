@@ -32,6 +32,7 @@ use mlua::{Lua, MultiValue, Table, Value};
 
 use mlua::Function;
 use serde_json::{Map, Value as Json};
+use tokio::sync::Notify;
 
 use crate::docs::{Func, Module, Opt};
 use crate::error::{Error, Failure};
@@ -803,11 +804,19 @@ fn confirm(plan: &[&Task], yes: bool) -> Result<(), Error> {
 
 /// Runs steps, each with its dependencies' results: in plan order with one job, else each
 /// level in order, the steps of a level at most `jobs` at a time. Returns the last step's values.
+/// A dependency that a nested `task.run` has run, or is running, by the time its step starts is
+/// not run again.
 const TASK_DRIVER: &str = r#"
-local started, finished, failed, xrun, jobs = ...
+local started, finished, failed, xrun, jobs, settled = ...
 local pack, unpack, rawset, ipairs, error = table.pack, table.unpack, rawset, ipairs, error
-local results = {}
+local results, done, running, errors = {}, {}, {}, {}
 local function run_step(step)
+  if not step.target and running[step.name] then
+    while running[step.name] do settled() end
+    if not done[step.name] then error(errors[step.name], 0) end
+  end
+  if not step.target and done[step.name] then return pack(results[step.name]) end
+  running[step.name] = true
   started(step.name)
   local deps = {}
   for _, d in ipairs(step.depends) do deps[d] = results[d] end
@@ -830,11 +839,14 @@ local function run_step(step)
     return body()
   end
   local r = pack(xrun(bounded))
+  running[step.name] = nil
   if not r[1] then
+    errors[step.name] = r[2]
     failed(step.name, r[2])
     error(r[2], 0)
   end
   results[step.name] = r[2]
+  done[step.name] = true
   finished(step.name)
   return pack(unpack(r, 2, r.n))
 end
@@ -966,6 +978,8 @@ fn steps(
         step.raw_set("depends", task.depends.clone())
             .map_err(lua_err)?;
         step.raw_set("level", *level).map_err(lua_err)?;
+        step.raw_set("target", task.name == target)
+            .map_err(lua_err)?;
         let opts = step_opts(task, target, given)?;
         step.raw_set(
             "opts",
@@ -1007,6 +1021,8 @@ struct Invocation {
     record: Option<Rc<ScriptRun>>,
     running: RefCell<HashMap<String, Instant>>,
     done: RefCell<HashSet<String>>,
+    /// Notified whenever a step finishes or fails.
+    settled: Notify,
     announce: bool,
     jobs: usize,
     run_steps: RefCell<Option<Function>>,
@@ -1238,6 +1254,7 @@ pub async fn run_given(
         record: record.clone(),
         running: RefCell::default(),
         done: RefCell::default(),
+        settled: Notify::new(),
         announce: planned.len() > 1 && matches!(progress, Progress::Text),
         jobs: how.jobs,
         run_steps: RefCell::new(None),
@@ -1258,6 +1275,7 @@ pub async fn run_given(
         lua.create_function(move |_, name: String| {
             inv.settle(&name, "ok");
             inv.done.borrow_mut().insert(name);
+            inv.settled.notify_waiters();
             Ok(())
         })
         .map_err(lua_err)?
@@ -1275,7 +1293,19 @@ pub async fn run_given(
                 "failed"
             };
             inv.settle(&name, status);
+            inv.settled.notify_waiters();
             Ok(())
+        })
+        .map_err(lua_err)?
+    };
+    let settled = {
+        let inv = invocation.clone();
+        lua.create_async_function(move |_, ()| {
+            let inv = inv.clone();
+            async move {
+                inv.settled.notified().await;
+                Ok(())
+            }
         })
         .map_err(lua_err)?
     };
@@ -1285,7 +1315,7 @@ pub async fn run_given(
     let run_steps: Function = lua
         .load(TASK_DRIVER)
         .set_name(INTERNAL_CHUNK)
-        .call((started, finished, failed, xrun, how.jobs))
+        .call((started, finished, failed, xrun, how.jobs, settled))
         .map_err(lua_err)?;
     *invocation.run_steps.borrow_mut() = Some(run_steps.clone());
     lua.set_app_data(invocation.clone());

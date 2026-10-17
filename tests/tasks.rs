@@ -767,6 +767,44 @@ fn task_run_calls_a_task_with_its_options_inside_the_same_run() {
 }
 
 #[test]
+fn a_dependency_task_run_has_already_run_does_not_run_again() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "local n = 0
+         return {
+           prep = function() sleep('200ms'); n = n + 1; return 'prepared' end,
+           extra = { depends = { 'prep' }, run = function() end },
+           other = { depends = { 'prep' }, run = function() end },
+           first = function() task.run('extra') end,
+           all = { depends = { 'first', 'prep' }, run = function(opts, deps) return n .. ' ' .. deps.prep end },
+           left = function() task.run('extra') end,
+           right = function() task.run('other') end,
+           both = { depends = { 'left', 'right', 'prep' }, run = function() return n end },
+           again = { depends = { 'prep' }, run = function() task.run('prep'); return n end },
+         }",
+    );
+    s.trust();
+    assert_eq!(
+        s.ok(&["all"]),
+        "1 prepared\n",
+        "the nested run completed the queued prep"
+    );
+    let names: Vec<String> = s.last_run()["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["prep", "extra", "first", "all"]);
+    assert_eq!(
+        s.ok(&["--jobs", "3", "both"]),
+        "1\n",
+        "steps sharing prep at once wait for the one running it"
+    );
+    assert_eq!(s.ok(&["again"]), "2\n", "a task task.run names still runs");
+}
+
+#[test]
 fn command_tasks_take_words_not_shell_text() {
     let s = Sandbox::new();
     s.project_tasks("return { each = 'printf %s.' }");
