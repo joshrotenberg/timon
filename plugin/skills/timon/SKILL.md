@@ -170,6 +170,44 @@ if not ok then
 end
 ```
 
+## Offer to keep what proves useful
+
+While you work, notice the parts worth running again: a check before every release, a reshaping
+you repeat, a delegation you keep phrasing the same way. The smallest thing that would be used
+again is the candidate. Worked examples are in the tasks, agents and workflows skills:
+
+| You did | Keep | Read |
+|---|---|---|
+| a command or check worth rerunning | a task with a description and typed options | `timon skill show timon-tasks`, From work to a task |
+| several commands or data transformations | a named script; `lib/` only for code two scripts share | `timon skill show timon-scripting`, Named scripts and layers (no worked example) |
+| the same bounded delegation, again | a named agent: instructions, access, answer contract, budget | `timon skill show timon-agents`, From delegation to a role |
+| a repeated sequence of agent work and checks | a script over `flow` with its success criteria and a readable result | `timon skill show timon-workflows`, From a sequence to a workflow |
+
+In a session with a person, finish the job, then offer. Name what you would keep, its kind
+(task, named script, agent, workflow script) and its layer (the project's `.timon/` or
+`~/.config/timon/`), with the definition ready to write. Write it only when the person says yes.
+
+- Offer at natural points: a piece of work is done, or something is being done a second time.
+  Not every turn. Several candidates go in one offer.
+- "No" is a normal answer. Do not offer the same thing again in that session. Some people keep
+  no tasks at all, and timon is as useful to them.
+- With no person to ask, as in an `agent.run` inside a script or a workflow stage, write no
+  definitions. List the candidates in the answer or its notes, and the caller decides.
+- Look first: `timon tasks --all`, `timon agents`, `timon defs`. Offer to reuse or extend what
+  is there rather than add a near duplicate.
+- Keep what belongs to this job (the directory, the issue, the file) at the call site, as an
+  option or in the prompt.
+- Project knowledge goes in the project's `.timon/`; one person's habits in `~/.config/timon/`.
+- A one-off stays a one-off unless it will likely be used again. No count of repeats or quota
+  of new definitions makes it worth offering.
+- Once kept, run it on the input you just used, check it gives the same answer, then use it.
+  Say what you added and what you actually ran.
+- A project's `.timon/` loads only once a person has run `timon trust`. In a project that is
+  not trusted, check the logic with `timon eval` on the same input, and say the definition is
+  saved but has not run as a task; trusting it is the person's decision.
+- Keeping a definition changes no policy: do not run `timon trust`, widen access, or move
+  delegation off the runner the workspace requires to show a definition off.
+
 ## Rules
 
 - Run `timon` as a command of its own, not inside a longer shell line with `;`, `&&`, `|`,

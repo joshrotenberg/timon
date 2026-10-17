@@ -189,6 +189,41 @@ local r = agent.run{ agent = "reviewer", prompt = "Review PR 12" }
 Fields merge: defaults < `init.lua` `defaults` < the definition (`extends = "NAME"` builds on
 another) < the call. `timon agents` lists them.
 
+### From delegation to a role
+
+Offer a role once you delegate the same bounded job again with the same instructions. A
+release needs each changed doc checked against the code it describes, delegated like this:
+
+```lua
+local r = agent.run{
+  access = "read", output = "review", budget = { usd = 0.5, turns = 12 },
+  system = "Report claims in the doc that the code contradicts, with file and line. Do not edit files.",
+  prompt = "Check docs/setup.md",
+}
+return r.status, r.answer.verdict
+```
+
+When the next doc needs the same check, `timon agents` shows no such role, so offer the stable
+part as one in the project's `.timon/agents/`. Once the person agrees, write it; the doc to check
+stays in the prompt:
+
+```lua fragment
+-- .timon/agents/docs-checker.lua
+return {
+  description = "Checks one doc against the code it describes",
+  access = "read", output = "review", budget = { usd = 0.5, turns = 12 },
+  system = "Report claims in the doc that the code contradicts, with file and line. Do not edit files.",
+}
+```
+
+```lua fragment
+local setup = agent.run{ agent = "docs-checker", prompt = "Check docs/setup.md" }   -- the input it was built on
+local deploy = agent.run{ agent = "docs-checker", prompt = "Check guides/deploy.md" }
+```
+
+If a `reviewer` already exists, offer `extends = "reviewer"` with only the new `system`, not a copy.
+Give a role the access its job needs and no more; `limits` and trust stay the person's.
+
 ## Budgets
 
 ```sh

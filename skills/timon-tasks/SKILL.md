@@ -163,6 +163,59 @@ release = {
 },
 ```
 
+## From work to a task
+
+The job: list the broken relative links in `docs/` before a release. Done once with `timon eval`:
+
+```lua
+local root = fs.tmpdir()   -- stands in for the project
+fs.write(path.join(root, "docs", "intro.md"), "See [setup](setup.md) and [api](api.md).\n", { mkdir = true })
+fs.write(path.join(root, "docs", "setup.md"), "Back to [intro](intro.md) or [the site](https://example.com).\n")
+local broken = {}
+for _, file in ipairs(fs.glob(path.join(root, "docs", "**", "*.md"))) do
+  for target in fs.read(file):gmatch("%]%(([^)#%s]+)") do
+    if not target:find("^%a+:") and not fs.exists(path.join(path.dir(file), target)) then
+      broken[#broken + 1] = path.base(file) .. " -> " .. target
+    end
+  end
+end
+return broken  -- ["intro.md -> api.md"]
+```
+
+It runs before every release, so it is worth offering as a task. `timon tasks --all` shows
+none that checks links, so the offer is a `links` task in the project's `.timon/tasks.lua`, with
+the directory, this job's input, as an option with today's default. The person says yes:
+
+```lua fragment
+-- .timon/tasks.lua, beside the tasks already there
+links = {
+  description = "Broken relative links in a directory's Markdown files",
+  options = { dir = { type = "string", default = "docs", doc = "the directory to check" } },
+  run = function(opts)
+    local broken = {}
+    for _, file in ipairs(fs.glob(path.join(opts.dir, "**", "*.md"))) do
+      for target in fs.read(file):gmatch("%]%(([^)#%s]+)") do
+        if not target:find("^%a+:") and not fs.exists(path.join(path.dir(file), target)) then
+          broken[#broken + 1] = file .. " -> " .. target
+        end
+      end
+    end
+    if #broken > 0 then error{ kind = "broken_links", message = table.concat(broken, "\n") } end
+    return "no broken links in " .. opts.dir
+  end,
+},
+```
+
+```sh
+timon links --help         # the option, from the declaration
+timon links                # docs/: the same broken link the one-off found, exit 1
+timon links --dir guides   # a later use, on another directory
+```
+
+Had a `links` task checked only `docs/`, the offer would be the `dir` option on it, not a
+second task. Had the person said no, the check stays a `timon eval` and is not offered again
+that session. A question asked once, such as how many lines a file has, is never offered.
+
 ## Over MCP
 
 `timon serve` serves the tasks in reach as MCP tools over stdio, for a host that calls tools
