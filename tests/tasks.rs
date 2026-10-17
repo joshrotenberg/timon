@@ -179,6 +179,49 @@ fn dependencies_run_once_each_depth_first_and_pass_their_results() {
 }
 
 #[test]
+fn one_job_runs_the_plan_in_declared_order_not_level_by_level() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "local order = {}
+         local function step(name)
+           return function() order[#order + 1] = name end
+         end
+         return {
+           d = step('d'),
+           b = { depends = { 'd' }, run = step('b') },
+           c = step('c'),
+           a = { depends = { 'b', 'c' }, run = function() return table.concat(order, ',') end },
+           broken = { depends = { 'd' }, run = function() error('broken') end },
+           later = function() io.open('later-ran', 'w'):close() end,
+           stops = { depends = { 'broken', 'later' }, run = 'true' },
+         }",
+    );
+    s.trust();
+    let planned: Vec<String> = s.json(&["--dry-run", "a"])["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(planned, ["d", "b", "c", "a"]);
+    assert_eq!(s.ok(&["a"]), "d,b,c\n", "the order the dry run shows");
+
+    let o = s.timon(&["stops"]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(
+        !s.project().join("later-ran").exists(),
+        "a later sibling does not run after an earlier one fails"
+    );
+    let names: Vec<String> = s.last_run()["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["d", "broken"]);
+}
+
+#[test]
 fn the_first_failure_stops_the_plan_with_its_exit_code() {
     let s = Sandbox::new();
     s.project_tasks(
@@ -249,6 +292,16 @@ fn timon_commands_win_and_timon_task_reaches_a_task_they_hide() {
     let o = s.timon(&["rnus"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("did you mean \"runs\"?"), "{}", err(&o));
+
+    s.project_tasks("return { runs = { confirm = 'Sure?', run = function() return 'mine' end } }");
+    let o = s.timon(&["task", "runs"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("answer it with timon --yes task runs"),
+        "{}",
+        err(&o)
+    );
+    assert_eq!(s.ok(&["--yes", "task", "runs"]), "mine\n");
 }
 
 #[test]
@@ -721,6 +774,44 @@ fn task_run_calls_a_task_with_its_options_inside_the_same_run() {
         "{}",
         err(&o)
     );
+}
+
+#[test]
+fn a_dependency_task_run_has_already_run_does_not_run_again() {
+    let s = Sandbox::new();
+    s.project_tasks(
+        "local n = 0
+         return {
+           prep = function() sleep('200ms'); n = n + 1; return 'prepared' end,
+           extra = { depends = { 'prep' }, run = function() end },
+           other = { depends = { 'prep' }, run = function() end },
+           first = function() task.run('extra') end,
+           all = { depends = { 'first', 'prep' }, run = function(opts, deps) return n .. ' ' .. deps.prep end },
+           left = function() task.run('extra') end,
+           right = function() task.run('other') end,
+           both = { depends = { 'left', 'right', 'prep' }, run = function() return n end },
+           again = { depends = { 'prep' }, run = function() task.run('prep'); return n end },
+         }",
+    );
+    s.trust();
+    assert_eq!(
+        s.ok(&["all"]),
+        "1 prepared\n",
+        "the nested run completed the queued prep"
+    );
+    let names: Vec<String> = s.last_run()["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["prep", "extra", "first", "all"]);
+    assert_eq!(
+        s.ok(&["--jobs", "3", "both"]),
+        "1\n",
+        "steps sharing prep at once wait for the one running it"
+    );
+    assert_eq!(s.ok(&["again"]), "2\n", "a task task.run names still runs");
 }
 
 #[test]
