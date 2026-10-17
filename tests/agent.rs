@@ -294,6 +294,40 @@ fn ask_returns_the_answer_or_raises() {
 }
 
 #[test]
+fn ask_returns_the_answer_when_output_comes_from_a_definition_or_defaults() {
+    let s = Sandbox::new();
+    s.write(
+        s.config().join("agents/reviewer.lua"),
+        "return { provider = 'claude', output = 'yes_no' }",
+    );
+    s.write(
+        s.config().join("agents/strict.lua"),
+        "return { extends = 'reviewer' }",
+    );
+    let r = s.json(
+        "return {
+           inherited = agent.ask{ agent = 'reviewer', prompt = 'p' },
+           extended = agent.ask{ agent = 'strict', prompt = 'p' },
+           explicit = agent.ask{ agent = 'reviewer', prompt = 'p', output = 'yes_no' },
+         }",
+        &[("FAKE_AUTO_ANSWER", "1")],
+    );
+    for k in ["inherited", "extended", "explicit"] {
+        assert_eq!(r[k]["answer"], true, "{k}: {r}");
+    }
+
+    s.write(
+        s.config().join("init.lua"),
+        "return { defaults = { output = 'yes_no' } }",
+    );
+    let r = s.json(
+        "return { default = agent.ask('p') }",
+        &[("FAKE_AUTO_ANSWER", "1")],
+    );
+    assert_eq!(r["default"]["answer"], true, "{r}");
+}
+
+#[test]
 fn continue_resumes_and_fork_branches() {
     let s = Sandbox::new();
     let r = s.json(

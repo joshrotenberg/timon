@@ -506,10 +506,20 @@ impl Drop for Settle {
 
 /// Runs one agent turn for the task on `thread`, charging that task's budgets.
 async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
+    Ok(run_with(lua, spec, thread).await?.0)
+}
+
+/// [`run`], and whether the merged request has an output, so the record has an answer.
+async fn run_with(
+    lua: Lua,
+    spec: Table,
+    thread: Option<mlua::Thread>,
+) -> mlua::Result<(Table, bool)> {
     crate::tasks::refuse_while_loading(&lua, "an agent run")?;
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
     let request = request(&lua, &fields)?;
+    let wants_answer = request.output.is_some();
     agent::check(&request)?;
     // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
     let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());
@@ -524,7 +534,7 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
                 "id": earlier, "key": key, "status": "ok", "cached": true,
             }));
             remember_spec(&lua, &table, &spec)?;
-            return Ok(table);
+            return Ok((table, wants_answer));
         }
         request.key = Some(key);
     }
@@ -610,7 +620,7 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     }
     let table = record_table(&lua, &record)?;
     remember_spec(&lua, &table, &spec)?;
-    Ok(table)
+    Ok((table, wants_answer))
 }
 
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
@@ -639,8 +649,7 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
                     .into());
                 }
             };
-            let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
-            let record = run(lua.clone(), spec, thread).await?;
+            let (record, wants_answer) = run_with(lua.clone(), spec, thread).await?;
             let status: String = record.raw_get("status")?;
             if status == Status::Ok.name() {
                 return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });
