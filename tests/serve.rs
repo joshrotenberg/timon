@@ -244,3 +244,142 @@ async fn the_skills_are_resources() {
     );
     let _ = Path::new("");
 }
+
+const NOISY: &str = r#"print("loading")
+io.stdout:write("flushed\n")
+io.stdout:flush()
+return {
+  hello = function()
+    print("calling")
+    io.stdout:write("flushed in a call\n")
+    io.stdout:flush()
+    return "ok"
+  end,
+}
+"#;
+
+#[test]
+fn what_task_files_print_at_startup_goes_to_stderr() {
+    let s = Sandbox::new(NOISY);
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_timon"))
+        .arg("serve")
+        .current_dir(s.project())
+        .env("TIMON_HOME", s.dir.path().join("timon"))
+        .env("HOME", s.dir.path().join("home"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("loading\n"), "{stderr}");
+    assert!(stderr.contains("flushed\n"), "{stderr}");
+}
+
+#[tokio::test]
+async fn what_tasks_print_during_a_call_stays_off_the_protocol() {
+    let s = Sandbox::new(NOISY);
+    let client = s.connect().await;
+    let r = client
+        .call_tool("hello", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", r.all_text());
+    assert_eq!(r.all_text(), "ok");
+    let r = client
+        .call_tool("hello", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        r.structured_content,
+        Some(serde_json::json!({ "value": "ok" }))
+    );
+}
+
+#[tokio::test]
+async fn confirmed_is_reserved_for_the_users_answer() {
+    for ty in ["string", "boolean"] {
+        let tasks = format!(
+            r#"return {{ echo = {{ options = {{ confirmed = "{ty}" }}, run = function(opts) return opts.confirmed end }} }}"#
+        );
+        let s = Sandbox::new(&tasks);
+        let run = |args: &[&str]| {
+            std::process::Command::new(env!("CARGO_BIN_EXE_timon"))
+                .args(args)
+                .current_dir(s.project())
+                .env("TIMON_HOME", s.dir.path().join("timon"))
+                .env("HOME", s.dir.path().join("home"))
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        };
+        for args in [&["echo", "--confirmed", "hello"][..], &["serve"][..]] {
+            let o = run(args);
+            assert!(!o.status.success(), "{ty} {args:?}");
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            assert!(
+                stderr.contains("task \"echo\": \"confirmed\" is reserved"),
+                "{ty} {args:?}: {stderr}"
+            );
+            assert_eq!(String::from_utf8_lossy(&o.stdout), "", "{ty} {args:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn confirmed_is_in_the_schema_only_when_a_task_asks() {
+    let s = Sandbox::new(
+        r#"return {
+  plain = { options = { name = "string", loud = "boolean" }, run = function(opts) return opts.name end },
+  asks = {
+    confirm = "Sure?",
+    options = { name = "string", loud = "boolean" },
+    run = function(opts) return opts.name .. tostring(opts.loud) end,
+  },
+}
+"#,
+    );
+    let client = s.connect().await;
+    let tools = client.list_all_tools().await.unwrap();
+    let schema = |name: &str| {
+        serde_json::to_value(tools.iter().find(|t| t.name == name).unwrap()).unwrap()["inputSchema"]
+            .clone()
+    };
+    let plain = schema("plain");
+    assert!(plain["properties"].get("confirmed").is_none(), "{plain}");
+    assert_eq!(plain["properties"]["name"]["type"], "string");
+    assert_eq!(plain["properties"]["loud"]["type"], "boolean");
+    assert_eq!(plain["required"], serde_json::json!(["name"]));
+    let asks = schema("asks");
+    assert_eq!(asks["properties"]["confirmed"]["type"], "boolean");
+    assert_eq!(asks["properties"]["name"]["type"], "string");
+    assert_eq!(asks["properties"]["loud"]["type"], "boolean");
+    assert_eq!(asks["required"], serde_json::json!(["name", "confirmed"]));
+
+    let r = client
+        .call_tool(
+            "plain",
+            serde_json::json!({ "name": "Ann", "confirmed": true }),
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "a task that does not ask takes no confirmed");
+    let r = client
+        .call_tool("plain", serde_json::json!({ "name": "Ann" }))
+        .await
+        .unwrap();
+    assert_eq!(
+        r.structured_content,
+        Some(serde_json::json!({ "value": "Ann" }))
+    );
+    let r = client
+        .call_tool(
+            "asks",
+            serde_json::json!({ "name": "Ann", "loud": true, "confirmed": true }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.structured_content,
+        Some(serde_json::json!({ "value": "Anntrue" }))
+    );
+}

@@ -210,7 +210,7 @@ async fn run_task(
         .into());
     }
     let mut args = args.clone();
-    if let Some(o) = args.as_object_mut() {
+    if let Some(o) = args.as_object_mut().filter(|_| !questions.is_empty()) {
         o.remove("confirmed");
     }
     let given = tasks::given_from_json(rt, task, &args)?;
@@ -228,13 +228,19 @@ async fn run_task(
 #[cfg(unix)]
 pub(crate) fn protocol_stdout() -> Result<tokio::fs::File, Error> {
     use std::os::fd::FromRawFd;
-    // SAFETY: duplicates and replaces this process's own standard descriptors.
+    let failed = || Error::new("io", "cannot set up stdout for the protocol");
+    // SAFETY: duplicates and replaces this process's own standard descriptors. The copy is
+    // close-on-exec, so the programs tasks start cannot write into the protocol stream.
     unsafe {
-        let copy = libc::dup(libc::STDOUT_FILENO);
-        if copy < 0 || libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) < 0 {
-            return Err(Error::new("io", "cannot set up stdout for the protocol"));
+        let copy = libc::fcntl(libc::STDOUT_FILENO, libc::F_DUPFD_CLOEXEC, 0);
+        if copy < 0 {
+            return Err(failed());
         }
-        Ok(tokio::fs::File::from_std(std::fs::File::from_raw_fd(copy)))
+        let copy = std::fs::File::from_raw_fd(copy);
+        if libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) < 0 {
+            return Err(failed());
+        }
+        Ok(tokio::fs::File::from_std(copy))
     }
 }
 
@@ -245,6 +251,8 @@ pub(crate) fn protocol_stdout() -> Result<tokio::io::Stdout, Error> {
 
 /// Serves the tasks in reach of `layers` over stdio until the client closes the stream.
 pub async fn serve(layers: Layers, builtins: Vec<String>) -> Result<(), Failure> {
+    // Before any Lua runs, so what a task file prints at load cannot reach the client.
+    let writer = protocol_stdout()?;
     let (tx, mut rx) = mpsc::channel::<Job>(64);
     let catalog = {
         let rt = runtime(&layers)?;
@@ -320,7 +328,6 @@ pub async fn serve(layers: Layers, builtins: Vec<String>) -> Result<(), Failure>
         })
     };
     drop(tx);
-    let writer = protocol_stdout()?;
     let served = StdioTransport::new(router)
         .run_with_streams(tokio::io::stdin(), writer)
         .await;

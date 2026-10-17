@@ -382,6 +382,34 @@ fn tasks_handle_events_and_their_output_stays_off_stdout() {
     assert!(triggers.iter().any(|t| t == "hook:Stop"), "{triggers:?}");
 }
 
+/// The protocol copy of stdout is close-on-exec: a program a hook task starts cannot write into
+/// the JSON the host reads, even by writing to every descriptor it inherited.
+#[test]
+fn programs_a_hook_task_starts_cannot_reach_the_hosts_json() {
+    let s = Sandbox::new();
+    s.file(
+        ".timon/init.lua",
+        "return { hooks = { UserPromptSubmit = 'noisy' } }\n",
+    );
+    s.file(
+        ".timon/tasks.lua",
+        r#"return { noisy = { private = true, run = function()
+  sh("for fd in 3 4 5 6 7 8 9 10 11 12; do (echo garbage >&$fd) 2>/dev/null; done; true", { shell = true })
+  return "quiet"
+end } }
+"#,
+    );
+    s.trust();
+    let o = s.timon(
+        &["hook"],
+        &json!({ "hook_event_name": "UserPromptSubmit" }).to_string(),
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out: Json = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&o.stdout)));
+    assert_eq!(context(&out), "quiet");
+}
+
 #[test]
 fn a_failing_hook_fails_open_and_says_why() {
     let s = Sandbox::new();

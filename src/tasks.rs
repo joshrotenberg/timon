@@ -669,6 +669,13 @@ fn load_file(
                 {
                     task.options = Spec::from_lua(&options)
                         .map_err(|m| bad(path, format!("task \"{name}\": {m}")))?;
+                    if task.options.options.iter().any(|o| o.name == "confirmed") {
+                        return Err(bad(
+                            path,
+                            format!("task \"{name}\": \"confirmed\" is reserved: over MCP it holds the user's answer to confirm"),
+                        )
+                        .into());
+                    }
                 }
                 let run: Value = t
                     .raw_get("run")
