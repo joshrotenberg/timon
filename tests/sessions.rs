@@ -297,6 +297,18 @@ fn week_filters_take_fractions_and_reject_what_is_not_a_time() {
         }
         rejected(a.cli(&["sessions", "list", &format!("--since={week}")], &[]));
     }
+    // The same for other units and for a number of seconds: too large is an error, not a panic.
+    for since in ["'99999999999999999999999d'", "'1e300h'", "1e300", "1e18"] {
+        rejected(a.timon(&format!("sessions.list{{ since = {since} }}"), &[]));
+        rejected(a.timon(
+            &format!("sessions.search{{ query = 'build', ['until'] = {since} }}"),
+            &[],
+        ));
+    }
+    let o = a.timon("sleep(1e300)", &[]);
+    let (_, stderr) = out(&o);
+    assert!(stderr.contains("bad_argument: a duration is"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
 #[test]
