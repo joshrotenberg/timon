@@ -15,7 +15,7 @@ use crate::options;
 
 pub const DOC: Module = Module {
     name: "sqlite",
-    summary: "SQLite databases. sqlite.open returns a database: db:exec(sql, params) runs statements and returns the rows changed; db:query(sql, params) returns rows as tables keyed by column; db:one returns the first row or nil; db:last_id(); db:transaction(fn) commits, or rolls back and raises; db:close(). params is a list for ?, or a table for :name. NULL reads as nil. Errors raise sqlite_failed.",
+    summary: "SQLite databases. sqlite.open returns a database: db:exec(sql, params) runs statements and returns the rows changed; db:query(sql, params) returns rows as tables keyed by column; db:one returns the first row or nil; db:last_id(); db:transaction(fn) commits, or rolls back and raises, and a cancelled task or a failed commit rolls back too; db:close(). params is a list for ?, or a table for :name. NULL reads as nil. Errors raise sqlite_failed.",
     functions: &[Func::new(
         "open",
         "sqlite.open(path, { readonly, create }) -> db",
