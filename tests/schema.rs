@@ -63,6 +63,37 @@ fn check_passes_good_values_and_lists_every_problem() {
 }
 
 #[test]
+fn only_an_untyped_empty_table_passes_for_an_array() {
+    let check =
+        |s: &str, v: &str| eval(&format!("return schema.check({s}, {v})")).unwrap()[0].clone();
+    let strings = "schema.array(schema.string)";
+    let nested = "schema.object{ xs = schema.array(schema.array(schema.string)) }";
+    for (s, v, ok) in [
+        (strings, "{}", "true"),
+        (strings, "{ 'a' }", "true"),
+        (strings, "json.array()", "true"),
+        (strings, "json.decode('[]')", "true"),
+        (strings, "json.decode('[\"a\"]')", "true"),
+        (strings, "json.object()", "false"),
+        (strings, "json.decode('{}')", "false"),
+        (strings, "{ a = 1 }", "false"),
+        (nested, "{ xs = { {}, { 'a' } } }", "true"),
+        (nested, "json.decode('{\"xs\":[[],[\"a\"]]}')", "true"),
+        (nested, "json.decode('{\"xs\":{}}')", "false"),
+        (nested, "json.decode('{\"xs\":[{}]}')", "false"),
+        ("schema.optional(schema.array(schema.int))", "{}", "true"),
+        ("schema.map(schema.array(schema.int))", "{ a = {} }", "true"),
+    ] {
+        assert_eq!(check(s, v), ok, "schema.check({s}, {v})");
+    }
+    let out = eval("return schema.check(schema.array(schema.string), json.decode('{}'))").unwrap();
+    assert_eq!(
+        out[1],
+        r#"[{"message":"expected an array, got an object","path":"(root)"}]"#
+    );
+}
+
+#[test]
 fn builders_refuse_non_schemas() {
     let err = eval("schema.object{ a = 'string' }").unwrap_err().error;
     assert_eq!(err.kind, "bad_argument");

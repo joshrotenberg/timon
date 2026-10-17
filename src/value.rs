@@ -40,6 +40,11 @@ fn marker(t: &Table) -> Option<Marker> {
     }
 }
 
+/// Whether `t` is marked by `json.array`, `json.object` or as `json.null`.
+pub(crate) fn is_marked(t: &Table) -> bool {
+    marker(t).is_some()
+}
+
 /// Converts a Lua value to JSON.
 ///
 /// A table whose keys are exactly `1..n` with `n > 0` is an array; any other table is an object

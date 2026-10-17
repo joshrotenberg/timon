@@ -519,6 +519,28 @@ fn concurrency_is_capped_by_limits() {
 // Codex
 
 #[test]
+fn a_provider_object_is_not_an_array() {
+    let s = Sandbox::new();
+    for provider in ["claude", "codex"] {
+        let code = format!(
+            "agent.run{{ provider = '{provider}', prompt = 'q', output = schema.object{{ xs = schema.array(schema.array(schema.string)) }} }}"
+        );
+        for good in [r#"{"xs": []}"#, r#"{"xs": [[], ["a"]]}"#] {
+            let r = s.json(&code, &[("FAKE_STRUCTURED", good)]);
+            assert_eq!(r["status"], "ok", "{provider} {good}: {r}");
+        }
+        for (bad, path) in [(r#"{"xs": {}}"#, "xs"), (r#"{"xs": [{}]}"#, "xs[1]")] {
+            let r = s.json(&code, &[("FAKE_STRUCTURED", bad)]);
+            assert_eq!(r["status"], "invalid", "{provider} {bad}: {r}");
+            assert_eq!(
+                r["error"]["data"],
+                serde_json::json!([{ "path": path, "message": "expected an array, got an object" }])
+            );
+        }
+    }
+}
+
+#[test]
 fn codex_runs_sandboxed_with_a_schema_file() {
     let s = Sandbox::new();
     let good = r#"{"answer": false, "reason": "no"}"#;

@@ -334,6 +334,72 @@ impl Shape {
         errors
     }
 
+    /// A Lua value as JSON to check against this shape. An empty Lua table cannot say it is an
+    /// array, so an unmarked one becomes `[]` where this shape expects an array. Decoded JSON
+    /// and tables marked by `json.object` keep their shape.
+    pub fn lua_json(&self, value: &Value) -> Result<Json, Error> {
+        let mut data = value::to_json(value, Mode::Strict)?;
+        self.untyped_empties(value, &mut data);
+        Ok(data)
+    }
+
+    fn untyped_empties(&self, value: &Value, data: &mut Json) {
+        let Value::Table(t) = value else {
+            return;
+        };
+        let field = |key: &str| -> Value {
+            match t.raw_get::<Value>(key) {
+                Ok(Value::Nil) => key
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|i| t.raw_get(i).ok())
+                    .unwrap_or(Value::Nil),
+                v => v.unwrap_or(Value::Nil),
+            }
+        };
+        match &self.node {
+            Node::Optional(inner) => inner.untyped_empties(value, data),
+            Node::OneOf(options) => {
+                for option in options {
+                    let mut candidate = data.clone();
+                    option.untyped_empties(value, &mut candidate);
+                    if option.check(&candidate).is_empty() {
+                        *data = candidate;
+                        return;
+                    }
+                }
+            }
+            Node::Array(item) => match data {
+                Json::Object(map) if map.is_empty() && !value::is_marked(t) => {
+                    *data = Json::Array(Vec::new());
+                }
+                Json::Array(items) => {
+                    for (i, d) in items.iter_mut().enumerate() {
+                        item.untyped_empties(&t.raw_get(i + 1).unwrap_or(Value::Nil), d);
+                    }
+                }
+                _ => {}
+            },
+            Node::Map(inner) => {
+                if let Json::Object(map) = data {
+                    for (k, d) in map.iter_mut() {
+                        inner.untyped_empties(&field(k), d);
+                    }
+                }
+            }
+            Node::Object(fields) => {
+                if let Json::Object(map) = data {
+                    for (name, shape) in fields {
+                        if let Some(d) = map.get_mut(name) {
+                            shape.untyped_empties(&field(name), d);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn check_at(&self, value: &Json, path: &str, errors: &mut Vec<(String, String)>) {
         let here = || {
             if path.is_empty() {
@@ -402,8 +468,6 @@ impl Shape {
                         item.check_at(v, &format!("{path}[{}]", i + 1), errors);
                     }
                 }
-                // An empty Lua table cannot say it is an array.
-                Json::Object(map) if map.is_empty() => {}
                 _ => wrong("an array"),
             },
             Node::Map(inner) => match value {
@@ -686,8 +750,7 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
             "check",
             lua.create_function(|lua, (s, v): (Value, Value)| {
                 let shape = shape_of(&s, "the first argument")?;
-                let data = value::to_json(&v, Mode::Strict)?;
-                let errors = shape.check(&data);
+                let errors = shape.check(&shape.lua_json(&v)?);
                 if errors.is_empty() {
                     Ok(mlua::MultiValue::from_iter([Value::Boolean(true)]))
                 } else {
