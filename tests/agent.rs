@@ -294,6 +294,40 @@ fn ask_returns_the_answer_or_raises() {
 }
 
 #[test]
+fn ask_returns_the_answer_when_output_comes_from_a_definition_or_defaults() {
+    let s = Sandbox::new();
+    s.write(
+        s.config().join("agents/reviewer.lua"),
+        "return { provider = 'claude', output = 'yes_no' }",
+    );
+    s.write(
+        s.config().join("agents/strict.lua"),
+        "return { extends = 'reviewer' }",
+    );
+    let r = s.json(
+        "return {
+           inherited = agent.ask{ agent = 'reviewer', prompt = 'p' },
+           extended = agent.ask{ agent = 'strict', prompt = 'p' },
+           explicit = agent.ask{ agent = 'reviewer', prompt = 'p', output = 'yes_no' },
+         }",
+        &[("FAKE_AUTO_ANSWER", "1")],
+    );
+    for k in ["inherited", "extended", "explicit"] {
+        assert_eq!(r[k]["answer"], true, "{k}: {r}");
+    }
+
+    s.write(
+        s.config().join("init.lua"),
+        "return { defaults = { output = 'yes_no' } }",
+    );
+    let r = s.json(
+        "return { default = agent.ask('p') }",
+        &[("FAKE_AUTO_ANSWER", "1")],
+    );
+    assert_eq!(r["default"]["answer"], true, "{r}");
+}
+
+#[test]
 fn continue_resumes_and_fork_branches() {
     let s = Sandbox::new();
     let r = s.json(
@@ -310,6 +344,47 @@ fn continue_resumes_and_fork_branches() {
     assert_eq!(r["session"], "claude-forked-1");
     let args = s.args("claude", 2);
     assert!(has_pair(&args, "--resume", "abc") && args.contains(&"--fork-session".to_owned()));
+}
+
+#[test]
+fn resume_takes_only_sessions_timon_started_and_fork_takes_any() {
+    let s = Sandbox::new();
+    let o = s.timon(
+        "agent.run{ provider = 'claude', prompt = 'continue', resume = 'foreign-session' }",
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("unknown_session: timon did not start session \"foreign-session\""),
+        "{stderr}"
+    );
+    assert!(stderr.contains("hint: fork = "), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(s.logs()).unwrap().count(),
+        0,
+        "the provider was started for a foreign session"
+    );
+
+    let r = s.json(
+        "local first = agent.run{ prompt = 'first' }\nreturn agent.run{ prompt = 'second', resume = first.session }",
+        &[],
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(has_pair(
+        &s.args("claude", 1),
+        "--resume",
+        "claude-session-1"
+    ));
+
+    let r = s.json("agent.run{ prompt = 'x', fork = 'foreign-session' }", &[]);
+    assert_eq!(r["status"], "ok", "{r}");
+    let args = s.args("claude", 2);
+    assert!(
+        has_pair(&args, "--resume", "foreign-session")
+            && args.contains(&"--fork-session".to_owned()),
+        "{args:?}"
+    );
 }
 
 #[test]
@@ -571,10 +646,11 @@ fn codex_runs_sandboxed_with_a_schema_file() {
 fn codex_resume_uses_the_sandbox_config_key() {
     let s = Sandbox::new();
     s.json(
-        "agent.run{ provider = 'codex', prompt = 'x', resume = 'thread-9', access = 'write' }",
+        "local first = agent.run{ provider = 'codex', prompt = 'x' }
+         return agent.run{ provider = 'codex', prompt = 'y', resume = first.session, access = 'write' }",
         &[],
     );
-    let args = s.args("codex", 0);
+    let args = s.args("codex", 1);
     assert!(args.contains(&"resume".to_owned()), "{args:?}");
     assert!(
         has_pair(&args, "-c", "sandbox_mode=\"workspace-write\""),

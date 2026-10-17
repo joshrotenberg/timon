@@ -504,13 +504,50 @@ impl Drop for Settle {
     }
 }
 
+/// Refuses to resume a session no recorded run started, so a script never continues a
+/// person's own sessions.
+fn check_started(lua: &Lua, session: &str, provider: agent::Provider) -> Result<(), Error> {
+    let started = lua
+        .named_registry_value::<Option<String>>(STATE_DIR)?
+        .is_some_and(|state| {
+            agent::records::Store::new(std::path::Path::new(&state))
+                .sessions()
+                .contains(session)
+        });
+    if started {
+        return Ok(());
+    }
+    let hint = match provider {
+        agent::Provider::Claude => "fork = ID branches from any session and leaves it untouched",
+        agent::Provider::Codex => "start a new run: codex cannot fork a session",
+    };
+    Err(Error::new(
+        "unknown_session",
+        format!("timon did not start session \"{session}\", so it cannot resume it"),
+    )
+    .with_hint(hint))
+}
+
 /// Runs one agent turn for the task on `thread`, charging that task's budgets.
 async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
+    Ok(run_with(lua, spec, thread).await?.0)
+}
+
+/// [`run`], and whether the merged request has an output, so the record has an answer.
+async fn run_with(
+    lua: Lua,
+    spec: Table,
+    thread: Option<mlua::Thread>,
+) -> mlua::Result<(Table, bool)> {
     crate::tasks::refuse_while_loading(&lua, "an agent run")?;
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
     let request = request(&lua, &fields)?;
+    let wants_answer = request.output.is_some();
     agent::check(&request)?;
+    if let Some(session) = &request.resume {
+        check_started(&lua, session, request.provider)?;
+    }
     // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
     let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());
     let mut request = request;
@@ -524,7 +561,7 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
                 "id": earlier, "key": key, "status": "ok", "cached": true,
             }));
             remember_spec(&lua, &table, &spec)?;
-            return Ok(table);
+            return Ok((table, wants_answer));
         }
         request.key = Some(key);
     }
@@ -610,7 +647,7 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     }
     let table = record_table(&lua, &record)?;
     remember_spec(&lua, &table, &spec)?;
-    Ok(table)
+    Ok((table, wants_answer))
 }
 
 pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
@@ -639,8 +676,7 @@ pub(crate) fn install(installer: &Installer) -> mlua::Result<()> {
                     .into());
                 }
             };
-            let wants_answer = !spec.raw_get::<Value>("output")?.is_nil();
-            let record = run(lua.clone(), spec, thread).await?;
+            let (record, wants_answer) = run_with(lua.clone(), spec, thread).await?;
             let status: String = record.raw_get("status")?;
             if status == Status::Ok.name() {
                 return record.raw_get::<Value>(if wants_answer { "answer" } else { "text" });

@@ -124,7 +124,9 @@ return change.status, review.answer.verdict
 
 `agent.continue(record, prompt, spec)` resumes the run's session with the earlier call's
 model, access, output, tools, system prompt and directory (its kept worktree, if any); `spec`
-overrides them. `fork = SESSION` branches from any session instead (Claude only).
+overrides them. `resume = SESSION` takes only a session a timon run started, and raises
+`unknown_session` for any other, so a script never continues a person's own session.
+`fork = SESSION` branches from any session instead (Claude only).
 
 ## Isolate writes in a worktree
 
