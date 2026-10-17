@@ -1392,7 +1392,7 @@ schema.object{ name = schema.string, nickname = schema.optional(schema.string) }
 
 ### `schema.check(s, value) -> true | false, errors`
 
-Validates value. Each error is { path, message }, with paths like findings[2].line.
+Validates value. An empty plain table counts as an empty array; json.object() and a decoded {} do not. Each error is { path, message }, with paths like findings[2].line.
 
 ```lua
 local ok, errors = schema.check(schema.object{ n = schema.int }, { n = "x" })

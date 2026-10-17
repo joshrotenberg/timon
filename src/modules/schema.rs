@@ -60,7 +60,7 @@ pub const DOC: Module = Module {
         Func::new(
             "check",
             "schema.check(s, value) -> true | false, errors",
-            "Validates value. Each error is { path, message }, with paths like findings[2].line.",
+            "Validates value. An empty plain table counts as an empty array; json.object() and a decoded {} do not. Each error is { path, message }, with paths like findings[2].line.",
             "local ok, errors = schema.check(schema.object{ n = schema.int }, { n = \"x\" })\n-- false, { { path = \"n\", message = \"expected an integer, got a string\" } }",
         ),
         Func::new(
