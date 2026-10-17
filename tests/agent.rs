@@ -672,6 +672,20 @@ fn codex_failures_are_classified() {
     );
     assert_eq!(r["status"], "failed");
     assert_eq!(r["error"]["kind"], "bad_schema");
+    // The argument error survives the usage footer that follows it (#157).
+    let r = s.json(
+        "agent.run{ provider = 'codex', prompt = 'x' }",
+        &[("FAKE_MODE", "bad_arg")],
+    );
+    assert_eq!(r["status"], "failed");
+    assert_eq!(r["error"]["kind"], "provider_failed");
+    let message = r["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("codex exited 2: "), "{message}");
+    assert!(
+        message.contains("error: unexpected argument '--skip-git-repo-check' found"),
+        "{message}"
+    );
+    assert!(message.contains("For more information"), "{message}");
     let o = s.timon(
         "agent.run{ provider = 'codex', prompt = 'x', fork = 't' }",
         &[],

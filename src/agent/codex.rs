@@ -12,7 +12,7 @@ use codex_wrapper::{
 };
 use serde_json::Value as Json;
 
-use super::claude::last_lines;
+use super::claude::diagnostic;
 use super::{Access, Answer, Outcome, Request, Status, Usage};
 use crate::error::Error;
 
@@ -271,7 +271,7 @@ fn failure(err: &codex_wrapper::Error) -> (Status, Error) {
                     Status::Failed,
                     Error::new(
                         "provider_failed",
-                        format!("codex exited {exit_code}: {}", last_lines(stderr)),
+                        format!("codex exited {exit_code}: {}", diagnostic(stderr)),
                     ),
                 )
             })

@@ -249,7 +249,7 @@ fn failure(err: &claude_wrapper::Error) -> (Status, Error) {
                 Status::Failed,
                 Error::new(
                     "provider_failed",
-                    format!("claude exited {exit_code}: {}", last_lines(stderr)),
+                    format!("claude exited {exit_code}: {}", diagnostic(stderr)),
                 ),
             ),
         },
@@ -293,9 +293,42 @@ fn readable(message: &str) -> String {
         .unwrap_or_else(|| message.trim().to_owned())
 }
 
-/// The last few lines of a stream, for an error message.
-pub(super) fn last_lines(text: &str) -> String {
-    let lines: Vec<&str> = text.trim().lines().collect();
-    let start = lines.len().saturating_sub(5);
-    lines[start..].join(" | ")
+/// A stream's diagnostic for an error message: its last few non-blank lines, led by its first
+/// `error` line (or first line) when a usage footer or other output pushed that out.
+pub(super) fn diagnostic(text: &str) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.len() <= 5 {
+        return lines.join(" | ");
+    }
+    let start = lines.len() - 4;
+    let primary = lines[..start]
+        .iter()
+        .find(|l| l.to_lowercase().starts_with("error"))
+        .unwrap_or(&lines[0]);
+    std::iter::once(primary)
+        .chain(&lines[start..])
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_error_line_outlives_a_long_tail() {
+        let stderr = "starting\nerror: unexpected argument '--x' found\n\n  tip: use '-- --x'\n\n\
+                      Usage: codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]\n\n\
+                      For more information, try '--help'.\n";
+        assert_eq!(
+            super::diagnostic(stderr),
+            "error: unexpected argument '--x' found | tip: use '-- --x' | Usage: codex [OPTIONS] [PROMPT] \
+             | codex [OPTIONS] <COMMAND> [ARGS] | For more information, try '--help'."
+        );
+        assert_eq!(super::diagnostic("a\n\nb\n"), "a | b");
+        assert_eq!(super::diagnostic("1\n2\n3\n4\n5\n6"), "1 | 3 | 4 | 5 | 6");
+    }
 }
