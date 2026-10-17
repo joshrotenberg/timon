@@ -18,6 +18,12 @@ pub struct Worktree {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
+    let out = git_bytes(dir, args)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_owned())
+}
+
+/// What git printed, byte for byte.
+fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, Error> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -37,7 +43,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
             ),
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    Ok(out.stdout)
 }
 
 impl Worktree {
@@ -119,19 +125,36 @@ impl Worktree {
 }
 
 /// The head commit of the worktree at `path`, and a sha256 of its uncommitted changes:
-/// `git status`, the diff against HEAD, and the contents of untracked files.
+/// `git status`, the diff against HEAD, and the contents of untracked files. None when any of
+/// it cannot be read, so a resume does not reuse what it could not check.
 pub fn fingerprint(path: &Path) -> Option<(String, String)> {
     use sha2::{Digest, Sha256};
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    let status = git(path, &["status", "--porcelain=v1", "-uall"]).ok()?;
-    let diff = git(path, &["diff", "HEAD", "--binary"]).ok()?;
+    // NUL-separated, so names come as they are rather than quoted.
+    let status = git_bytes(path, &["status", "--porcelain=v1", "-z", "-uall"]).ok()?;
+    let diff = git_bytes(path, &["diff", "HEAD", "--binary"]).ok()?;
     let mut hash = Sha256::new();
-    hash.update(status.as_bytes());
-    hash.update(diff.as_bytes());
-    for untracked in status.lines().filter_map(|l| l.strip_prefix("?? ")) {
-        if let Ok(bytes) = std::fs::read(path.join(untracked)) {
-            hash.update(&bytes);
-        }
+    hash.update(&status);
+    hash.update(&diff);
+    for untracked in status
+        .split(|&b| b == 0)
+        .filter_map(|e| e.strip_prefix(b"?? "))
+    {
+        let bytes = std::fs::read(path.join(raw_path(untracked)?)).ok()?;
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(&bytes);
     }
     Some((head, hex::encode(hash.finalize())))
+}
+
+/// A path as git printed it.
+#[cfg(unix)]
+fn raw_path(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+fn raw_path(bytes: &[u8]) -> Option<PathBuf> {
+    std::str::from_utf8(bytes).ok().map(PathBuf::from)
 }
