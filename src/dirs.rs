@@ -115,10 +115,11 @@ pub fn write_error(root: Root, dir: &Path, action: &str, path: &Path, e: std::io
         .with_hint_opt(write_hint(root, dir, &e))
 }
 
-/// For a permission error (EACCES or EPERM) on a write under `root`, the directory `dir`: what
-/// timon keeps there and how a sandboxed host can allow it.
+/// For a denied write under `root` (EACCES, EPERM, or EROFS from a read-only mount), the
+/// directory `dir`: what timon keeps there and how a sandboxed host can allow it.
 pub fn write_hint(root: Root, dir: &Path, e: &std::io::Error) -> Option<String> {
-    (e.kind() == std::io::ErrorKind::PermissionDenied).then(|| {
+    use std::io::ErrorKind::{PermissionDenied, ReadOnlyFilesystem};
+    matches!(e.kind(), PermissionDenied | ReadOnlyFilesystem).then(|| {
         format!(
             "timon keeps {} in {}; a sandboxed host must allow writes there (for Codex, \
              sandbox_workspace_write.writable_roots), or set TIMON_HOME or {} to a writable \
