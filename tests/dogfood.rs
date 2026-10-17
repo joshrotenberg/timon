@@ -195,3 +195,147 @@ fn recent_and_the_naming_audit_run() {
     let o = p.timon(&["run", "recent"], &[]);
     assert!(out(&o).contains("agent runs since 2d: 6"), "{}", out(&o));
 }
+
+/// Runs `timon book --no-build` over `root` into the project's `book/`, describing this build's
+/// commands. mdbook is not needed.
+fn book(p: &Project, root: &Path) -> Output {
+    let out = p.dir.path().join("book");
+    p.timon(
+        &[
+            "book",
+            "--no-build",
+            "--root",
+            root.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--bin",
+            env!("CARGO_BIN_EXE_timon"),
+        ],
+        &[],
+    )
+}
+
+#[test]
+fn the_book_is_generated_from_the_repository() {
+    let p = Project::new();
+    let o = book(&p, Path::new(env!("CARGO_MANIFEST_DIR")));
+    assert!(o.status.success(), "{}", err(&o));
+    let out = p.dir.path().join("book");
+    let read = |page: &str| std::fs::read_to_string(out.join("src").join(page)).unwrap();
+    assert!(out.join("book.toml").exists());
+    assert!(!out.join("html").exists(), "--no-build ran mdbook");
+    let summary = read("SUMMARY.md");
+    for page in [
+        "install.md",
+        "use.md",
+        "guide/basics.md",
+        "guide/tasks.md",
+        "guide/sessions.md",
+        "reference/commands.md",
+        "reference/modules.md",
+        "reference/json.md",
+        "reference/agent.md",
+        "design.md",
+        "contributing.md",
+        "live-tests.md",
+    ] {
+        assert!(
+            summary.contains(&format!("]({page})")),
+            "{page} is not in the summary"
+        );
+        assert!(
+            out.join("src").join(page).exists(),
+            "{page} was not written"
+        );
+    }
+    // A skill loses its metadata and the fragment tags only tests/skills.rs reads.
+    let tasks = read("guide/tasks.md");
+    assert!(!tasks.contains("\nname: timon-tasks"), "{tasks}");
+    assert!(!tasks.contains("lua fragment"));
+    // Links go to the page that holds their target, and skill mentions link to the guide.
+    assert!(
+        read("install.md").contains("](guide/tasks.md#as-hooks)"),
+        "{}",
+        read("install.md")
+    );
+    assert!(read("README.md").contains("](design.md)"));
+    assert!(read("guide/basics.md").contains("[`timon skill show timon-tasks`](tasks.md)"));
+    // Reference pages come from help() and the built-in task declarations.
+    assert!(read("reference/fs.md").contains("- `mkdir` (`boolean`): create missing parent"));
+    let commands = read("reference/commands.md");
+    assert!(commands.contains("## `timon eval [CODE]`"), "{commands}");
+    assert!(
+        commands.contains("- `-j, --jobs` (`integer`, default `1`)"),
+        "{commands}"
+    );
+}
+
+#[test]
+fn the_book_refuses_a_link_to_a_missing_file() {
+    let p = Project::new();
+    let root = p.dir.path().join("repo");
+    let write = |file: &str, text: &str| {
+        let f = root.join(file);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, text).unwrap();
+    };
+    let readme = "# timon\n\nSee [the guide](skills/timon/SKILL.md) and [the manifest](Cargo.toml).\n\n## Status\n\n## Install\n\n## Use\n\n## Working on timon\n\n## License\n";
+    write("README.md", readme);
+    write("Cargo.toml", "[package]\n");
+    for skill in [
+        "timon",
+        "timon-tasks",
+        "timon-scripting",
+        "timon-agents",
+        "timon-workflows",
+        "timon-sessions",
+    ] {
+        write(
+            &format!("skills/{skill}/SKILL.md"),
+            &format!("---\nname: {skill}\n---\n\n# {skill}\n"),
+        );
+    }
+    for doc in ["design", "prior-art", "live-tests"] {
+        write(&format!("docs/{doc}.md"), &format!("# {doc}\n"));
+    }
+    // A link to a book page is rewritten to it; a file outside the book goes to GitHub.
+    let o = book(&p, &root);
+    assert!(o.status.success(), "{}", err(&o));
+    let intro = std::fs::read_to_string(p.dir.path().join("book/src/README.md")).unwrap();
+    assert!(intro.contains("](guide/basics.md)"), "{intro}");
+    assert!(
+        intro.contains("](https://github.com/joshrotenberg/timon/blob/main/Cargo.toml)"),
+        "{intro}"
+    );
+
+    // A link to a file the repository does not have fails, with the page and the link.
+    write(
+        "skills/timon/SKILL.md",
+        "# timon\n\nSee [design](../../docs/design.md#x) and [gone](../../docs/gone.md).\n",
+    );
+    let o = book(&p, &root);
+    assert!(!o.status.success());
+    assert!(
+        err(&o).contains("skills/timon/SKILL.md -> ../../docs/gone.md"),
+        "{}",
+        err(&o)
+    );
+
+    // A skill or README section the book does not place fails too, rather than dropping out.
+    write("skills/timon/SKILL.md", "# timon\n");
+    write("skills/timon-extra/SKILL.md", "# extra\n");
+    let o = book(&p, &root);
+    assert!(
+        err(&o).contains("skill timon-extra has no page in the book"),
+        "{}",
+        err(&o)
+    );
+    std::fs::remove_dir_all(root.join("skills/timon-extra")).unwrap();
+    write("README.md", &format!("{readme}\n## Changelog\n"));
+    let o = book(&p, &root);
+    assert!(
+        err(&o).contains("README section \"Changelog\" has no page in the book"),
+        "{}",
+        err(&o)
+    );
+}
