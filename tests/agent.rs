@@ -794,6 +794,52 @@ fn max_usd_from_settings_stops_the_next_run() {
     assert!(!s.logs().join("claude-2.json").exists());
 }
 
+#[test]
+fn a_failed_claude_run_keeps_its_usage_and_counts_against_max_usd() {
+    let s = Sandbox::new();
+    for events in ["true", "false"] {
+        let code = format!(
+            "local runs = {{}}
+             local ok, err = try(function()
+               for i = 1, 3 do runs[i] = agent.run{{ prompt = 'x', events = {events} }} end
+             end)
+             return {{ runs = runs, message = err.message }}"
+        );
+        let o = s.cli(
+            &["eval", &code, "--max-usd", "0.02"],
+            &[("FAKE_MODE", "max_turns")],
+        );
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(
+            r["message"], "this invocation has spent $0.0250; the limit is $0.02",
+            "events = {events}: {r}"
+        );
+        let runs = r["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "{r}");
+        for run in runs {
+            assert_eq!(run["status"], "failed");
+            assert_eq!(run["error"]["kind"], "max_turns");
+            assert_eq!(run["usage"]["usd"], 0.0125, "events = {events}: {run}");
+            assert_eq!(
+                run["session"], "claude-session-1",
+                "events = {events}: {run}"
+            );
+        }
+        if events == "true" {
+            assert_eq!(runs[0]["usage"]["input_tokens"], 120);
+            assert_eq!(runs[0]["usage"]["output_tokens"], 30);
+        }
+    }
+    // A failure that reported nothing leaves its cost unknown.
+    let r = s.json(
+        "agent.run{ prompt = 'x' }",
+        &[("TIMON_CLAUDE_BIN", "/no/such/claude")],
+    );
+    assert_eq!(r["status"], "failed");
+    assert!(r["usage"]["usd"].is_null(), "{r}");
+}
+
 // Worktrees (#23)
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -1488,6 +1534,97 @@ fn a_claude_run_may_spend_only_what_every_budget_has_left() {
         "{:?}",
         s.args("claude", 1)
     );
+}
+
+/// The `--max-budget-usd` each run was given, from its request record, sorted.
+fn allowances(s: &Sandbox) -> Vec<f64> {
+    let mut out: Vec<f64> = std::fs::read_dir(s.root().join("timon/state/runs"))
+        .unwrap()
+        .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("request.json")).ok())
+        .map(|text| {
+            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+            request["budget"]["usd"].as_f64().unwrap()
+        })
+        .collect();
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+#[test]
+fn concurrent_claude_runs_never_share_the_money_left() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-usd",
+            "0.02",
+            "eval",
+            "local out = par.map({ 1, 2, 3 }, function(i)
+               local ok, r = try(agent.run, { prompt = 'p' .. i })
+               return ok and r.status or r.kind
+             end)
+             table.sort(out)
+             return out",
+        ],
+        &[("FAKE_DELAY", "0.2")],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    // The first run holds all $0.02; the next waits, and gets what the first did not spend.
+    // The fake ignores its cap and spends $0.0125 anyway, so the third is refused.
+    assert_eq!(r, serde_json::json!(["budget_exceeded", "ok", "ok"]));
+    let given = allowances(&s);
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert!((given[0] - 0.0075).abs() < 1e-9, "{given:?}");
+    assert!((given[1] - 0.02).abs() < 1e-9, "{given:?}");
+}
+
+#[test]
+fn runs_with_their_own_cap_share_a_scope_and_a_cancelled_run_frees_its_hold() {
+    let s = Sandbox::new();
+    let running = s.root().join("running");
+    std::fs::create_dir_all(&running).unwrap();
+    let o = s.cli(
+        &[
+            "--max-usd",
+            "0.05",
+            "eval",
+            "scope(function()
+               par.map({ 1, 2, 3 }, function(i)
+                 return agent.run{ prompt = 'p' .. i, budget = { usd = 0.01 } }
+               end)
+             end, { budget = { usd = 0.03 } })
+             local v = par.race(
+               function() return agent.run{ prompt = 'slow' } end,
+               function() sleep('100ms') return 'cancelled' end)
+             return { v, agent.run{ prompt = 'after' }.status }",
+        ],
+        &[
+            ("FAKE_DELAY", "0.3"),
+            ("FAKE_RUNNING_DIR", running.to_str().unwrap()),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r, serde_json::json!(["cancelled", "ok"]));
+    // Three holds of $0.01 fit the scope's $0.03, so the three ran at once.
+    let seen: Vec<String> = std::fs::read_dir(s.root())
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().into_string().ok()?;
+            name.starts_with("seen-")
+                .then(|| std::fs::read_to_string(e.path()).unwrap())
+        })
+        .collect();
+    assert!(seen.iter().any(|n| n == "3"), "{seen:?}");
+    // The slow run held all the invocation had left; cancelled, it was charged nothing and
+    // freed its hold, so the next run may spend the same.
+    let given = allowances(&s);
+    let want = [0.01, 0.01, 0.01, 0.0125, 0.0125];
+    assert_eq!(given.len(), want.len(), "{given:?}");
+    for (g, w) in given.iter().zip(want) {
+        assert!((g - w).abs() < 1e-9, "{given:?}");
+    }
 }
 
 #[test]

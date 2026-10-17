@@ -8,7 +8,7 @@ use claude_wrapper::streaming::{StreamEvent, stream_query_cancellable};
 use claude_wrapper::{Claude, Effort, OutputFormat, PermissionMode, QueryCommand, QueryResult};
 use serde_json::Value as Json;
 
-use super::{Access, Outcome, Request, Status, Usage};
+use super::{Access, Failure, Outcome, Request, Status, Usage};
 use crate::error::Error;
 
 /// Read-only tools: no Bash, no subagents, no skills, no MCP.
@@ -147,15 +147,16 @@ pub(super) async fn run(
                 return Err((
                     Status::Failed,
                     Error::new("provider_failed", "claude ended without a result"),
-                ));
+                )
+                    .into());
             }
-            (Err(e), _) => return Err(failure(&e)),
+            (Err(e), _) => return Err(spent(&e)),
         }
     } else {
         command
             .execute_json_cancellable(&client, never)
             .await
-            .map_err(|e| failure(&e))?
+            .map_err(|e| spent(&e))?
     };
     answer(result)
 }
@@ -186,7 +187,7 @@ fn answer(mut result: QueryResult) -> Outcome {
         // A login problem ends with an error result too (on stdout, exit 1); in stream mode
         // timon sees that result first, so it is classified here as well as in `failure`.
         if let Some(kind) = claude_wrapper::auth::classify_failure(1, &result.result, "") {
-            return Err(auth(kind, result.result.clone()));
+            return Err(auth(kind, result.result.clone()).into());
         }
         let (kind, hint) = match subtype.as_str() {
             "error_max_turns" => ("max_turns", "raise budget.turns, or split the task"),
@@ -198,7 +199,13 @@ fn answer(mut result: QueryResult) -> Outcome {
         } else {
             result.result.clone()
         };
-        return Err((Status::Failed, Error::new(kind, message).with_hint(hint)));
+        // The turn still cost what it reports, and its session can be resumed.
+        return Err(Box::new(Failure {
+            status: Status::Failed,
+            error: Error::new(kind, message).with_hint(hint),
+            session,
+            usage,
+        }));
     }
     Ok(super::Answer {
         text: result.result.clone(),
@@ -206,6 +213,28 @@ fn answer(mut result: QueryResult) -> Outcome {
         session,
         usage,
     })
+}
+
+/// Classifies a wrapper error, keeping the cost and session a capped run reported. Those
+/// errors carry no token counts.
+fn spent(err: &claude_wrapper::Error) -> Box<Failure> {
+    use claude_wrapper::Error as E;
+    let mut out: Box<Failure> = failure(err).into();
+    if let E::MaxTurnsExceeded {
+        cost_usd,
+        session_id,
+        ..
+    }
+    | E::MaxBudgetExceeded {
+        cost_usd,
+        session_id,
+        ..
+    } = err
+    {
+        out.usage.usd = *cost_usd;
+        out.session = session_id.clone().filter(|s| !s.is_empty());
+    }
+    out
 }
 
 fn failure(err: &claude_wrapper::Error) -> (Status, Error) {

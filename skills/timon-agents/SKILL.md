@@ -247,6 +247,10 @@ end, { budget = { runs = 2 } })
 return err.kind  -- budget_exceeded, at the third run
 ```
 
+Concurrent Claude runs never share money: each holds its own `budget.usd`, else all that is
+left, until it ends, and a run that finds everything held waits. Give each run of a fan-out a
+`budget.usd` to keep it running at once under a USD limit.
+
 `reserve = true` takes the scope's runs from the enclosing budget up front, so a fan-out that
 cannot finish fails before its first run. Unused runs go back when the scope ends:
 

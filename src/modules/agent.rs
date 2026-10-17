@@ -40,7 +40,7 @@ pub const DOC: Module = Module {
             Opt::new("system", "string", "instructions added to the system prompt"),
             Opt::new("output", "string | schema", "a contract name or a schema; the answer is validated"),
             Opt::new("timeout", "number | string", "seconds, or a duration such as \"10m\""),
-            Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude)"),
+            Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude); under a USD limit, usd is also what the run holds while it runs, so other runs are not given that money"),
             Opt::new("resume", "string", "a session id timon started, to continue"),
             Opt::new("fork", "string", "a session id to branch from (claude)"),
             Opt::new("native", "string[]", "extra command-line arguments for the provider; codex takes them before exec, so only its top-level options work"),
@@ -571,14 +571,13 @@ async fn run_with(
         .await
         .map_err(|_| Error::new("internal", "the run queue closed"))?;
     let budget = concurrency::budget_of(&lua, thread.as_ref())?;
-    budget.start_run()?;
+    // A Claude run holds what it may spend, so concurrent runs never share the money left.
+    let claude = request.provider == Provider::Claude;
+    let hold = budget.admit(claude, request.budget.usd).await?;
     let id = agent::new_id();
     let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
-    // No single Claude run may spend more than any enclosing budget has left.
-    if request.provider == Provider::Claude
-        && let Some(left) = budget.usd_left()
-    {
-        request.budget.usd = Some(request.budget.usd.map_or(left, |usd| usd.min(left)));
+    if claude && let Some(usd) = hold.usd() {
+        request.budget.usd = Some(usd);
     }
     let worktree = if request.worktree {
         let cwd = match &request.cwd {
@@ -637,7 +636,7 @@ async fn run_with(
     report_start(settle.progress, &id, &request);
     let mut record = agent::run_as(&request, id, on_spawn).await;
     settle.finish(&mut record);
-    budget.spent(record.usage.usd.unwrap_or(0.0));
+    hold.settle(record.usage.usd.unwrap_or(0.0));
     if let Some(script) = &script {
         script.add(&serde_json::json!({
             "id": record.id, "key": request.key, "status": record.status.name(),

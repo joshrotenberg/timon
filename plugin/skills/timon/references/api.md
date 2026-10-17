@@ -1436,7 +1436,7 @@ Runs one non-interactive turn. The record has id, status (ok, failed, invalid, t
 | `system` | `string` | instructions added to the system prompt |
 | `output` | `string \| schema` | a contract name or a schema; the answer is validated |
 | `timeout` | `number \| string` | seconds, or a duration such as "10m" |
-| `budget` | `{ usd: number?, turns: integer? }` | spending and turn limits for one run (claude) |
+| `budget` | `{ usd: number?, turns: integer? }` | spending and turn limits for one run (claude); under a USD limit, usd is also what the run holds while it runs, so other runs are not given that money |
 | `resume` | `string` | a session id timon started, to continue |
 | `fork` | `string` | a session id to branch from (claude) |
 | `native` | `string[]` | extra command-line arguments for the provider; codex takes them before exec, so only its top-level options work |
