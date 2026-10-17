@@ -183,3 +183,53 @@ review = {
   end,
 },
 ```
+
+## From a sequence to a workflow
+
+Keep a workflow once you run the same sequence of agent work and checks on a second input. Bug
+reports, audited by hand: reproduce one with a failing test, check the test fails and shows
+that bug, report. Kept as a script, the steps and the success criteria are fixed and the report
+is the input:
+
+```lua fragment
+-- .timon/scripts/audit.lua
+-- Reproduce a bug report with a failing test, verify it, report: timon audit REPORT.md
+local report = fs.read(arg[1])
+phase("reproduce")
+local repro = agent.run{
+  access = "write", worktree = true, output = "investigation",
+  prompt = "Reproduce this bug with a failing test. Do not fix it.\n\n" .. report,
+}
+if repro.status ~= "ok" or not (repro.worktree and repro.worktree.kept) then
+  return { reproduced = false, record = repro.id }   -- failed, or wrote no test
+end
+local dir = repro.worktree.path
+local function a_test_fails()
+  local t = proc.run({ "cargo", "test" }, { cwd = dir })
+  if t.code == 0 then return false, "every test passes" end
+  if not t.out:find("test result: FAILED", 1, true) then
+    return false, "cargo test exited " .. t.code .. " before a test failed"
+  end
+  return true, t.out:match("test %S+ %.%.%. FAILED") or "a test fails"
+end
+phase("verify")
+local r = flow.verify{ items = { repro.answer }, keep = "all", checks = {
+  a_test_fails,
+  { cwd = dir, prompt = "Does the new failing test here show this bug and no other?\n\n" .. report },
+} }
+return {
+  reproduced = #r.kept == 1,                -- both gates ran and passed
+  branch = repro.worktree.branch,           -- the test, to review or build the fix on
+  verdicts = r.items[1].verdicts,           -- why, gate by gate
+  usd = (repro.usage.usd or 0) + (r.usage.usd or 0),
+}
+```
+
+```sh
+timon audit reports/88.md   # the report it was built on: does it agree with the audit by hand?
+timon audit reports/91.md   # the next report
+```
+
+A workflow worth keeping does a job the project has, on the project's inputs, and its result
+says what to do next. A script that calls each `flow` pattern on made-up values is a smoke test
+of the API: it belongs in tests, if anywhere, not in `.timon/`.

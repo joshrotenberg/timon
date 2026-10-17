@@ -2093,3 +2093,408 @@ fn live_10_codex_gets_the_brief_and_the_guard() {
     );
     assert!(!outside.exists());
 }
+
+// Phase 11: keeping what proves useful (#141). An agent does ordinary work with an operation or
+// a review worth repeating, and nobody tells it to make a task or an agent. The project layer is
+// trusted before the agent starts, as a person would have done; the agent never trusts it.
+// Spends tokens.
+
+/// Markdown with one broken relative link in docs/ and one in guides/.
+fn with_docs(live: &Live, tasks: &str) {
+    live.write(
+        "docs/intro.md",
+        "See [setup](setup.md) and [api](api.md).\n",
+    );
+    live.write(
+        "docs/setup.md",
+        "Back to [intro](intro.md) or [the site](https://example.com).\n",
+    );
+    live.write(
+        "guides/index.md",
+        "Read [deploy](deploy.md) and [ops](ops/run.md).\n",
+    );
+    live.write("guides/deploy.md", "# Deploy\n");
+    live.write(".timon/tasks.lua", tasks);
+    live.commit("docs and tasks");
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+}
+
+/// A project layer with one task unrelated to links.
+const GREET_TASKS: &str = r#"return {
+  greet = { description = "Say hello", run = function() return "hello" end },
+}
+"#;
+
+/// A project layer whose links task checks docs/ only.
+const LINKS_TASKS: &str = r#"return {
+  links = {
+    description = "Broken relative links in docs/",
+    run = function()
+      local broken = {}
+      for _, file in ipairs(fs.glob("docs/**/*.md")) do
+        for target in fs.read(file):gmatch("%]%(([^)#%s]+)") do
+          if not target:find("^%a+:") and not fs.exists(path.join(path.dir(file), target)) then
+            broken[#broken + 1] = file .. " -> " .. target
+          end
+        end
+      end
+      if #broken > 0 then error{ kind = "broken_links", message = table.concat(broken, "\n") } end
+      return "no broken links"
+    end,
+  },
+}
+"#;
+
+const REPORT: &str = "Reply with each broken link as FILE -> TARGET, then say what you changed in the repository, if anything, and what you ran to check it.";
+
+impl Live {
+    /// The tasks in reach, as `(name, description)`.
+    fn tasks(&self) -> Vec<(String, String)> {
+        self.json(&["tasks", "--json"], &[])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["name"].as_str().unwrap_or("").to_owned(),
+                    t["description"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Every file under the project layer, relative to the work repository.
+    fn layer_files(&self) -> Vec<String> {
+        fn walk(dir: &Path, root: &Path, files: &mut Vec<String>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    walk(&e.path(), root, files);
+                } else {
+                    let rel = e.path().strip_prefix(root).unwrap().to_owned();
+                    files.push(rel.to_string_lossy().into_owned());
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&self.work().join(".timon"), &self.work(), &mut files);
+        files.sort();
+        files
+    }
+}
+
+/// Whether the agent looked at the definitions in reach. The session-start brief alone does
+/// not count.
+fn inspected_definitions(run: &HostRun) -> bool {
+    run.commands.iter().any(|c| {
+        ["timon tasks", "timon defs", "timon agents"]
+            .iter()
+            .any(|s| c.contains(s))
+    }) || run.tools.iter().any(|(name, input)| {
+        name == "Read" && input["file_path"].as_str().unwrap_or("").contains(".timon")
+    })
+}
+
+/// Whether a shell command ran timon with `name` as one of its words (`timon NAME`, `timon run
+/// NAME`, timon's flags first), and a word containing `word`. Whole words, so `links` does not
+/// match `links-all`.
+fn ran_task(run: &HostRun, name: &str, word: &str) -> bool {
+    run.commands.iter().any(|c| {
+        let words: Vec<&str> = c.split_whitespace().collect();
+        let Some(at) = words
+            .iter()
+            .position(|w| *w == "timon" || w.ends_with("/timon"))
+        else {
+            return false;
+        };
+        let rest = &words[at + 1..];
+        rest.contains(&name) && rest.iter().any(|w| w.contains(word))
+    })
+}
+
+/// Whether a report names `name` and says it ran or checked something. The wording is judged
+/// by eye as well: this only refuses a report that says nothing about a run.
+fn reports_a_run(text: &str, name: &str) -> bool {
+    let lower = text.to_lowercase();
+    text.contains(name)
+        && ["ran ", "run ", "verified", "tested", "checked", "timon "]
+            .iter()
+            .any(|w| lower.contains(w))
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_11_claude_keeps_a_check_and_a_later_session_reuses_it() {
+    require_live!();
+    let live = Live::new();
+    with_docs(&live, GREET_TASKS);
+    let before = live.tasks();
+    let tools = &["Read", "Write", "Edit"];
+
+    let first = live.claude_host(
+        &format!(
+            "Using timon, find the broken relative links in the Markdown files under docs/. We run this check before every release. {REPORT}"
+        ),
+        tools,
+    );
+    first.print("live_11 first use");
+    assert!(
+        inspected_definitions(&first),
+        "the agent did not look for an existing definition: {:?}",
+        first.commands
+    );
+    let after = live.tasks();
+    let added: Vec<_> = after.iter().filter(|t| !before.contains(t)).collect();
+    assert_eq!(added.len(), 1, "one task added: {after:?}");
+    let name = added[0].0.clone();
+    assert!(
+        ran_task(&first, &name, ""),
+        "the agent did not validate {name} by running it: {:?}",
+        first.commands
+    );
+    assert!(first.text.contains("api.md"), "{}", first.text);
+    assert!(
+        reports_a_run(&first.text, &name),
+        "the report names what it added and what ran: {}",
+        first.text
+    );
+    assert!(first.denied.is_empty(), "denied: {:?}", first.denied);
+
+    // A later session, with a different input and no memory of the first.
+    let second = live.claude_host(
+        &format!(
+            "Using timon, check the Markdown files under guides/ for broken relative links before the release. {REPORT}"
+        ),
+        tools,
+    );
+    second.print("live_11 second use");
+    assert!(
+        ran_task(&second, &name, "guides"),
+        "the later session did not run {name} on guides/: {:?}",
+        second.commands
+    );
+    assert_eq!(live.tasks(), after, "the later session added no task");
+    assert!(second.text.contains("ops/run.md"), "{}", second.text);
+    assert!(second.denied.is_empty(), "denied: {:?}", second.denied);
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_11_claude_leaves_a_one_off_alone() {
+    require_live!();
+    let live = Live::new();
+    with_docs(&live, GREET_TASKS);
+    let files = live.layer_files();
+    let run = live.claude_host(
+        "Use timon to count the lines in README.md. Reply with only the number.",
+        &["Read", "Write", "Edit"],
+    );
+    run.print("live_11 one-off");
+    assert!(run.ran_timon(), "the agent never ran timon");
+    let numbers: Vec<&str> = run
+        .text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|w| !w.is_empty())
+        .collect();
+    assert_eq!(numbers, ["3"], "README.md has 3 lines: {}", run.text);
+    assert_eq!(live.layer_files(), files, "a one-off added a definition");
+    let o = live
+        .command("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert_eq!(out(&o), "", "a one-off changed the repository");
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_11_claude_extends_a_task_rather_than_duplicating_it() {
+    require_live!();
+    let live = Live::new();
+    with_docs(&live, LINKS_TASKS);
+    let run = live.claude_host(
+        &format!(
+            "Using timon, check the Markdown files under guides/ for broken relative links before the release, the way we already check docs/. {REPORT}"
+        ),
+        &["Read", "Write", "Edit"],
+    );
+    run.print("live_11 extend");
+    let tasks = live.tasks();
+    let links: Vec<_> = tasks
+        .iter()
+        .filter(|(n, d)| n.contains("link") || d.to_lowercase().contains("link"))
+        .collect();
+    assert_eq!(links.len(), 1, "one task checks links: {tasks:?}");
+    assert!(
+        ran_task(&run, "links", "guides"),
+        "the agent did not run links on guides/: {:?}",
+        run.commands
+    );
+    assert!(run.text.contains("ops/run.md"), "{}", run.text);
+    // The use that was there before still works: an extension keeps docs/ as the default.
+    let o = live.timon(&["links"], &[]);
+    assert!(err(&o).contains("api.md"), "timon links: {}", err(&o));
+    assert!(run.denied.is_empty(), "denied: {:?}", run.denied);
+}
+
+/// A crate whose docs make one claim the code contradicts and one it supports, a trusted
+/// project layer with `agents`, and user limits that cap the subagents at haiku and six runs.
+fn with_role_docs(live: &Live, agents: &[(&str, &str)]) {
+    live.write(
+        "src/lib.rs",
+        "/// How many times a request is retried.\npub const RETRIES: u32 = 3;\n/// Seconds before a request times out.\npub const TIMEOUT_SECS: u64 = 30;\n",
+    );
+    live.write(
+        "docs/config.md",
+        "# Config\n\nA request is retried 5 times.\n",
+    );
+    live.write(
+        "guides/limits.md",
+        "# Limits\n\nA request times out after 30 seconds.\n",
+    );
+    live.write(".timon/tasks.lua", GREET_TASKS);
+    for (name, text) in agents {
+        live.write(&format!(".timon/agents/{name}.lua"), text);
+    }
+    live.commit("docs and definitions");
+    let o = live.timon(&["trust"], &[]);
+    assert!(o.status.success(), "{}", err(&o));
+    let config = live.dir.path().join("timon/config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("init.lua"),
+        "return { defaults = { model = \"haiku\" }, limits = { max_runs = 6, max_usd = 0.5 } }\n",
+    )
+    .unwrap();
+}
+
+const REVIEWER: &str = r#"return {
+  description = "Reviews a change for bugs",
+  access = "read", output = "review", budget = { usd = 0.2, turns = 10 },
+  system = "Report bugs in the change, with file and line. Do not edit files.",
+}
+"#;
+
+const DOCS_CHECK: &str = "Using timon, have a read-only subagent check docs/config.md against src/lib.rs for claims the code contradicts, then give guides/limits.md the same check. Every changed doc gets this check before a release. Reply with what each check found, then say what you changed in the repository, if anything, and what you ran to check it.";
+
+impl Live {
+    /// The agent definitions in reach, as `(name, path)`.
+    fn agents(&self) -> Vec<(String, String)> {
+        self.json(&["agents", "--json"], &[])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["name"].as_str().unwrap_or("").to_owned(),
+                    a["path"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Each recorded agent run's definition and whole prompt, from its `request.json`: the
+    /// index keeps only the first 120 characters of a prompt.
+    fn run_agents(&self) -> Vec<(String, String)> {
+        let dir = self.dir.path().join("timon/state/runs");
+        self.runs()
+            .iter()
+            .map(|r| {
+                let id = r["id"].as_str().unwrap_or("");
+                let request: serde_json::Value =
+                    std::fs::read_to_string(dir.join(id).join("request.json"))
+                        .ok()
+                        .and_then(|t| serde_json::from_str(&t).ok())
+                        .unwrap_or_default();
+                (
+                    r["agent"].as_str().unwrap_or("").to_owned(),
+                    request["prompt"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Whether recorded runs of one of `names` checked both docs.
+fn checked_both_docs(runs: &[(String, String)], names: &[&str]) -> bool {
+    ["config.md", "limits.md"].iter().all(|doc| {
+        runs.iter()
+            .any(|(agent, prompt)| names.contains(&agent.as_str()) && prompt.contains(doc))
+    })
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_11_claude_keeps_a_review_role() {
+    require_live!();
+    let live = Live::new();
+    with_role_docs(&live, &[]);
+    let run = live.claude_host(DOCS_CHECK, &["Read", "Write", "Edit"]);
+    run.print("live_11 role");
+    live.costs("live_11 role");
+    assert!(
+        inspected_definitions(&run),
+        "the agent did not look for an existing definition: {:?}",
+        run.commands
+    );
+    let agents = live.agents();
+    assert_eq!(agents.len(), 1, "one role added: {agents:?}");
+    let (name, file) = &agents[0];
+    let text = std::fs::read_to_string(file).unwrap();
+    assert!(
+        !text.contains("\"write\"") && !text.contains("\"full\""),
+        "the role asks for more than read access: {text}"
+    );
+    assert!(
+        checked_both_docs(&live.run_agents(), &[name]),
+        "both docs were not checked with {name}: {:?}",
+        live.run_agents()
+    );
+    assert!(run.text.contains('5'), "the contradiction: {}", run.text);
+    assert!(
+        reports_a_run(&run.text, name),
+        "the report names the role and what ran: {}",
+        run.text
+    );
+    assert!(run.denied.is_empty(), "denied: {:?}", run.denied);
+}
+
+#[test]
+#[ignore = "live: spends tokens"]
+fn live_11_claude_builds_on_an_existing_reviewer() {
+    require_live!();
+    let live = Live::new();
+    with_role_docs(&live, &[("reviewer", REVIEWER)]);
+    let run = live.claude_host(DOCS_CHECK, &["Read", "Write", "Edit"]);
+    run.print("live_11 extend role");
+    live.costs("live_11 extend role");
+    assert!(
+        inspected_definitions(&run),
+        "the agent did not look for an existing definition: {:?}",
+        run.commands
+    );
+    let agents = live.agents();
+    let added: Vec<_> = agents.iter().filter(|(n, _)| n != "reviewer").collect();
+    assert!(added.len() <= 1, "at most one role added: {agents:?}");
+    for (name, file) in &added {
+        let text = std::fs::read_to_string(file).unwrap();
+        assert!(
+            text.contains("extends") && text.contains("reviewer"),
+            "{name} copies the reviewer instead of extending it: {text}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(live.work().join(".timon/agents/reviewer.lua")).unwrap(),
+        REVIEWER,
+        "the reviewer the project had is unchanged"
+    );
+    let mut names = vec!["reviewer"];
+    names.extend(added.iter().map(|(n, _)| n.as_str()));
+    assert!(
+        checked_both_docs(&live.run_agents(), &names),
+        "both docs were not checked with {names:?}: {:?}",
+        live.run_agents()
+    );
+    assert!(run.text.contains('5'), "the contradiction: {}", run.text);
+    assert!(run.denied.is_empty(), "denied: {:?}", run.denied);
+}

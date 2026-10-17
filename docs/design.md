@@ -831,7 +831,7 @@ timon skill show timon --ref api   # the generated API reference
 
 | Skill | Teaches |
 |---|---|
-| `timon` | What timon is, `eval` and scripts, the conventions above, the module index, errors, untrusted text, cost |
+| `timon` | What timon is, `eval` and scripts, the conventions above, the module index, errors, untrusted text, cost, keeping work that proves useful |
 | `timon-agents` | `agent.run`, contracts, fan-out, author and review loops, worktrees, budgets |
 | `timon-sessions` | Finding earlier work before answering from memory |
 | `timon-scripting` | Scripts, directories, layers, trust, Fennel |

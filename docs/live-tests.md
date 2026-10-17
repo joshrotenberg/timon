@@ -36,11 +36,29 @@ Test names carry their phase (`live_0_`, `live_1_` and so on), so a phase runs o
 | 8 | `flow` on real runs: a review with two verifiers (`flow.verify`) over a seeded bug, and a vote of three (`flow.vote`) | $0.01 |
 | 9 | `timon serve`: a Claude Code agent with only timon's MCP tools and no Bash runs a task through its tool, and does not confirm a task for the user | $0.003 |
 | 10 | hooks through the plugin on each host: the session-start brief reaches the model, and the guard refuses an edit outside the project | $0.003 for Claude; Codex reports none |
+| 11 | keeping what proves useful, with no instruction to make a task or an agent: a pre-release link check becomes one task, which the agent runs and a later session runs on another directory; a one-off question adds nothing; an existing `links` task is extended, not copied; a repeated read-only doc check becomes one role used on both docs; with a `reviewer` in reach, the agent uses it or adds a role that `extends` it | $0.02 on haiku; an acceptance target, not met yet (#141) |
 
 Phases 5 and 9 work in a crate at version 1.4.2 whose trusted project layer has three tasks:
 `version`, `release-notes` (which depends on `version` and takes `--audience`) and `wipe` (which
 asks before it runs). Phase 9 gives Claude Code `timon serve` as its only MCP server, allows only
 its tools, and checks that the agent never sends `confirmed = true` on its own.
+
+Phase 11 works in a project whose `docs/` and `guides/` each have one broken relative link, and
+for the role cases a crate whose docs make one claim its code contradicts. The project layer is
+trusted before the agent starts, as a person would have done: trust is a precondition, and no
+test lets the agent grant it. The role cases cap the subagents with user limits (haiku, 6 runs,
+$0.5). The prompts ask for the work before a release and for a report of what changed and what
+ran; they never mention tasks or agents. The assertions follow the acceptance list of #141:
+- The agent inspected `timon tasks`, `timon defs`, `timon agents` or `.timon/`. The brief alone
+  does not count.
+- It added exactly one definition and ran it: a whole word of a `timon` command for a task, the
+  recorded runs' `agent` for a role, which also asks for no more than read access.
+- With a `reviewer` in reach, any role added `extends` it and the reviewer is unchanged.
+- The report names what was added and mentions a run. Whether it says truly what was verified
+  is judged by eye from the printed transcript.
+- The `links` extension keeps `docs/` as the default, so the use the project had still works.
+  This and the exact answers (the broken targets, a reply of only `3`) may prove strict for
+  haiku; record what a first run shows before loosening them.
 
 Phase 4 runs each host with only timon added:
 - Claude Code runs with `--plugin-dir plugin`, `--setting-sources project` and an empty
@@ -91,3 +109,4 @@ records the exact arguments timon passes and the raw output, under `target/tmp/l
 | 2026-10-16 | 10 | 2.1.302 | 0.162.0 | Claude passed on the first run ($0.0023): the model named both tasks from the brief and the guard refused its Write. Codex ran no plugin hooks at first: it reads the root `plugin.json` before `.codex-plugin/plugin.json` and then lists no plugin hooks, with or without a `hooks` entry. Fixed: Codex's manifest moved to `.codex-plugin/plugin.json`. Then both pass; Codex used 33k input tokens (28k cached) and 199 output, and set `PLUGIN_ROOT` and `CLAUDE_PLUGIN_ROOT` for the hook |
 | 2026-10-16 | 0 to 10, the whole suite | 2.1.302 | 0.162.0 | 34 of 34 pass in 651 s on main at ae3a7f1 (hooks v1). $0.24 of Claude usage: the namer $0.15 and the reviewer $0.05 (both sonnet), every other test under $0.01; Codex reports none. No regressions since the per-phase runs |
 | 2026-10-16 | 0 to 10, the whole suite | 2.1.302 | 0.163.0 (`NewerUntested`: codex-wrapper 0.4.4 tested 0.145.0 to 0.147.0) | 33 of 34 pass in 563 s at 460b589, on Darwin arm64; the run exited 101. Failed: `live_5_claude_runs_tasks_through_the_plugin`, where the agent ran the default `users` audience when `developers` was asked for. Both phase 10 tests and the phase 9 task and confirmation test passed. Run once, not repeated until green, so no failure rate is claimed. Codex cost is unknown, not $0 (#84) |
+| 2026-10-17 | 11 | 2.1.302 | | 1 of 5 on haiku ($0.022) and 1 of 5 on a sonnet host ($0.30). The one-off control passed. In the other four, both models did the work correctly and kept nothing: each said it changed nothing in the repository, and several did not look for existing definitions first (`timon tasks`, `timon agents`). With guidance alone, a request to check something is treated as read-only. Whether agents should write definitions unasked, or propose them in the report, is open on #141 |
