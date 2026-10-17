@@ -83,13 +83,20 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Evaluate Lua and print each value it returns
+    #[command(
+        after_help = "-f runs a file with no words; to pass words as `arg`, run the file as a \
+                      script: timon FILE ARGS"
+    )]
     Eval {
         /// Lua source; `-` reads it from standard input
-        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        #[arg(required_unless_present = "file")]
         code: Option<String>,
-        /// Evaluate a file instead; a .fnl file is Fennel
+        /// Evaluate a file instead, with no words; a .fnl file is Fennel
         #[arg(short, long, value_name = "FILE")]
         file: Option<PathBuf>,
+        /// Words after CODE, or after -f FILE; only taken to say how to pass them
+        #[arg(hide = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        words: Vec<String>,
         /// Treat CODE as Fennel
         #[arg(long)]
         fnl: bool,
@@ -541,6 +548,36 @@ async fn run(cli: Cli) -> ExitCode {
     };
     let result = match command {
         Command::Eval {
+            code: Some(word),
+            file: Some(path),
+            words,
+            ..
+        } => {
+            let words = std::iter::once(word).chain(words).collect::<Vec<_>>();
+            return fail(
+                &Error::new("usage", "eval -f runs a file with no words")
+                    .with_hint(format!(
+                        "to pass words, run the file as a script: timon {} {}",
+                        path.display(),
+                        words.join(" ")
+                    ))
+                    .into(),
+            );
+        }
+        Command::Eval { words, .. } if !words.is_empty() => {
+            return fail(
+                &Error::new(
+                    "usage",
+                    format!("eval takes one CODE, not \"{}\"", words[0]),
+                )
+                .with_hint(
+                    "quote the code as one argument; to pass words, run a file as a \
+                         script: timon FILE ARGS",
+                )
+                .into(),
+            );
+        }
+        Command::Eval {
             code,
             file,
             fnl,
@@ -549,6 +586,7 @@ async fn run(cli: Cli) -> ExitCode {
             out_lines,
             out_json,
             stream,
+            ..
         } if in_lines || in_json || out_lines || out_json || stream => {
             let io = EvalIo {
                 in_lines,
