@@ -15,7 +15,7 @@ use crate::options;
 
 pub const DOC: Module = Module {
     name: "sqlite",
-    summary: "SQLite databases. sqlite.open returns a database: db:exec(sql, params) runs statements and returns the rows changed; db:query(sql, params) returns rows as tables keyed by column; db:one returns the first row or nil; db:last_id(); db:transaction(fn) commits, or rolls back and raises; db:close(). params is a list for ?, or a table for :name. NULL reads as nil. Errors raise sqlite_failed.",
+    summary: "SQLite databases. sqlite.open returns a database: db:exec(sql, params) runs statements and returns the rows changed; db:query(sql, params) returns rows as tables keyed by column; db:one returns the first row or nil; db:last_id(); db:transaction(fn) commits, or rolls back and raises, and a cancelled task or a failed commit rolls back too; db:close(). params is a list for ?, or a table for :name. NULL reads as nil. Errors raise sqlite_failed.",
     functions: &[Func::new(
         "open",
         "sqlite.open(path, { readonly, create }) -> db",
@@ -46,6 +46,27 @@ impl Db {
             None => {
                 Err(Error::new("closed", format!("the database {} is closed", self.name)).into())
             }
+        }
+    }
+}
+
+/// An open transaction, rolled back when dropped unless it committed: a callback that raises,
+/// a failed commit and a cancelled task all leave through the drop.
+struct Open<'a>(Option<&'a Db>);
+
+impl Open<'_> {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Open<'_> {
+    fn drop(&mut self) {
+        if let Some(db) = self.0 {
+            let _ = db.with(|conn| {
+                conn.execute_batch("rollback")
+                    .map_err(|e| failed("rollback", e))
+            });
         }
     }
 }
@@ -183,6 +204,7 @@ impl UserData for Db {
         });
         methods.add_async_method("transaction", |lua, this, f: mlua::Function| async move {
             this.with(|conn| conn.execute_batch("begin").map_err(|e| failed("begin", e)))?;
+            let open = Open(Some(&this));
             // Through the runner, so an error table comes back as a value and is raised again
             // as it was.
             let run: mlua::Function = lua.named_registry_value(crate::runtime::RUN)?;
@@ -192,12 +214,10 @@ impl UserData for Db {
                     conn.execute_batch("commit")
                         .map_err(|e| failed("commit", e))
                 })?;
+                open.disarm();
                 return Ok(out.collect::<MultiValue>());
             }
-            let _ = this.with(|conn| {
-                conn.execute_batch("rollback")
-                    .map_err(|e| failed("rollback", e))
-            });
+            drop(open);
             Err(crate::error::raise(&lua, out.next().unwrap_or(Value::Nil)))
         });
         methods.add_method("close", |_, this, ()| {
