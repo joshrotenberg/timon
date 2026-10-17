@@ -4,13 +4,22 @@
 //! scope with `budget = { runs, usd }` adds a child: a run inside it must fit every budget up
 //! to the root, and counts against each. With `reserve = true` a scope takes its runs from its
 //! parent when it starts, so a fan-out that cannot finish fails before its first run; the runs
-//! it does not use go back when it ends. Cost cannot be reserved, because it is known only
-//! after a run. Codex reports no cost, so only `runs` limits it.
+//! it does not use go back when it ends.
+//!
+//! Cost is known only after a run, so a Claude run under a USD limit holds what it may spend
+//! from the moment it starts: its own `budget.usd`, else all that is left and not held by
+//! another run. Its `--max-budget-usd` is that hold. When it ends it is charged what it
+//! reported, and the rest of the hold is freed; a cancelled run frees it all. A run that finds
+//! everything left held waits for a hold to come back, so concurrent runs are never given the
+//! same money twice. Claude checks its cap after each API call, so a run can still spend a
+//! little past its hold; the next run sees that overspend. Codex reports no cost, so only
+//! `runs` limits it.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use mlua::{Lua, Table};
+use tokio::sync::Notify;
 
 use crate::error::Error;
 
@@ -21,6 +30,10 @@ pub struct Budget {
     max_usd: Option<f64>,
     runs: Cell<u64>,
     usd: Cell<f64>,
+    /// Held by Claude runs that have started and not yet ended.
+    held: Cell<f64>,
+    /// Told when a hold anywhere under the root comes back.
+    freed: Rc<Notify>,
     /// Took its runs from the parent up front; the parent already counts them.
     reserves: bool,
     parent: Option<Rc<Budget>>,
@@ -66,6 +79,8 @@ impl Budget {
             max_usd,
             runs: Cell::new(0),
             usd: Cell::new(0.0),
+            held: Cell::new(0.0),
+            freed: Rc::new(Notify::new()),
             reserves: false,
             parent: None,
         })
@@ -104,6 +119,8 @@ impl Budget {
             max_usd,
             runs: Cell::new(0),
             usd: Cell::new(0.0),
+            held: Cell::new(0.0),
+            freed: parent.freed.clone(),
             reserves: reserve,
             parent: Some(parent.clone()),
         }))
@@ -152,9 +169,43 @@ impl Budget {
         }
     }
 
+    /// Admits a run that is about to start, or raises `budget_exceeded` if any budget up to
+    /// the root has no runs or money left. A Claude run (`claude`) holds what it may spend:
+    /// `own`, capped at the least any budget has left and not held; while that is nothing, it
+    /// waits for a hold to come back.
+    pub async fn admit(self: &Rc<Self>, claude: bool, own: Option<f64>) -> Result<Hold, Error> {
+        loop {
+            self.check()?;
+            let free = self.usd_free();
+            if claude && free.is_some_and(|free| free <= 0.0) {
+                self.freed.notified().await;
+                continue;
+            }
+            self.charge_runs(1);
+            let usd = free.map(|free| own.map_or(free, |own| own.min(free)));
+            let hold = Hold {
+                budget: self.clone(),
+                usd: if claude { usd.unwrap_or(0.0) } else { 0.0 },
+                limit: usd,
+            };
+            for b in self.all() {
+                b.held.set(b.held.get() + hold.usd);
+            }
+            return Ok(hold);
+        }
+    }
+
     /// Counts a run that is about to start, or raises `budget_exceeded` if any budget up to
     /// the root has no runs or money left.
-    pub fn start_run(&self) -> Result<(), Error> {
+    #[cfg(test)]
+    fn start_run(&self) -> Result<(), Error> {
+        self.check()?;
+        self.charge_runs(1);
+        Ok(())
+    }
+
+    /// Raises `budget_exceeded` if any budget up to the root has no runs or money left.
+    fn check(&self) -> Result<(), Error> {
         for b in self.run_chain() {
             if let Some(max) = b.max_runs
                 && b.runs.get() >= max
@@ -185,21 +236,23 @@ impl Budget {
                 .with_hint(b.owner.usd_hint()));
             }
         }
-        self.charge_runs(1);
         Ok(())
     }
 
     /// Adds a finished run's cost to every budget up to the root.
-    pub fn spent(&self, usd: f64) {
+    fn spent(&self, usd: f64) {
         for b in self.all() {
             b.usd.set(b.usd.get() + usd);
         }
     }
 
-    /// The least money any budget up to the root has left, if any sets a limit.
-    pub fn usd_left(&self) -> Option<f64> {
+    /// The least money any budget up to the root has left and not held, if any sets a limit.
+    fn usd_free(&self) -> Option<f64> {
         self.all()
-            .filter_map(|b| b.max_usd.map(|max| (max - b.usd.get()).max(0.0)))
+            .filter_map(|b| {
+                b.max_usd
+                    .map(|max| (max - b.usd.get() - b.held.get()).max(0.0))
+            })
             .reduce(f64::min)
     }
 
@@ -212,6 +265,39 @@ impl Budget {
             let unused = max.saturating_sub(self.runs.get());
             parent.charge_runs(-(unused as i64));
         }
+    }
+}
+
+/// A started run's place in its budgets: the money it holds until it ends.
+pub struct Hold {
+    budget: Rc<Budget>,
+    usd: f64,
+    limit: Option<f64>,
+}
+
+impl Hold {
+    /// The most the run may spend, when any budget up to the root sets a USD limit.
+    pub fn usd(&self) -> Option<f64> {
+        self.limit
+    }
+
+    /// Ends the run: charges what it reported, and frees the hold.
+    pub fn settle(self, usd: f64) {
+        self.budget.spent(usd);
+    }
+}
+
+impl Drop for Hold {
+    /// Frees the hold. A run dropped without settling (cancelled) is charged nothing, as its
+    /// cost is unknown.
+    fn drop(&mut self) {
+        if self.usd == 0.0 {
+            return;
+        }
+        for b in self.budget.all() {
+            b.held.set((b.held.get() - self.usd).max(0.0));
+        }
+        self.budget.freed.notify_waiters();
     }
 }
 
@@ -280,22 +366,79 @@ mod tests {
         assert_eq!(root.runs.get(), 1, "the unused run went back");
     }
 
-    #[test]
-    fn money_is_checked_everywhere_and_the_least_left_caps_a_run() {
+    #[tokio::test]
+    async fn money_is_checked_everywhere_and_the_least_left_caps_a_run() {
         let root = Budget::root(None, Some(1.0));
         let scope = Budget::child(&root, None, Some(0.02), false).unwrap();
-        assert_eq!(scope.usd_left(), Some(0.02));
-        scope.start_run().unwrap();
-        scope.spent(0.015);
-        assert!((scope.usd_left().unwrap() - 0.005).abs() < 1e-9);
+        let run = scope.admit(true, None).await.unwrap();
+        assert_eq!(run.usd(), Some(0.02));
+        run.settle(0.015);
+        assert!((scope.usd_free().unwrap() - 0.005).abs() < 1e-9);
         assert!((root.usd.get() - 0.015).abs() < 1e-9);
-        scope.spent(0.01);
+        scope.admit(true, None).await.unwrap().settle(0.01);
         assert!(
             scope
-                .start_run()
-                .unwrap_err()
+                .admit(true, None)
+                .await
+                .err()
+                .unwrap()
                 .message
                 .starts_with("the scope's budget has spent")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_waits_for_held_money_and_gets_what_was_not_spent() {
+        let root = Budget::root(None, Some(0.02));
+        let first = root.admit(true, None).await.unwrap();
+        assert_eq!(first.usd(), Some(0.02));
+        let (second, ()) = tokio::join!(root.admit(true, None), async {
+            tokio::task::yield_now().await;
+            first.settle(0.005);
+        });
+        let second = second.unwrap();
+        assert!((second.usd().unwrap() - 0.015).abs() < 1e-9);
+        assert_eq!(root.runs.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn holds_count_in_every_enclosing_budget() {
+        let root = Budget::root(None, Some(1.0));
+        let scope = Budget::child(&root, None, Some(0.02), false).unwrap();
+        let inside = scope.admit(true, None).await.unwrap();
+        let capped = root.admit(true, Some(0.1)).await.unwrap();
+        assert_eq!(capped.usd(), Some(0.1));
+        let outside = root.admit(true, None).await.unwrap();
+        assert!((outside.usd().unwrap() - 0.88).abs() < 1e-9);
+        drop((inside, capped, outside));
+        assert_eq!(root.held.get(), 0.0);
+        assert_eq!(scope.held.get(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_frees_its_hold_and_is_charged_nothing() {
+        let root = Budget::root(None, Some(0.02));
+        drop(root.admit(true, None).await.unwrap());
+        assert_eq!(root.usd.get(), 0.0);
+        assert_eq!(root.admit(true, None).await.unwrap().usd(), Some(0.02));
+    }
+
+    #[tokio::test]
+    async fn codex_runs_hold_nothing_and_never_wait() {
+        let root = Budget::root(None, Some(0.02));
+        let claude = root.admit(true, None).await.unwrap();
+        let codex = root.admit(false, None).await.unwrap();
+        assert_eq!(root.held.get(), 0.02);
+        drop((claude, codex));
+        assert_eq!(root.held.get(), 0.0);
+        assert_eq!(
+            Budget::root(Some(1), None)
+                .admit(true, Some(0.5))
+                .await
+                .unwrap()
+                .usd(),
+            None,
+            "without a USD limit the run keeps its own cap"
         );
     }
 }

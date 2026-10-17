@@ -1522,6 +1522,97 @@ fn a_claude_run_may_spend_only_what_every_budget_has_left() {
     );
 }
 
+/// The `--max-budget-usd` each run was given, from its request record, sorted.
+fn allowances(s: &Sandbox) -> Vec<f64> {
+    let mut out: Vec<f64> = std::fs::read_dir(s.root().join("timon/state/runs"))
+        .unwrap()
+        .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("request.json")).ok())
+        .map(|text| {
+            let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+            request["budget"]["usd"].as_f64().unwrap()
+        })
+        .collect();
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+#[test]
+fn concurrent_claude_runs_never_share_the_money_left() {
+    let s = Sandbox::new();
+    let o = s.cli(
+        &[
+            "--max-usd",
+            "0.02",
+            "eval",
+            "local out = par.map({ 1, 2, 3 }, function(i)
+               local ok, r = try(agent.run, { prompt = 'p' .. i })
+               return ok and r.status or r.kind
+             end)
+             table.sort(out)
+             return out",
+        ],
+        &[("FAKE_DELAY", "0.2")],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    // The first run holds all $0.02; the next waits, and gets what the first did not spend.
+    // The fake ignores its cap and spends $0.0125 anyway, so the third is refused.
+    assert_eq!(r, serde_json::json!(["budget_exceeded", "ok", "ok"]));
+    let given = allowances(&s);
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert!((given[0] - 0.0075).abs() < 1e-9, "{given:?}");
+    assert!((given[1] - 0.02).abs() < 1e-9, "{given:?}");
+}
+
+#[test]
+fn runs_with_their_own_cap_share_a_scope_and_a_cancelled_run_frees_its_hold() {
+    let s = Sandbox::new();
+    let running = s.root().join("running");
+    std::fs::create_dir_all(&running).unwrap();
+    let o = s.cli(
+        &[
+            "--max-usd",
+            "0.05",
+            "eval",
+            "scope(function()
+               par.map({ 1, 2, 3 }, function(i)
+                 return agent.run{ prompt = 'p' .. i, budget = { usd = 0.01 } }
+               end)
+             end, { budget = { usd = 0.03 } })
+             local v = par.race(
+               function() return agent.run{ prompt = 'slow' } end,
+               function() sleep('100ms') return 'cancelled' end)
+             return { v, agent.run{ prompt = 'after' }.status }",
+        ],
+        &[
+            ("FAKE_DELAY", "0.3"),
+            ("FAKE_RUNNING_DIR", running.to_str().unwrap()),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r, serde_json::json!(["cancelled", "ok"]));
+    // Three holds of $0.01 fit the scope's $0.03, so the three ran at once.
+    let seen: Vec<String> = std::fs::read_dir(s.root())
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().into_string().ok()?;
+            name.starts_with("seen-")
+                .then(|| std::fs::read_to_string(e.path()).unwrap())
+        })
+        .collect();
+    assert!(seen.iter().any(|n| n == "3"), "{seen:?}");
+    // The slow run held all the invocation had left; cancelled, it was charged nothing and
+    // freed its hold, so the next run may spend the same.
+    let given = allowances(&s);
+    let want = [0.01, 0.01, 0.01, 0.0125, 0.0125];
+    assert_eq!(given.len(), want.len(), "{given:?}");
+    for (g, w) in given.iter().zip(want) {
+        assert!((g - w).abs() < 1e-9, "{given:?}");
+    }
+}
+
 #[test]
 fn reserve_fails_before_the_first_run_and_gives_back_what_it_did_not_use() {
     let s = Sandbox::new();
