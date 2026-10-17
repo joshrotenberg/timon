@@ -660,7 +660,8 @@ prefer tools to a shell, or have no shell:
   `{ error = { kind, message, hint, data } }`. A task call is a script run record, as from the
   CLI.
 - A task whose plan asks `confirm` takes a required `confirmed`; a call without it is an error
-  telling the agent to ask the user. Only the user's answer should set it.
+  telling the agent to ask the user. Only the user's answer should set it. A task cannot
+  declare an option by that name, and a task that does not ask takes no `confirmed`.
 - The skills are resources, `timon://skills/NAME`, so a client without plugin support reads the
   same guidance.
 - Each call runs in a fresh runtime on the `LocalSet`, behind a channel from tower-mcp's `Send`

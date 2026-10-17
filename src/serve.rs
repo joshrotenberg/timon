@@ -210,7 +210,7 @@ async fn run_task(
         .into());
     }
     let mut args = args.clone();
-    if let Some(o) = args.as_object_mut() {
+    if let Some(o) = args.as_object_mut().filter(|_| !questions.is_empty()) {
         o.remove("confirmed");
     }
     let given = tasks::given_from_json(rt, task, &args)?;

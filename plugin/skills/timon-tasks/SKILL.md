@@ -172,8 +172,9 @@ rather than a shell. Each public task is a tool whose input schema is its option
 claude mcp add timon -- timon serve      # Claude Code, from the project directory
 ```
 
-A task that asks `confirm` takes `confirmed = true`, which only the user's answer should set. A
-result is `{ value }`; a failure is an error result with kind, message and hint.
+A task that asks `confirm` takes `confirmed = true`, which only the user's answer should set, so
+no task declares an option named `confirmed`. A result is `{ value }`; a failure is an error
+result with kind, message and hint.
 
 In Fennel, `tasks.fnl` returns the same table:
 
