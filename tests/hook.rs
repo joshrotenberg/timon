@@ -280,6 +280,41 @@ fn the_guard_keeps_edits_inside_the_allowed_directories() {
 }
 
 #[test]
+fn the_guard_follows_a_symlink_before_its_parent_segment() {
+    let s = Sandbox::new();
+    s.file(
+        ".timon/init.lua",
+        "return { guard = { writes = { '.' } } }\n",
+    );
+    s.trust();
+    let proj = s.project();
+    let outside = s.home().join("outside");
+    std::fs::create_dir_all(outside.join("a/b")).unwrap();
+    std::os::unix::fs::symlink(outside.join("a/b"), proj.join("link")).unwrap();
+    let write = |path: &str| {
+        let mut input = pre("Write", json!({ "file_path": path }));
+        input["cwd"] = json!(proj);
+        s.hook(input)
+    };
+
+    let direct = outside.join("a/x.txt").display().to_string();
+    assert!(denied(&write(&direct)).is_some());
+    let reason = denied(&write("link/../x.txt"))
+        .expect("link/.. is outside/a, not the project")
+        .to_owned();
+    assert!(reason.contains(&direct), "{reason}");
+    assert!(denied(&write(&proj.join("link/../x.txt").display().to_string())).is_some());
+    assert!(denied(&write("link/new/../../x.txt")).is_some());
+
+    assert_eq!(write("src/new/../x.txt"), Json::Null, "a missing directory");
+    assert_eq!(write("link/../../../proj/x.txt"), Json::Null, "back inside");
+    assert!(
+        denied(&write("src/../../x.txt")).is_some(),
+        "a lexical escape"
+    );
+}
+
+#[test]
 fn the_guard_reads_codex_patches_and_shell_commands() {
     let s = Sandbox::new();
     s.file(

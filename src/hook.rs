@@ -479,8 +479,9 @@ fn brief(
 
 // --- the guard ---------------------------------------------------------------------------
 
-/// `~/` expanded, joined onto `base` when relative, `.` and `..` resolved, and symlinks
-/// resolved for the part of the path that exists.
+/// `~/` expanded, joined onto `base` when relative, and `.`, `..` and symlinks resolved in
+/// the order the filesystem resolves them: a symlink is followed before the `..` after it.
+/// Past the first component that does not exist, the rest is resolved lexically.
 fn resolve(base: &Path, path: &str) -> PathBuf {
     let path = match path.strip_prefix("~/") {
         Some(rest) => std::env::home_dir().unwrap_or_default().join(rest),
@@ -491,30 +492,28 @@ fn resolve(base: &Path, path: &str) -> PathBuf {
     } else {
         base.join(path)
     };
-    let mut clean = PathBuf::new();
+    let mut resolved = PathBuf::new();
+    let mut exists = true;
     for c in joined.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                clean.pop();
+                resolved.pop();
             }
-            other => clean.push(other),
+            Component::Normal(name) if exists => {
+                let next = resolved.join(name);
+                match next.canonicalize() {
+                    Ok(real) => resolved = real,
+                    Err(_) => {
+                        resolved = next;
+                        exists = false;
+                    }
+                }
+            }
+            other => resolved.push(other),
         }
     }
-    let mut existing = clean.as_path();
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(real) = existing.canonicalize() {
-            return rest.iter().rev().fold(real, |p, part| p.join(part));
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_owned());
-                existing = parent;
-            }
-            _ => return clean,
-        }
-    }
+    resolved
 }
 
 /// The files an `apply_patch` patch adds, updates, deletes or moves to.
@@ -681,6 +680,33 @@ mod tests {
         assert_eq!(
             resolve(Path::new("/"), &format!("{}/x", dir.path().display())),
             real.join("x")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_followed_before_the_parent_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(real.join("outside/a/b")).unwrap();
+        std::fs::create_dir(real.join("project")).unwrap();
+        std::os::unix::fs::symlink(real.join("outside/a/b"), real.join("project/link")).unwrap();
+        let project = real.join("project");
+        assert_eq!(
+            resolve(&project, "link/../x.txt"),
+            real.join("outside/a/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "link/new/../x.txt"),
+            real.join("outside/a/b/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "missing/dir/../x.txt"),
+            project.join("missing/x.txt")
+        );
+        assert_eq!(
+            resolve(&project, "../../x.txt"),
+            real.parent().unwrap().join("x.txt")
         );
     }
 }
