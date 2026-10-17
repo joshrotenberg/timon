@@ -174,6 +174,35 @@ fn the_brief_lists_this_projects_sessions_and_tasks() {
 }
 
 #[test]
+fn the_brief_lists_tasks_with_names_as_long_as_its_lines() {
+    let s = Sandbox::new();
+    s.file(
+        ".timon/tasks.lua",
+        "local function run() end\n\
+         return {\n\
+           [string.rep('a', 99)] = { description = 'just fits', run = run },\n\
+           [string.rep('b', 100)] = { description = 'at the line', run = run },\n\
+           [string.rep('c', 101)] = { description = 'past the line', run = run },\n\
+           [string.rep('d', 101)] = { run = run },\n\
+         }\n",
+    );
+    s.trust();
+    let out = s.hook(start(A));
+    let brief = context(&out);
+    let tasks: Vec<&str> = brief.lines().skip(2).collect();
+    assert_eq!(
+        tasks,
+        [
+            format!("- {}: ...", "a".repeat(99)),
+            format!("- {}: ...", "b".repeat(100)),
+            format!("- {}: ...", "c".repeat(101)),
+            format!("- {}", "d".repeat(101)),
+        ],
+        "{out}"
+    );
+}
+
+#[test]
 fn the_brief_says_nothing_when_there_is_nothing() {
     let s = Sandbox::new();
     std::fs::remove_dir(s.project().join(".timon")).unwrap();

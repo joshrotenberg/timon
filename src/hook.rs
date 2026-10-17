@@ -373,6 +373,16 @@ fn one_line(text: &str, max: usize) -> String {
     }
 }
 
+/// A task's line in the brief: its name, and as much of its description as fits the line.
+fn task_line(name: &str, description: &str) -> String {
+    if description.trim().is_empty() {
+        format!("- {name}")
+    } else {
+        let room = BRIEF_LINE.saturating_sub(name.chars().count());
+        format!("- {name}: {}", one_line(description, room))
+    }
+}
+
 fn age(modified: &str) -> String {
     let Ok(at) = chrono::DateTime::parse_from_rfc3339(modified) else {
         return "?".into();
@@ -450,15 +460,7 @@ fn brief(
         lines
             .push("Tasks (timon NAME runs one; timon tasks lists them with their options):".into());
         for t in public.iter().take(BRIEF_TASKS) {
-            if t.description.trim().is_empty() {
-                lines.push(format!("- {}", t.name));
-            } else {
-                lines.push(format!(
-                    "- {}: {}",
-                    t.name,
-                    one_line(&t.description, BRIEF_LINE - t.name.len())
-                ));
-            }
+            lines.push(task_line(&t.name, &t.description));
         }
         if public.len() > BRIEF_TASKS {
             lines.push(format!("- and {} more", public.len() - BRIEF_TASKS));
@@ -663,6 +665,29 @@ mod tests {
                 "permissionDecisionReason": "no",
                 "additionalContext": "why\n\nmore",
             } })
+        );
+    }
+
+    #[test]
+    fn task_lines_fit_names_of_any_length() {
+        assert_eq!(
+            task_line("check", "Run every gate"),
+            "- check: Run every gate"
+        );
+        assert_eq!(
+            task_line(&"x".repeat(101), ""),
+            format!("- {}", "x".repeat(101))
+        );
+        for n in [97, 100, 101, 200] {
+            let name = "x".repeat(n);
+            assert_eq!(task_line(&name, "long name"), format!("- {name}: ..."));
+        }
+        let wide = "é".repeat(60);
+        let line = task_line(&wide, &"ü".repeat(50));
+        assert_eq!(line, format!("- {wide}: {}...", "ü".repeat(37)));
+        assert_eq!(
+            task_line(&"é".repeat(101), "d"),
+            format!("- {}: ...", "é".repeat(101))
         );
     }
 
