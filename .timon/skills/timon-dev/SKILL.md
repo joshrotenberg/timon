@@ -24,6 +24,8 @@ timon recent 6h               # recent timon sessions and recorded agent runs
 timon naming-audit            # the namer agent over six areas; spends tokens (limit $2)
 timon bump --version 0.2.0    # a pull request that sets the version
 timon release                 # after it merges: check, tag, push, GitHub release (asks first)
+timon update                  # install main and update the plugin in Claude Code and Codex
+timon fix-issues 117,118 119  # the fixer agent per group of issues, in worktrees; spends tokens
 ```
 
 `bump` and `release` live in `.timon/lib/release.lua`; `tests/release.rs` runs them against a
