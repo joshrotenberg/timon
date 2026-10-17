@@ -66,13 +66,12 @@ local down = function() error("reviewer unavailable", 0) end
 local function kept(keep, checks)
   return #flow.verify{ items = { "finding" }, keep = keep, checks = checks }.kept
 end
-return
-  kept("majority", { yes, no }),    -- 1: a tie keeps
-  kept("majority", { no, down }),   -- 1: one rejection is not most of two gates
-  kept("majority", { down, down }), -- 1: no gate ran, so none rejected
-  kept("all", { yes, down }),       -- 0: every gate must run and pass
-  kept("any", { no, down }),        -- 0: no gate passed
-  kept("any", { no, yes })          -- 1: one gate passed
+assert(kept("majority", { yes, no }) == 1)    -- a tie keeps
+assert(kept("majority", { no, down }) == 1)   -- one rejection is not most of two gates
+assert(kept("majority", { down, down }) == 1) -- no gate ran, so none rejected
+assert(kept("all", { yes, down }) == 0)       -- every gate must run and pass
+assert(kept("any", { no, down }) == 0)        -- no gate passed
+assert(kept("any", { no, yes }) == 1)         -- one gate passed
 ```
 
 `status = "ok"` says the pattern ran to the end, not that a gate accepted anything. Read
@@ -87,8 +86,9 @@ local inconclusive = {}
 for _, v in ipairs(item.verdicts) do
   if v.status ~= "ok" then inconclusive[#inconclusive + 1] = v.status .. ": " .. v.error.message end
 end
-return r.status, #r.kept, item.passed, item.rejected, inconclusive
--- ok, 1, 0, 0, { "failed: reviewer unavailable", "failed: reviewer unavailable" }
+assert(r.status == "ok" and #r.kept == 1 and item.passed == 0 and item.rejected == 0)
+assert(#inconclusive == 2 and inconclusive[1] == "failed: reviewer unavailable")
+return inconclusive
 ```
 
 Use `keep = "all"` when every gate must accept an item; an item no gate could judge is then

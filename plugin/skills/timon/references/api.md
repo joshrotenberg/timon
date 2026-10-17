@@ -1086,7 +1086,7 @@ return r.accepted, r.value  -- true, a long first
 
 ### `flow.verify{ items, check | checks, keep, limit } -> { status, kept, rejected, items }`
 
-Checks every item with each gate and keeps or rejects it: majority (default) keeps an item unless most gates reject it, all keeps one every gate passes, any keeps one at least one passes. A gate that did not run neither keeps nor rejects.
+Checks every item with each gate and keeps or rejects it: majority (default) keeps an item unless most gates reject it, all keeps one every gate passes, any keeps one at least one passes. A gate that did not run counts as no rejection under majority, blocks the keep under all, and adds nothing under any.
 
 | Option | Type | |
 |---|---|---|
