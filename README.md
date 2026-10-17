@@ -136,6 +136,7 @@ Read the layer, then trust it once:
 timon trust && timon tasks
 timon check              # every gate, before a push
 timon em-dash            # also runs in cargo test
+timon book               # the doc site, generated: an mdbook in target/book (needs mdbook)
 timon update             # install timon from main and update its plugin in Claude Code and Codex
 ```
 

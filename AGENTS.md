@@ -59,6 +59,10 @@ While bootstrapping:
   it when working on timon, and add to it when a script or agent would help.
 - `timon em-dash` checks our own text for em dashes; `cargo test` runs it over the
   repository.
+- The doc site is generated: `timon book` builds an mdbook from the README, the skills,
+  `help()` and the built-in task declarations into `target/book` (#168). Change those sources,
+  never a generated page. A new README section or skill needs a place in `.timon/lib/book.lua`,
+  and a relative link to a file that does not exist fails the build.
 
 ## State and tests
 
