@@ -110,8 +110,10 @@ pub fn search(paths: &Paths, limits: &Limits, opts: &SearchOptions) -> Result<Js
             .map_err(|e| Error::new("bad_query", format!("invalid regular expression: {e}")))?;
     }
     // Words that make no tokens can never match; fail before spending the refresh budget.
-    if matches!(opts.mode, Mode::Terms | Mode::Phrase) {
-        index::validate_terms(&opts.query).map_err(query_error)?;
+    match opts.mode {
+        Mode::Terms => index::validate_terms(&opts.query).map_err(query_error)?,
+        Mode::Phrase => index::validate_phrase(&opts.query).map_err(query_error)?,
+        Mode::Fts | Mode::Regex => {}
     }
     let (query, fts) = match opts.mode {
         Mode::Phrase => (format!("\"{}\"", opts.query.replace('"', "\"\"")), true),

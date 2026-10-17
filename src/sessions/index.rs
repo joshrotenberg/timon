@@ -1263,6 +1263,17 @@ pub fn validate_terms(query: &str) -> Result<()> {
     Ok(())
 }
 
+/// A phrase is one sequence of tokens, so punctuation inside it is skipped as FTS5 skips it,
+/// and only a phrase with no tokens at all cannot match (#132).
+pub fn validate_phrase(query: &str) -> Result<()> {
+    if !QueryTokenizer::new()?.has_tokens(query)? {
+        return Err(IndexError::Query(format!(
+            "phrase {query:?} cannot match: the records tokenizer produces no tokens; use regex for punctuation"
+        )));
+    }
+    Ok(())
+}
+
 pub fn fts_absence_note(query: &str) -> Result<Option<String>> {
     let tokenizer = QueryTokenizer::new()?;
     let mut chars = query.chars().peekable();

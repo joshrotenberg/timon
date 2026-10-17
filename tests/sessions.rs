@@ -649,6 +649,37 @@ fn search_modes() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("bad_query"));
 }
 
+/// #132: a phrase is checked as a whole, so a piece of punctuation inside it is skipped as
+/// FTS5 skips it; a phrase with no tokens at all and a tokenless term are still rejected.
+#[test]
+fn a_phrase_may_hold_punctuation_between_its_words() {
+    let a = Archive::new();
+    a.claude(
+        "-work-p",
+        ID_A,
+        &[claude_user("run cargo test -- --nocapture now", "/work/p")],
+        60,
+    );
+    let r = a.json(
+        "sessions.search{ query = 'cargo test -- --nocapture', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(hit_ids(&r), [ID_A], "{r}");
+    let r = a.json(
+        "sessions.search{ query = 'test -- now', mode = 'phrase' }",
+        &[],
+    );
+    assert_eq!(r["returned"], 0, "the words are not adjacent: {r}");
+    assert_eq!(r["absence_is_proof"], true, "{r}");
+    for code in [
+        "sessions.search{ query = '-- ::', mode = 'phrase' }",
+        "sessions.search{ query = 'cargo --' }",
+    ] {
+        let stderr = out(&a.timon(code, &[])).1;
+        assert!(stderr.contains("bad_query"), "{code}: {stderr}");
+    }
+}
+
 #[test]
 fn the_current_session_and_recent_ones_are_left_out_and_counted() {
     let a = searchable();
