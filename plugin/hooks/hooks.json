@@ -1,5 +1,5 @@
 {
-  "description": "timon: a brief of this project's recent sessions and tasks at session start, and the guard before edits and shell commands",
+  "description": "timon: a brief of this project's recent sessions, interrupted runs and tasks at session start, and the guard before edits and shell commands",
   "hooks": {
     "SessionStart": [
       {

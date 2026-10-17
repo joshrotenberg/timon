@@ -243,8 +243,10 @@ In Fennel, `tasks.fnl` returns the same table:
 With the plugin, Claude Code and Codex run `timon hook` at session start (SessionStart) and
 before edits and shell commands (PreToolUse). It reads the host's event on stdin, runs the
 handlers `init.lua` names for the event, and prints the host's JSON. For another event, add a
-host hook that runs `timon hook` yourself. By default, session start adds a brief: this project's
-sessions from the last 7 days and its public tasks. Before a tool runs, the guard checks the
+host hook that runs `timon hook` yourself. By default, session start adds a brief: this
+project's sessions from the last 7 days, its agent and script runs from those days that were
+interrupted (`timon runs show ID` reads one; `timon --resume ID` reruns a script run, reusing
+the agent runs that finished), and its public tasks. Before a tool runs, the guard checks the
 call once a `guard` setting exists.
 
 ```lua fragment

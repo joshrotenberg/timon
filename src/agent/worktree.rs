@@ -15,6 +15,8 @@ pub struct Worktree {
     pub repo: PathBuf,
     pub path: PathBuf,
     pub branch: String,
+    /// The directory the run was asked to work in; the worktree stands in for it.
+    pub from: PathBuf,
     base: String,
 }
 
@@ -83,6 +85,7 @@ impl Worktree {
             repo,
             path,
             branch,
+            from: std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf()),
             base,
         })
     }
@@ -115,6 +118,7 @@ impl Worktree {
         let mut out = json!({
             "path": self.path,
             "branch": self.branch,
+            "from": self.from,
             "kept": kept,
         });
         if kept && let Some((head, state)) = fingerprint(&self.path) {

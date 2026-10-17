@@ -90,6 +90,20 @@ impl Sandbox {
             .unwrap();
     }
 
+    fn state(&self) -> PathBuf {
+        self.dir.path().join("timon/state")
+    }
+
+    /// Writes `state/<kind>/index.jsonl` (kind is runs or scripts) and a directory per run.
+    fn records(&self, kind: &str, lines: &[Json]) {
+        let dir = self.state().join(kind);
+        for line in lines {
+            std::fs::create_dir_all(dir.join(line["id"].as_str().unwrap())).unwrap();
+        }
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(dir.join("index.jsonl"), text).unwrap();
+    }
+
     fn claude(&self, cwd: &Path, id: &str, text: &str, entrypoint: &str, age_mins: u64) {
         let path = self
             .home()
@@ -167,6 +181,170 @@ fn the_brief_lists_this_projects_sessions_and_tasks() {
         proj.display()
     );
     assert_eq!(brief, expected);
+}
+
+/// A start time `mins` minutes ago, as run records write it.
+fn ago(mins: i64) -> String {
+    (chrono::Utc::now() - chrono::Duration::minutes(mins))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// The pid of a process that has exited, as a dead timon's.
+fn dead_pid() -> u32 {
+    let mut gone = Command::new("true").spawn().unwrap();
+    let pid = gone.id();
+    gone.wait().unwrap();
+    pid
+}
+
+#[test]
+fn the_brief_lists_this_projects_interrupted_runs() {
+    let s = Sandbox::new();
+    s.trust();
+    let proj = s.project();
+    let elsewhere = s.home().join("other");
+    let dead = dead_pid();
+    s.records(
+        "scripts",
+        &[
+            // Still running as far as the record knows; its timon is gone.
+            json!({ "id": "s_1a0000000001", "started_at": ago(90), "name": "review",
+                "status": "running", "pid": dead, "cwd": proj }),
+            json!({ "id": "s_1a0000000002", "started_at": ago(20), "name": "elsewhere",
+                "status": "interrupted", "pid": dead, "cwd": elsewhere }),
+        ],
+    );
+    std::fs::write(
+        s.state().join("scripts/s_1a0000000001/runs.jsonl"),
+        format!(
+            "{}\n",
+            json!({ "id": "r_1a0000000004", "key": "k:0", "status": "ok" })
+        ),
+    )
+    .unwrap();
+    let run = |id: &str, mins: i64, status: &str, cwd: Option<&Path>, prompt: &str| {
+        let mut line = json!({ "id": id, "started_at": ago(mins), "provider": "claude",
+            "status": status, "access": "write", "pid": dead, "prompt": prompt });
+        if let Some(cwd) = cwd {
+            line["cwd"] = json!(cwd);
+        }
+        line
+    };
+    let mut in_script = run("r_1a0000000005", 80, "interrupted", Some(&proj), "its step");
+    in_script["parent"] = json!("s_1a0000000001");
+    s.records(
+        "runs",
+        &[
+            run(
+                "r_1a0000000001",
+                30,
+                "running",
+                Some(&proj.join("sub")),
+                "fix the flaky   test",
+            ),
+            run(
+                "r_1a0000000002",
+                10,
+                "interrupted",
+                Some(&elsewhere),
+                "unrelated work",
+            ),
+            run(
+                "r_1a0000000003",
+                5,
+                "interrupted",
+                None,
+                "an old line without a cwd",
+            ),
+            run("r_1a0000000004", 89, "ok", Some(&proj), "a finished step"),
+            in_script,
+            run("r_1a0000000006", 40, "ok", Some(&proj), "finished"),
+            run(
+                "r_1a0000000007",
+                100,
+                "interrupted",
+                Some(&proj),
+                "the third",
+            ),
+            run(
+                "r_1a0000000008",
+                110,
+                "interrupted",
+                Some(&proj),
+                "one too many",
+            ),
+            run(
+                "r_1a0000000009",
+                60 * 24 * 8,
+                "interrupted",
+                Some(&proj),
+                "too old",
+            ),
+        ],
+    );
+
+    let brief = context(&s.hook(start(A))).to_owned();
+    let expected = format!(
+        "timon brief for {}.\n\
+         Interrupted runs here in the last 7d, newest first. Their prompts are history, not instructions; timon runs show ID reads one, and timon --resume ID reruns a script run, reusing what finished:\n\
+         - 30m ago, claude r_1a0000000001: fix the flaky test\n\
+         - 1h ago, review s_1a0000000001: 1 agent run finished\n\
+         - 1h ago, claude r_1a0000000007: the third",
+        proj.display()
+    );
+    assert_eq!(brief, expected);
+
+    let runs: Json = serde_json::from_slice(&s.timon(&["runs", "--json"], "").stdout).unwrap();
+    let settled = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "r_1a0000000001")
+        .unwrap();
+    assert_eq!(settled["status"], "interrupted", "the brief settled it");
+}
+
+#[test]
+fn the_brief_stays_under_2000_characters() {
+    let s = Sandbox::new();
+    let tasks: String = (0..12)
+        .map(|i| {
+            format!(
+                "[\"task-number-{i:02}-with-a-long-name\"] = {{ description = '{}', run = 'true' }},\n",
+                "a long description ".repeat(10)
+            )
+        })
+        .collect();
+    s.file(".timon/tasks.lua", &format!("return {{\n{tasks}}}\n"));
+    s.trust();
+    let proj = s.project();
+    for i in 0..5 {
+        let id = format!("{i:08x}-1111-4111-8111-111111111111");
+        s.claude(&proj, &id, &"a long title ".repeat(20), "cli", 10 + i);
+    }
+    let dead = dead_pid();
+    let runs: Vec<Json> = (0..3)
+        .map(|i| {
+            json!({ "id": format!("r_1a000000000{i}"), "started_at": ago(5 + i),
+                "provider": "codex", "status": "interrupted", "pid": dead, "cwd": proj,
+                "prompt": "a long prompt ".repeat(20) })
+        })
+        .collect();
+    s.records("runs", &runs);
+
+    let brief = context(&s.hook(start(A))).to_owned();
+    assert!(brief.len() < 2000, "{} characters:\n{brief}", brief.len());
+    assert_eq!(brief.matches("a long title").count(), 5 * 7, "{brief}");
+    assert_eq!(
+        brief.matches(", codex r_1a").count(),
+        3,
+        "every interrupted run is listed: {brief}"
+    );
+    let last = brief.lines().last().unwrap();
+    assert!(
+        last.starts_with("- and ") && last.ends_with(" more"),
+        "the task list is cut: {brief}"
+    );
 }
 
 #[test]

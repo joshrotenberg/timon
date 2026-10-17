@@ -1,5 +1,6 @@
 //! Run records on disk: `state/runs/<id>/request.json` and `result.json`, and one line per run
-//! in `state/runs/index.jsonl`. Everything written is redacted first.
+//! state in `state/runs/index.jsonl`, with the directory the run works for (`cwd`; lines
+//! written before it was added have none). Everything written is redacted first.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -126,6 +127,18 @@ fn snippet(prompt: &str) -> String {
     }
 }
 
+/// The directory a run works for, for its index line: the one its worktree was made from,
+/// else its request's cwd made absolute, else this process's current directory.
+fn run_cwd(request: &Request, worktree: Option<&Json>) -> Json {
+    match worktree.map(|w| &w["from"]) {
+        Some(from @ Json::String(_)) => from.clone(),
+        _ => json!(match &request.cwd {
+            Some(cwd) => std::path::absolute(cwd).ok(),
+            None => std::env::current_dir().ok(),
+        }),
+    }
+}
+
 impl Store {
     pub fn new(state: &Path) -> Self {
         Self {
@@ -197,6 +210,7 @@ impl Store {
             "status": "running",
             "access": request.access.name(),
             "pid": std::process::id(),
+            "cwd": run_cwd(request, worktree),
             "prompt": snippet(&request.prompt),
         });
         redact_value(&mut line);
@@ -384,6 +398,7 @@ impl Store {
             "ms": record.ms,
             "usd": record.usage.usd,
             "output_tokens": record.usage.output_tokens,
+            "cwd": run_cwd(request, record.worktree.as_ref()),
             "prompt": snippet(&request.prompt),
         });
         redact_value(&mut line);

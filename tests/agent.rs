@@ -733,6 +733,11 @@ fn every_run_is_recorded_with_secrets_redacted() {
         .map(|l| l["status"].as_str().unwrap())
         .collect();
     assert_eq!(statuses, ["running", "running", "ok"]);
+    let here = serde_json::json!(s.root().canonicalize().unwrap());
+    assert!(
+        states.iter().all(|l| l["cwd"] == here),
+        "every index line has the run's directory: {index}"
+    );
     assert!(
         states[1]["provider_pid"].as_u64().is_some(),
         "{}",
@@ -881,9 +886,18 @@ fn a_clean_worktree_is_removed_with_its_branch() {
     );
     let wt = &r["worktree"];
     assert_eq!(wt["kept"], false);
+    assert_eq!(wt["from"], serde_json::json!(repo));
     let path = PathBuf::from(wt["path"].as_str().unwrap());
     assert!(path.starts_with(s.root().join("timon/state/worktrees")));
     assert!(!path.exists());
+    let index = std::fs::read_to_string(s.root().join("timon/state/runs/index.jsonl")).unwrap();
+    assert!(
+        index
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .all(|l| l["cwd"] == serde_json::json!(repo)),
+        "a worktree run's index lines have the directory it was asked for: {index}"
+    );
     let ran_in: String = serde_json::from_value(s.call("claude", 0)["cwd"].clone()).unwrap();
     assert_eq!(
         std::fs::canonicalize(path.parent().unwrap()).unwrap(),

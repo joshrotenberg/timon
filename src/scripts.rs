@@ -6,7 +6,8 @@
 //! runs.jsonl     { id, key, status, usd, cached } per agent run
 //! ```
 //!
-//! and a line per change in `state/scripts/index.jsonl`. Each agent run in the script points
+//! and a line per change in `state/scripts/index.jsonl`, with the directory it ran in (`cwd`;
+//! lines written before it was added have none). Each agent run in the script points
 //! back with `parent`. A script run can be resumed: agent runs whose request key matches a
 //! reusable run of the earlier script run return that run's record instead of running again.
 
@@ -240,6 +241,7 @@ impl ScriptRun {
             "name": request["name"],
             "status": status,
             "pid": std::process::id(),
+            "cwd": request["cwd"],
             "runs": t.runs,
             "cached": t.cached,
             "usd": t.usd,
@@ -397,6 +399,16 @@ pub fn list(state: &Path, limit: usize) -> Vec<Json> {
     entries.reverse();
     entries.truncate(limit);
     entries
+}
+
+/// How many agent runs of script run `id` finished `ok`, reused ones included.
+pub fn finished_runs(state: &Path, id: &str) -> usize {
+    std::fs::read_to_string(state.join("scripts").join(id).join("runs.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Json>(l).ok())
+        .filter(|e| e["status"] == "ok")
+        .count()
 }
 
 /// One script run's request, result and runs. `id` may be an unambiguous prefix.
