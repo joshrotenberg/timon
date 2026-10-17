@@ -539,6 +539,7 @@ The supervisor is Rust and owns every child process. Scripts cannot bypass it.
   usd } })` per part of a script, and `budget` per run. A run counts against every budget it
   is inside, and one that would exceed any of them raises `budget_exceeded` before it starts.
   A Claude run's `--max-budget-usd` is capped at the least any enclosing budget has left.
+  A failed run counts the cost it reported, and keeps that usage and its session.
   `reserve = true` takes a scope's runs from the enclosing budget up front and gives back the
   unused ones when it ends. Codex reports tokens only, so a USD budget counts Claude runs and
   says so.

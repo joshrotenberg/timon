@@ -780,6 +780,52 @@ fn max_usd_from_settings_stops_the_next_run() {
     assert!(!s.logs().join("claude-2.json").exists());
 }
 
+#[test]
+fn a_failed_claude_run_keeps_its_usage_and_counts_against_max_usd() {
+    let s = Sandbox::new();
+    for events in ["true", "false"] {
+        let code = format!(
+            "local runs = {{}}
+             local ok, err = try(function()
+               for i = 1, 3 do runs[i] = agent.run{{ prompt = 'x', events = {events} }} end
+             end)
+             return {{ runs = runs, message = err.message }}"
+        );
+        let o = s.cli(
+            &["eval", &code, "--max-usd", "0.02"],
+            &[("FAKE_MODE", "max_turns")],
+        );
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(
+            r["message"], "this invocation has spent $0.0250; the limit is $0.02",
+            "events = {events}: {r}"
+        );
+        let runs = r["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "{r}");
+        for run in runs {
+            assert_eq!(run["status"], "failed");
+            assert_eq!(run["error"]["kind"], "max_turns");
+            assert_eq!(run["usage"]["usd"], 0.0125, "events = {events}: {run}");
+            assert_eq!(
+                run["session"], "claude-session-1",
+                "events = {events}: {run}"
+            );
+        }
+        if events == "true" {
+            assert_eq!(runs[0]["usage"]["input_tokens"], 120);
+            assert_eq!(runs[0]["usage"]["output_tokens"], 30);
+        }
+    }
+    // A failure that reported nothing leaves its cost unknown.
+    let r = s.json(
+        "agent.run{ prompt = 'x' }",
+        &[("TIMON_CLAUDE_BIN", "/no/such/claude")],
+    );
+    assert_eq!(r["status"], "failed");
+    assert!(r["usage"]["usd"].is_null(), "{r}");
+}
+
 // Worktrees (#23)
 
 fn git(dir: &Path, args: &[&str]) -> String {

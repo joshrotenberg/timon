@@ -331,8 +331,28 @@ pub(crate) struct Answer {
     pub usage: Usage,
 }
 
+/// How a run failed, with the session and usage the provider reported before it did.
+pub(crate) struct Failure {
+    pub status: Status,
+    pub error: Error,
+    pub session: Option<String>,
+    pub usage: Usage,
+}
+
+impl From<(Status, Error)> for Box<Failure> {
+    /// A failure that reported nothing: no session, and an unknown cost.
+    fn from((status, error): (Status, Error)) -> Self {
+        Box::new(Failure {
+            status,
+            error,
+            session: None,
+            usage: Usage::default(),
+        })
+    }
+}
+
 /// A provider's result, or how it failed.
-pub(crate) type Outcome = Result<Answer, (Status, Error)>;
+pub(crate) type Outcome = Result<Answer, Box<Failure>>;
 
 /// Told the provider process's pid and process group as soon as it starts, so a record can
 /// name the process to stop if timon dies first.
@@ -447,9 +467,11 @@ pub async fn run_as(request: &Request, id: String, on_spawn: Option<SpawnHook>) 
                 }
             }
         }
-        Err((status, error)) => {
-            record.status = status;
-            record.error = Some(error);
+        Err(failure) => {
+            record.status = failure.status;
+            record.error = Some(failure.error);
+            record.session = failure.session;
+            record.usage = failure.usage;
         }
     }
     record

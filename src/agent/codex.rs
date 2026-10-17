@@ -41,7 +41,7 @@ pub(super) async fn run(
     events: &mut Vec<Json>,
 ) -> Outcome {
     if request.fork.is_some() {
-        return Err((Status::Failed, no_fork()));
+        return Err((Status::Failed, no_fork()).into());
     }
     let io = |what: &str, e: std::io::Error| {
         (
@@ -167,12 +167,12 @@ pub(super) async fn run(
                     &mut stdout.lines().filter_map(|l| serde_json::from_str(l).ok()),
                 );
             }
-            return Err(failure(&e));
+            return Err(failure(&e).into());
         }
     };
 
     if let Some(failed) = result.events.iter().find(|e| e.is_turn_failed()) {
-        return Err((Status::Failed, turn_failed(failed)));
+        return Err((Status::Failed, turn_failed(failed)).into());
     }
     let text = std::fs::read_to_string(&last_message)
         .ok()
