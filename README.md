@@ -113,6 +113,7 @@ fixer on each group of issues in its own worktree, then the gates and the review
 timon trust && timon tasks
 timon check              # every gate, before a push
 timon em-dash            # also runs in cargo test
+timon update             # install timon from main and update its plugin in Claude Code and Codex
 ```
 
 ## License

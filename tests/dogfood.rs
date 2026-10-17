@@ -134,6 +134,20 @@ fn the_project_layer_loads_agents_tasks_scripts_and_skills() {
     assert_eq!(release["depends"], serde_json::json!(["check"]));
     assert_eq!(release["group"], "release");
     assert!(release["confirm"].is_string());
+    let update = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "update")
+        .unwrap();
+    assert_eq!(update["group"], "release");
+    // A dry run plans the update without installing anything; a bad source is a usage error.
+    let plan = p.timon(&["--dry-run", "update", "--from", "checkout"], &[]);
+    assert!(plan.status.success(), "{}", err(&plan));
+    let plan: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(plan["plan"][0]["opts"]["from"], "checkout");
+    let bad = p.timon(&["--dry-run", "update", "--from", "crates"], &[]);
+    assert_eq!(bad.status.code(), Some(2), "{}", err(&bad));
     let skills = p.names(&["skill", "list", "--json"]);
     assert!(skills.iter().any(|(n, _)| n == "timon-dev"), "{skills:?}");
 }
