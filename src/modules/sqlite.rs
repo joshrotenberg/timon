@@ -50,6 +50,27 @@ impl Db {
     }
 }
 
+/// An open transaction, rolled back when dropped unless it committed: a callback that raises,
+/// a failed commit and a cancelled task all leave through the drop.
+struct Open<'a>(Option<&'a Db>);
+
+impl Open<'_> {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Open<'_> {
+    fn drop(&mut self) {
+        if let Some(db) = self.0 {
+            let _ = db.with(|conn| {
+                conn.execute_batch("rollback")
+                    .map_err(|e| failed("rollback", e))
+            });
+        }
+    }
+}
+
 fn to_sql(v: Value) -> mlua::Result<Sql> {
     Ok(match v {
         Value::Nil => Sql::Null,
@@ -183,6 +204,7 @@ impl UserData for Db {
         });
         methods.add_async_method("transaction", |lua, this, f: mlua::Function| async move {
             this.with(|conn| conn.execute_batch("begin").map_err(|e| failed("begin", e)))?;
+            let open = Open(Some(&this));
             // Through the runner, so an error table comes back as a value and is raised again
             // as it was.
             let run: mlua::Function = lua.named_registry_value(crate::runtime::RUN)?;
@@ -192,12 +214,10 @@ impl UserData for Db {
                     conn.execute_batch("commit")
                         .map_err(|e| failed("commit", e))
                 })?;
+                open.disarm();
                 return Ok(out.collect::<MultiValue>());
             }
-            let _ = this.with(|conn| {
-                conn.execute_batch("rollback")
-                    .map_err(|e| failed("rollback", e))
-            });
+            drop(open);
             Err(crate::error::raise(&lua, out.next().unwrap_or(Value::Nil)))
         });
         methods.add_method("close", |_, this, ()| {

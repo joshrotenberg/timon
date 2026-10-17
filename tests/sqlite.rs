@@ -105,6 +105,53 @@ fn transactions_commit_or_roll_back() {
 }
 
 #[test]
+fn a_cancelled_or_failed_transaction_rolls_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(
+        eval(
+            tmp.path(),
+            r#"local db = sqlite.open()
+               db:exec("create table t (n integer)")
+               par.race(
+                 function()
+                   db:transaction(function()
+                     db:exec("insert into t values (1)")
+                     sleep("200ms")
+                   end)
+                 end,
+                 function() sleep("30ms"); return true end
+               )
+               local cancelled = db:one("select count(*) as n from t").n
+               db:transaction(function() db:exec("insert into t values (2)") end)
+               return cancelled, db:one("select group_concat(n) as all_ from t").all_"#
+        ),
+        "0\n2\n",
+        "a cancelled callback rolls back"
+    );
+    assert_eq!(
+        eval(
+            tmp.path(),
+            r#"local db = sqlite.open()
+               db:exec("pragma foreign_keys = on")
+               db:exec("create table parent (id integer primary key)")
+               db:exec([[create table child (pid integer
+                 references parent(id) deferrable initially deferred)]])
+               local ok, err = try(function()
+                 db:transaction(function() db:exec("insert into child values (7)") end)
+               end)
+               local left = db:one("select count(*) as n from child").n
+               db:transaction(function()
+                 db:exec("insert into parent values (7)")
+                 db:exec("insert into child values (7)")
+               end)
+               return ok, err.kind, left, db:one("select count(*) as n from child").n"#
+        ),
+        "false\nsqlite_failed\n0\n1\n",
+        "a failed commit rolls back"
+    );
+}
+
+#[test]
 fn mistakes_are_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
