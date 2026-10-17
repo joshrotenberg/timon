@@ -260,7 +260,8 @@ pub struct Record {
     pub usage: Usage,
     pub ms: u64,
     pub events: Option<Vec<Json>>,
-    /// `{ path, branch, kept }` when the run used a worktree.
+    /// `{ path, branch, kept }` when the run used a worktree, plus `head` and `state` (the
+    /// fingerprint a resume compares) when it was kept.
     pub worktree: Option<Json>,
     pub label: Option<String>,
     pub phase: Option<String>,

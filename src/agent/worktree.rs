@@ -132,7 +132,12 @@ pub fn fingerprint(path: &Path) -> Option<(String, String)> {
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
     // NUL-separated, so names come as they are rather than quoted.
     let status = git_bytes(path, &["status", "--porcelain=v1", "-z", "-uall"]).ok()?;
-    let diff = git_bytes(path, &["diff", "HEAD", "--binary"]).ok()?;
+    // No external diff or textconv: the hash depends on the content alone, not on git config.
+    let diff = git_bytes(
+        path,
+        &["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv"],
+    )
+    .ok()?;
     let mut hash = Sha256::new();
     hash.update(&status);
     hash.update(&diff);
