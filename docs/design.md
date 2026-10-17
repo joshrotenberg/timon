@@ -240,7 +240,8 @@ end)
 - If `fn` or any child raises, the scope cancels the remaining children, waits for them to
   stop, and raises the first error. A cancelled agent run is recorded as `cancelled`.
 - `s:spawn(f, ...)` starts `f(...)` as a child and returns a handle: `h:await()` returns its
-  values or raises its error, `h:cancel()` is idempotent, and `h:done()` does not wait.
+  values or raises its error, `h:cancel()` is idempotent and wakes whoever is already awaiting
+  the task with `cancelled` (`par.first` counts it as finished), and `h:done()` does not wait.
 - `s:cancel()` cancels every child still running, for example once one result is enough.
 - A script's main chunk is a scope, and the global `spawn(f, ...)` spawns on the innermost
   active scope. A script that spawns without awaiting still waits for its children before it

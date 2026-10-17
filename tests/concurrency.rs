@@ -149,6 +149,65 @@ fn awaiting_a_cancelled_task_raises_cancelled() {
 }
 
 #[test]
+fn cancelling_a_task_wakes_tasks_already_awaiting_it() {
+    // Cancelling changed the task's state without a notification, and aborting the task's
+    // future dropped its sleep, so an await that had already started was never woken.
+    let out = eval(
+        r#"
+        return scope(function(s)
+          local h = s:spawn(sleep, 60)
+          local function waiter()
+            local ok, err = try(h.await, h)
+            return err.kind
+          end
+          local a, b = s:spawn(waiter), s:spawn(waiter)
+          -- The canceller stays running, so its own end wakes nobody.
+          s:spawn(function() sleep(0.01); h:cancel(); return a:await() end)
+          return a:await(), b:await()
+        end)
+        "#,
+    );
+    assert_eq!(out, ["cancelled", "cancelled"]);
+}
+
+#[test]
+fn awaiters_after_a_cancel_see_cancelled() {
+    let out = eval(
+        r#"
+        return scope(function(s)
+          local h = s:spawn(sleep, 60)
+          h:cancel()
+          local function waiter()
+            local ok, err = try(h.await, h)
+            return err.kind
+          end
+          local a, b = s:spawn(waiter), s:spawn(waiter)
+          return a:await(), b:await()
+        end)
+        "#,
+    );
+    assert_eq!(out, ["cancelled", "cancelled"]);
+}
+
+#[test]
+fn first_wakes_when_a_task_is_cancelled() {
+    let out = eval(
+        r#"
+        return scope(function(s)
+          local h = s:spawn(sleep, 60)
+          local other = s:spawn(sleep, 60)
+          local first = s:spawn(par.first, { other, h })
+          s:spawn(function() sleep(0.01); h:cancel(); return first:await() end)
+          local i = first:await()
+          other:cancel()
+          return i
+        end)
+        "#,
+    );
+    assert_eq!(out, ["2"]);
+}
+
+#[test]
 fn a_script_waits_for_tasks_it_did_not_await() {
     let out = run(&[
         "finished = false\nspawn(function() sleep(0.01); finished = true end)",
