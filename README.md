@@ -6,6 +6,9 @@ first class: run Claude and Codex as subagents, read every past session, validat
 against contracts, all with budgets and run records. Skills are bundled, and it ships as a
 Claude Code and Codex plugin.
 
+As an agent works, useful commands, recurring specialist roles and repeatable collaborations can
+become tested project definitions that later sessions discover and reuse.
+
 Design: [docs/design.md](docs/design.md).
 
 ## Status
@@ -121,7 +124,12 @@ timon: undefined_global: undefined global "prnt"
 The repository has its own project layer in `.timon/`: a reviewer, a naming agent and a fixer
 agent with their contracts, the gates and release tasks, scripts (em-dash, fix-issues,
 naming-audit, parity, recent) and a timon-dev skill. `timon fix-issues 117,118 119` runs the
-fixer on each group of issues in its own worktree, then the gates and the reviewer on its branch. Read it, then trust it once:
+fixer on each group of issues in its own worktree, then the gates and the reviewer on its branch.
+Both came from real work: they were written for a batch of 22 audit issues (#116 to #137), reuse
+the reviewer that already existed, and the first run sent a fix back into the script, since the
+read-only reviewer could not run `git diff` (#138). The `timon` skill's "Keep what proves useful"
+says when to keep a task, script, agent or workflow, and when a one-off stays one. Read the
+layer, then trust it once:
 
 ```sh
 timon trust && timon tasks
