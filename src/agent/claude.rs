@@ -304,11 +304,13 @@ pub(super) fn diagnostic(text: &str) -> String {
     if lines.len() <= 5 {
         return lines.join(" | ");
     }
+    let is_error = |l: &&&str| l.to_lowercase().starts_with("error");
+    let tail = &lines[lines.len() - 5..];
+    if tail.iter().any(|l| is_error(&l)) {
+        return tail.join(" | ");
+    }
     let start = lines.len() - 4;
-    let primary = lines[..start]
-        .iter()
-        .find(|l| l.to_lowercase().starts_with("error"))
-        .unwrap_or(&lines[0]);
+    let primary = lines[..start].iter().find(is_error).unwrap_or(&lines[0]);
     std::iter::once(primary)
         .chain(&lines[start..])
         .copied()
@@ -330,5 +332,10 @@ mod tests {
         );
         assert_eq!(super::diagnostic("a\n\nb\n"), "a | b");
         assert_eq!(super::diagnostic("1\n2\n3\n4\n5\n6"), "1 | 3 | 4 | 5 | 6");
+        assert_eq!(
+            super::diagnostic("1\n2\n3\n4\nerror: x\n6"),
+            "2 | 3 | 4 | error: x | 6",
+            "an error line already in the tail needs nothing in front"
+        );
     }
 }
