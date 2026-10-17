@@ -504,6 +504,26 @@ impl Drop for Settle {
     }
 }
 
+/// Refuses to resume a session no recorded run started, so a script never continues a
+/// person's own sessions.
+fn check_started(lua: &Lua, session: &str) -> Result<(), Error> {
+    let started = lua
+        .named_registry_value::<Option<String>>(STATE_DIR)?
+        .is_some_and(|state| {
+            agent::records::Store::new(std::path::Path::new(&state))
+                .sessions()
+                .contains(session)
+        });
+    if started {
+        return Ok(());
+    }
+    Err(Error::new(
+        "unknown_session",
+        format!("timon did not start session \"{session}\", so it cannot resume it"),
+    )
+    .with_hint("fork = ID branches from any session and leaves it untouched (claude)"))
+}
+
 /// Runs one agent turn for the task on `thread`, charging that task's budgets.
 async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
     Ok(run_with(lua, spec, thread).await?.0)
@@ -521,6 +541,9 @@ async fn run_with(
     let request = request(&lua, &fields)?;
     let wants_answer = request.output.is_some();
     agent::check(&request)?;
+    if let Some(session) = &request.resume {
+        check_started(&lua, session)?;
+    }
     // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
     let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());
     let mut request = request;

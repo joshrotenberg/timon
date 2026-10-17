@@ -347,6 +347,47 @@ fn continue_resumes_and_fork_branches() {
 }
 
 #[test]
+fn resume_takes_only_sessions_timon_started_and_fork_takes_any() {
+    let s = Sandbox::new();
+    let o = s.timon(
+        "agent.run{ provider = 'claude', prompt = 'continue', resume = 'foreign-session' }",
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("unknown_session: timon did not start session \"foreign-session\""),
+        "{stderr}"
+    );
+    assert!(stderr.contains("hint: fork = "), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(s.logs()).unwrap().count(),
+        0,
+        "the provider was started for a foreign session"
+    );
+
+    let r = s.json(
+        "local first = agent.run{ prompt = 'first' }\nreturn agent.run{ prompt = 'second', resume = first.session }",
+        &[],
+    );
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(has_pair(
+        &s.args("claude", 1),
+        "--resume",
+        "claude-session-1"
+    ));
+
+    let r = s.json("agent.run{ prompt = 'x', fork = 'foreign-session' }", &[]);
+    assert_eq!(r["status"], "ok", "{r}");
+    let args = s.args("claude", 2);
+    assert!(
+        has_pair(&args, "--resume", "foreign-session")
+            && args.contains(&"--fork-session".to_owned()),
+        "{args:?}"
+    );
+}
+
+#[test]
 fn continue_keeps_the_earlier_request_and_spec_overrides_it() {
     let s = Sandbox::new();
     s.json(
@@ -605,10 +646,11 @@ fn codex_runs_sandboxed_with_a_schema_file() {
 fn codex_resume_uses_the_sandbox_config_key() {
     let s = Sandbox::new();
     s.json(
-        "agent.run{ provider = 'codex', prompt = 'x', resume = 'thread-9', access = 'write' }",
+        "local first = agent.run{ provider = 'codex', prompt = 'x' }
+         return agent.run{ provider = 'codex', prompt = 'y', resume = first.session, access = 'write' }",
         &[],
     );
-    let args = s.args("codex", 0);
+    let args = s.args("codex", 1);
     assert!(args.contains(&"resume".to_owned()), "{args:?}");
     assert!(
         has_pair(&args, "-c", "sandbox_mode=\"workspace-write\""),
