@@ -43,7 +43,7 @@ pub const DOC: Module = Module {
             Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude)"),
             Opt::new("resume", "string", "a session id timon started, to continue"),
             Opt::new("fork", "string", "a session id to branch from (claude)"),
-            Opt::new("native", "string[]", "extra command-line arguments for the provider"),
+            Opt::new("native", "string[]", "extra command-line arguments for the provider; codex takes them before exec, so only its top-level options work"),
             Opt::new("worktree", "boolean", "run in a new git worktree; kept only if the run changed it"),
             Opt::new("ephemeral", "boolean", "leave no session behind for the provider to resume"),
             Opt::new("events", "boolean", "add record.events: the agent's text, reasoning, tool calls and tool results"),

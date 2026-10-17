@@ -253,7 +253,8 @@ enum AgentCommand {
         /// Run in a new git worktree
         #[arg(long)]
         worktree: bool,
-        /// An extra provider argument; repeat for more
+        /// An extra provider argument; repeat for more. Codex takes it before exec, so only its
+        /// top-level options work
         #[arg(long = "native", allow_hyphen_values = true)]
         native: Vec<String>,
     },
