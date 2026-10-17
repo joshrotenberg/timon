@@ -40,7 +40,7 @@ pub const DOC: Module = Module {
             Opt::new("system", "string", "instructions added to the system prompt"),
             Opt::new("output", "string | schema", "a contract name or a schema; the answer is validated"),
             Opt::new("timeout", "number | string", "seconds, or a duration such as \"10m\""),
-            Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude)"),
+            Opt::new("budget", "{ usd: number?, turns: integer? }", "spending and turn limits for one run (claude); under a USD limit, usd is also what the run holds while it runs, so other runs are not given that money"),
             Opt::new("resume", "string", "a session id timon started, to continue"),
             Opt::new("fork", "string", "a session id to branch from (claude)"),
             Opt::new("native", "string[]", "extra command-line arguments for the provider"),
