@@ -255,6 +255,50 @@ fn filters_by_project_and_since() {
     assert_eq!(ids, [ID_A]);
 }
 
+/// #131: a week count that is negative, not finite or too large is a bad option, not a panic.
+#[test]
+fn week_filters_take_fractions_and_reject_what_is_not_a_time() {
+    let a = fixture();
+    let ids = |r: &serde_json::Value| -> Vec<String> {
+        r["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // 0.0007 weeks is about 7 minutes.
+    assert_eq!(
+        ids(&a.json("sessions.list{ since = '0.0007w' }", &[])),
+        [ID_A]
+    );
+    assert_eq!(
+        ids(&a.json("sessions.list{ since = '1.5w' }", &[])),
+        [ID_A, ID_B]
+    );
+
+    let rejected = |o: Output| {
+        let (_, stderr) = out(&o);
+        assert_eq!(o.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("bad_option"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    };
+    for week in ["-1w", "nanw", "infw", "-infw", "1e300w", "100000000w"] {
+        rejected(a.timon(&format!("sessions.list{{ since = '{week}' }}"), &[]));
+        for opt in ["since", "until"] {
+            rejected(a.timon(
+                &format!("sessions.search{{ query = 'build', [\"{opt}\"] = '{week}' }}"),
+                &[],
+            ));
+            rejected(a.cli(
+                &["sessions", "search", "build", &format!("--{opt}={week}")],
+                &[],
+            ));
+        }
+        rejected(a.cli(&["sessions", "list", &format!("--since={week}")], &[]));
+    }
+}
+
 #[test]
 fn filters_by_directory_whole_components_only() {
     let a = fixture();
