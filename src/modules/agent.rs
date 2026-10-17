@@ -407,6 +407,7 @@ fn request(lua: &Lua, fields: &Table) -> Result<Request, Error> {
     req.idempotent = fields
         .raw_get::<Option<bool>>("idempotent")?
         .unwrap_or(false);
+    req.worktree = fields.raw_get::<Option<bool>>("worktree")?.unwrap_or(false);
     let output: Value = fields.raw_get("output")?;
     if let Value::String(name) = &output {
         req.contract = Some(name.to_string_lossy());
@@ -509,7 +510,6 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     options::check("agent.run", &spec)?;
     let fields = merged(&lua, &spec)?;
     let request = request(&lua, &fields)?;
-    let wants_worktree = fields.raw_get::<Option<bool>>("worktree")?.unwrap_or(false);
     agent::check(&request)?;
     // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
     let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());
@@ -543,7 +543,7 @@ async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Resul
     {
         request.budget.usd = Some(request.budget.usd.map_or(left, |usd| usd.min(left)));
     }
-    let worktree = if wants_worktree {
+    let worktree = if request.worktree {
         let cwd = match &request.cwd {
             Some(cwd) => cwd.clone(),
             None => std::env::current_dir()

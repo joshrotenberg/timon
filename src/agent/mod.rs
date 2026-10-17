@@ -116,6 +116,8 @@ pub struct Request {
     pub key: Option<String>,
     /// Safe to reuse on resume even though it can write.
     pub idempotent: bool,
+    /// Run in a new git worktree rather than in `cwd` itself.
+    pub worktree: bool,
     /// The name of the output contract, when `output` named one.
     pub contract: Option<String>,
 }
@@ -145,12 +147,14 @@ impl Request {
             "parent": self.parent,
             "key": self.key,
             "idempotent": self.idempotent,
+            "worktree": self.worktree,
             "contract": self.contract,
         })
     }
 
     /// The sha256 of what decides a run's answer: provider, model, effort, access, tools,
-    /// system prompt, working directory, prompt, output schema, session and native arguments.
+    /// system prompt, working directory and whether it runs in a worktree of it, prompt, output
+    /// schema, session and native arguments.
     /// Timeout, budget, events, label and phase are left out.
     pub fn hash(&self) -> String {
         use sha2::{Digest, Sha256};
@@ -163,6 +167,7 @@ impl Request {
             "tools": self.tools,
             "system": self.system,
             "cwd": cwd,
+            "worktree": self.worktree,
             "prompt": self.prompt,
             "output": self.output.as_ref().map(|s| s.json_schema()),
             "resume": self.resume,
@@ -195,6 +200,7 @@ impl Request {
             parent: None,
             key: None,
             idempotent: false,
+            worktree: false,
             contract: None,
         }
     }

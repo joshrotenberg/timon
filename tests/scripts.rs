@@ -295,6 +295,51 @@ fn a_worktree_with_content_the_fingerprint_cannot_read_is_not_reused() {
 }
 
 #[test]
+fn a_resume_that_changes_where_a_run_writes_runs_it_again() {
+    let script = "return agent.run{ prompt = 'edit', access = 'write',
+                    idempotent = arg[2] == 'idempotent', worktree = arg[1] == 'isolated' }";
+    let touch = [("FAKE_TOUCH", "note.txt")];
+
+    // From a kept worktree to the working directory.
+    let s = Sandbox::new();
+    s.git_init();
+    let path = s.script("where.lua", script);
+    let path = path.to_str().unwrap();
+    let o = s.timon(&[path, "isolated"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+    let o = s.timon(&["--resume", &id, path, "direct"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(
+        s.calls(),
+        2,
+        "a run in a worktree is not reused for a direct one"
+    );
+    assert!(
+        s.work().join("note.txt").exists(),
+        "the direct write was not made"
+    );
+
+    // From the working directory to a worktree.
+    let s = Sandbox::new();
+    s.git_init();
+    let path = s.script("where.lua", script);
+    let path = path.to_str().unwrap();
+    let o = s.timon(&[path, "direct", "idempotent"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    let id = s.last_script()["result"]["id"].as_str().unwrap().to_owned();
+    let o = s.timon(&["--resume", &id, path, "isolated", "idempotent"], &touch);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(
+        s.calls(),
+        2,
+        "a direct run is not reused for one in a worktree"
+    );
+    let r: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["worktree"]["kept"], true, "{r}");
+}
+
+#[test]
 fn a_script_can_declare_its_metadata_and_budget() {
     let s = Sandbox::new();
     let path = s.script(
