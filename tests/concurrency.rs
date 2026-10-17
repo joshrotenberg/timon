@@ -150,8 +150,8 @@ fn awaiting_a_cancelled_task_raises_cancelled() {
 
 #[test]
 fn cancelling_a_task_wakes_tasks_already_awaiting_it() {
-    // Cancelling changed the task's state without a notification, so an await that had
-    // already started slept until the cancelled task's own sleep ran out.
+    // Cancelling changed the task's state without a notification, and aborting the task's
+    // future dropped its sleep, so an await that had already started was never woken.
     let out = eval(
         r#"
         return scope(function(s)
