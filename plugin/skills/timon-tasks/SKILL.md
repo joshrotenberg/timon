@@ -89,7 +89,8 @@ timon --yes drop-db           # answers its confirm question
   `"boolean"`, `"string[]"`, `'"a" | "b"'`) or `{ type, default, short, doc }`. A non-optional
   type without a default must be given. Flags: `--base dev`, `--base=dev`, `-b dev`,
   `--verbose`, `--no-verbose`, a repeated flag for a list. Unknown flags and bad values exit 2
-  with did-you-mean, and `timon NAME --help` prints the options.
+  with did-you-mean, and `timon NAME --help` prints the options. Names use `_`, and the flag
+  uses `-`: declare `max_depth`, pass `--max-depth` (or `--max_depth`).
 - Dependencies run once each, depth first in the order declared, then the task, each with its
   own defaults. `--jobs N` (`-j`) runs dependencies that do not depend on each other at the same
   time. The first failure stops the plan, and its exit code is timon's.

@@ -200,6 +200,12 @@ impl Spec {
             };
             let name = key.to_string_lossy();
             if !valid_name(&name) {
+                let snake = name.replace('-', "_");
+                if snake != name.as_str() && valid_name(&snake) {
+                    return Err(format!(
+                        "\"{name}\" is not an option name: declare it as {snake}, and the flag is --{name}"
+                    ));
+                }
                 return Err(format!(
                     "\"{name}\" is not an option name: use lowercase letters, digits and _"
                 ));
@@ -755,6 +761,10 @@ mod tests {
         for (source, expected) in [
             (r#"{ args = "string" }"#, "\"args\" is reserved"),
             (r#"{ Base = "string" }"#, "is not an option name"),
+            (
+                r#"{ ["out-file"] = "string?" }"#,
+                "declare it as out_file, and the flag is --out-file",
+            ),
             (
                 r#"{ cfg = "table<string, string>" }"#,
                 "cannot be given on the command line",
