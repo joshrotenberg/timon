@@ -115,6 +115,46 @@ fn json_null_is_a_sentinel() {
 }
 
 #[test]
+fn json_numbers_are_signed_64_bit_integers_or_floats() {
+    // Integer tokens in signed 64-bit range stay integers and round-trip exactly.
+    for n in ["9223372036854775807", "-9223372036854775808"] {
+        assert_eq!(one(&format!("math.type(json.decode('{n}'))")), "integer");
+        assert_eq!(one(&format!("json.encode(json.decode('{n}'))")), n);
+    }
+    // Beyond that range they become floats and lose bits: distinct tokens compare equal.
+    for n in ["9223372036854775808", "-9223372036854775809"] {
+        assert_eq!(one(&format!("math.type(json.decode('{n}'))")), "float");
+    }
+    assert_eq!(
+        one("json.encode(json.decode('9223372036854775809'))"),
+        "9.223372036854776e+18"
+    );
+    assert_eq!(
+        one("json.decode('9223372036854775808') == json.decode('9223372036854775809')"),
+        "true"
+    );
+    // A decimal or exponent spelling is a float even when integral, and past 2^53 loses bits.
+    assert_eq!(one("math.type(json.decode('1.0'))"), "float");
+    assert_eq!(one("json.encode(json.decode('1e3'))"), "1000.0");
+    // Which neighbor a lost bit rounds to is the parser's business; that it is lost is the contract.
+    assert_eq!(
+        one("json.decode('9007199254740993.0') == 9007199254740993"),
+        "false"
+    );
+    assert_eq!(fails("json.decode('1e400')").kind, "bad_json");
+    // Identifiers passed as strings stay exact.
+    assert_eq!(
+        one(r#"json.encode(json.decode('{"id":"9223372036854775809"}'))"#),
+        r#"{"id":"9223372036854775809"}"#
+    );
+    // The help says so.
+    let help = one("help(json.decode)");
+    assert!(help.contains("signed 64-bit"), "{help}");
+    assert!(help.contains("as JSON strings"), "{help}");
+    assert!(help.contains("too large for a float"), "{help}");
+}
+
+#[test]
 fn json_refuses_values_it_cannot_represent() {
     assert_eq!(fails("json.encode({ f = print })").kind, "not_json");
     let hole = fails("json.encode({ [1] = 'a', [3] = 'c' })");

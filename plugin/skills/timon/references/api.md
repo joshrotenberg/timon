@@ -98,11 +98,11 @@ json.encode({ name = "timon", tags = { "lua", "agents" } })
 
 ### `json.decode(text) -> value`
 
-Decodes JSON text. Arrays and objects keep their shape when encoded again, even when empty; null becomes json.null.
+Decodes JSON text. Arrays and objects keep their shape when encoded again, even when empty; null becomes json.null. An integer token in signed 64-bit range (-2^63 to 2^63-1) becomes a Lua integer and round-trips exactly. Any other number becomes a float: an integer beyond that range loses bits, so distinct tokens can compare equal, and a decimal or exponent spelling such as 1.0 or 1e3 is a float even when integral, exact only up to 2^53, and a number too large for a float is a bad_json error. Checking for an integral float after decoding cannot recover lost bits; send identifiers that must stay exact as JSON strings.
 
 ```lua
-local data = json.decode('{"prs": [12, 14]}')
-return data.prs[2]  --> 14
+local data = json.decode('{"prs": [12, 14], "id": "9223372036854775809"}')
+return data.prs[2], data.id  --> 14, "9223372036854775809"
 ```
 
 ### `json.array(t) -> t`

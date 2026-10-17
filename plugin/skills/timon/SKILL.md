@@ -80,6 +80,16 @@ local ready = tbl.filter(prs, function(pr) return not pr.draft end)
 return tbl.map(ready, function(pr) return str.fmt("#${n} ${t}", { n = pr.number, t = pr.title }) end)
 ```
 
+Keep identifiers exact: an integer outside signed 64-bit range decodes to a float, and the lost
+bits do not come back, so ask for identifiers as strings:
+
+```lua
+local lossy = json.decode('[9223372036854775808, 9223372036854775809]')
+assert(lossy[1] == lossy[2])  -- two ids, one float
+local exact = json.decode('{"id": "9223372036854775809"}')
+return exact.id, json.encode(exact)  -- 9223372036854775809, {"id":"9223372036854775809"}
+```
+
 Query with JMESPath:
 
 ```lua

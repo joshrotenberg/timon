@@ -176,7 +176,7 @@ Lua 5.4, through mlua with the interpreter compiled in. Luau was considered and 
 |---|---|---|
 | Fennel | a supported target | not a supported target; no `_ENV` |
 | Types | LuaLS annotations and stubs, plus strict options and globals at run time | annotations parse, but mlua's Luau build (`luau0-src`) ships no type checker, so nothing checks them unless timon builds Luau's analysis library in |
-| Numbers | 64-bit integers and floats | floats only; integers above 2^53 lose precision |
+| Numbers | signed 64-bit integers and floats; a JSON integer outside that range decodes to a float and loses precision | floats only; integers above 2^53 lose precision |
 | Cleanup | `<close>` | none; `scope(fn)` only |
 | Sandbox | custom environments and hooks | read-only globals, safe environments, interrupts |
 | Evidence | validated by the due and finocchio spikes | not tried |
