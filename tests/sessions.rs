@@ -762,6 +762,70 @@ fn an_index_built_in_pieces_counts_what_a_fresh_one_does() {
     }
 }
 
+/// #122: text past a record's cap is not indexed, so a search that finds nothing in a
+/// session holding such a record proves nothing, whichever kind of record was cut.
+#[test]
+fn text_cut_from_the_index_is_not_proven_absent() {
+    let a = Archive::new();
+    a.claude(
+        "-work-long",
+        ID_A,
+        &[
+            claude_user(&format!("{} zebracorn", "a".repeat(4100)), "/work/long"),
+            serde_json::json!({ "type": "assistant", "message": { "role": "assistant", "content": [
+                { "type": "text", "text": format!("{} okapicorn", "b".repeat(4100)) },
+                { "type": "tool_use", "id": "t1", "name": "Bash", "input": { "command": "ls" } } ] } }),
+            serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1",
+                  "content": format!("{} narwhalcorn", "c".repeat(700)) } ] } }),
+        ],
+        60,
+    );
+    a.claude(
+        "-work-short",
+        ID_B,
+        &[claude_user("a short note", "/work/short")],
+        60,
+    );
+    for word in ["zebracorn", "okapicorn", "narwhalcorn"] {
+        let r = a.json(
+            &format!("sessions.search{{ query = '{word}', active = true, exclude = false }}"),
+            &[],
+        );
+        assert_eq!(r["returned"], 0, "{word}");
+        assert_eq!(r["absence_is_proof"], false, "{word}: {r}");
+        assert!(r["note"].as_str().unwrap().contains("truncated"), "{r}");
+        assert_eq!(r["coverage"]["truncated"]["sessions"], 1, "{r}");
+        assert_eq!(r["coverage"]["truncated"]["records"], 3, "{r}");
+    }
+    // A scope that leaves out the cut session can still prove absence.
+    let r = a.json(
+        "sessions.search{ query = 'zebracorn', project = 'short', active = true, exclude = false }",
+        &[],
+    );
+    assert_eq!(r["absence_is_proof"], true, "{r}");
+    assert_eq!(r["coverage"]["truncated"]["sessions"], 0, "{r}");
+
+    // An append keeps the count of what was cut before it.
+    let file = a
+        .home()
+        .join(".claude/projects/-work-long")
+        .join(format!("{ID_A}.jsonl"));
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(f, "{}", claude_user("one more short line", "/work/long")).unwrap();
+    drop(f);
+    let r = a.json(
+        "sessions.search{ query = 'zebracorn', active = true, exclude = false }",
+        &[],
+    );
+    assert_eq!(r["coverage"]["refresh"]["appended"], 1, "{r}");
+    assert_eq!(r["coverage"]["truncated"]["records"], 3, "{r}");
+    assert_eq!(r["absence_is_proof"], false, "{r}");
+}
+
 // Summaries (#43)
 
 fn fake_claude() -> String {

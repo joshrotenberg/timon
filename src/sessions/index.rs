@@ -19,10 +19,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use super::archive::{self, ArchiveEntry, SessionMeta};
-use super::transcript::{CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind};
+use super::transcript::{
+    CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind, TRUNCATED,
+};
 use super::{Backend, Limits, Paths};
 
-const SCHEMA_VERSION: i64 = 3;
+// Issue #122: version 4 counts the records each session has only in part.
+const SCHEMA_VERSION: i64 = 4;
 // Issue #36: title state needs one backfill, but projected text and record indexes agree.
 const TITLE_METADATA_VERSION: i64 = 1;
 const TOKENIZER: &str = "unicode61 remove_diacritics 2";
@@ -364,6 +367,7 @@ impl Index {
                  custom_title TEXT,
                  title_offset INTEGER NOT NULL DEFAULT -1,
                  codex_inherited_end INTEGER,
+                 truncated INTEGER NOT NULL DEFAULT 0,
                  UNIQUE (backend, session_id)
              );
              CREATE VIRTUAL TABLE records USING fts5(
@@ -584,6 +588,8 @@ struct Done {
     /// Where this pass started, to detect another process indexing the same file meanwhile.
     resumed_from: Option<(i64, u64)>,
     records: Vec<(usize, RecordKind, Option<String>, String)>,
+    /// Records in `records` cut at their cap, whose text past it is not indexed.
+    truncated: usize,
     state: ProjectionState,
     /// `region_hashes` at `state.offset`, so the next pass can tell an append from a rewrite.
     hashes: (i64, i64),
@@ -622,6 +628,7 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         Work::Full => (None, None),
     };
     let mut records = Vec::new();
+    let mut truncated = 0;
     let resume = if metadata_refresh {
         let mut state = resume?;
         // Issue #36: an old binary can rewrite a file while retaining its previous title.
@@ -642,6 +649,7 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
                 continue;
             }
             if let Some(t) = r.text {
+                truncated += t.ends_with(TRUNCATED) as usize;
                 records.push((r.index, r.kind, r.name, t));
             }
         }
@@ -662,6 +670,7 @@ fn project(job: Job, limits: &Limits) -> Option<Done> {
         metadata_refresh,
         resumed_from,
         records,
+        truncated,
         state,
         hashes,
     })
@@ -943,18 +952,22 @@ impl Index {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let k = key(d.entry.backend, &d.entry.session_id);
-        let existing: Option<(i64, i64)> = tx
+        let existing: Option<(i64, i64, i64)> = tx
             .query_row(
-                "SELECT id, offset FROM sessions WHERE backend = ?1 AND session_id = ?2",
+                "SELECT id, offset, truncated FROM sessions WHERE backend = ?1 AND session_id = ?2",
                 params![k.0.as_str(), k.1],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
+        let mut truncated = d.truncated as i64;
         if let Some((id, from)) = d.resumed_from {
-            if existing != Some((id, from as i64)) {
-                return Ok(false);
+            match existing {
+                Some((i, offset, before)) if (i, offset) == (id, from as i64) => {
+                    truncated += before;
+                }
+                _ => return Ok(false),
             }
-        } else if let Some((id, _)) = existing {
+        } else if let Some((id, _, _)) = existing {
             delete_records(&tx, id)?;
         }
         let paths_text = [d.meta.cwd.as_deref(), d.meta.relocated_cwd.as_deref()]
@@ -969,8 +982,8 @@ impl Index {
         let id: i64 = tx.query_row(
             "INSERT INTO sessions (backend, session_id, file, size, mtime_ns, meta, paths, origin,
                  subagent, text_indexed, projection_version, offset, next_index, codex_mode,
-                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+                 head_hash, tail_hash, run_category, run_count, last_kind, last_hash, title_metadata_version, custom_title, title_offset, codex_inherited_end, last_user_filtered_hash, last_user_streams, truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
              ON CONFLICT (backend, session_id) DO UPDATE SET
                  file = excluded.file, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  meta = excluded.meta, paths = excluded.paths, origin = excluded.origin,
@@ -986,7 +999,8 @@ impl Index {
                  title_offset = excluded.title_offset,
                  codex_inherited_end = excluded.codex_inherited_end,
                  last_user_filtered_hash = excluded.last_user_filtered_hash,
-                 last_user_streams = excluded.last_user_streams
+                 last_user_streams = excluded.last_user_streams,
+                 truncated = excluded.truncated
              RETURNING id",
             params![
                 k.0.as_str(),
@@ -1015,6 +1029,7 @@ impl Index {
                 s.codex_inherited_end.map(|n| n as i64),
                 s.last_user_filtered_hash.map(|h| h as i64),
                 s.last_user_streams,
+                truncated,
             ],
             |r| r.get(0),
         )?;
@@ -1160,7 +1175,16 @@ pub struct RawSearch {
     pub expression: String,
     pub sessions_matched: usize,
     pub hidden: Hidden,
+    pub truncated: Truncated,
     pub hits: Vec<SessionHits>,
+}
+
+/// Records in the searched sessions that were cut at `record_chars` or `tool_chars`.
+/// Text past the cut is not indexed, so finding nothing in them proves nothing (#122).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Truncated {
+    pub sessions: usize,
+    pub records: usize,
 }
 
 /// Turns words and "quoted phrases" into an FTS5 expression where each is a quoted phrase
@@ -1336,6 +1360,7 @@ impl Index {
                 expression,
                 sessions_matched: 0,
                 hidden: Hidden::default(),
+                truncated: Truncated::default(),
                 hits: Vec::new(),
             });
         }
@@ -1453,6 +1478,22 @@ impl Index {
             }
         }
 
+        // Every session in scope, matching or not. ?1 is the query, which only the
+        // matcher uses, so it is bound here to keep the parameter numbers.
+        let truncated = self.conn.query_row(
+            &format!(
+                "SELECT count(*), coalesce(sum(s.truncated), 0) FROM sessions s
+                 WHERE ?1 IS NOT NULL AND {where_s} AND s.truncated > 0"
+            ),
+            rusqlite::params_from_iter(args.iter()),
+            |r| {
+                Ok(Truncated {
+                    sessions: r.get::<_, i64>(0)? as usize,
+                    records: r.get::<_, i64>(1)? as usize,
+                })
+            },
+        )?;
+
         let mut top = self.conn.prepare(&format!(
             "{cte} SELECT s.id, s.backend, s.session_id, s.meta, count(*) AS n, min(m.score) AS best
              FROM {matched} WHERE {where_s}
@@ -1510,6 +1551,7 @@ impl Index {
             expression,
             sessions_matched: sessions_matched as usize,
             hidden,
+            truncated,
             hits,
         })
     }

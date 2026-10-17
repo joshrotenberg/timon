@@ -259,12 +259,21 @@ pub fn search(paths: &Paths, limits: &Limits, opts: &SearchOptions) -> Result<Js
         None
     };
     let query_is_proof = query_note.is_none();
+    // Issue #122: a record is indexed up to its cap, so nothing past the cut was searched.
+    let t = &raw.truncated;
+    let truncated_note = (hits.is_empty() && t.sessions > 0).then(|| {
+        format!(
+            "absence is not proof: {} records in {} sessions were truncated before indexing, at {} characters ({} for tool calls and results), and the text past that was not searched",
+            t.records, t.sessions, limits.record_chars, limits.tool_chars
+        )
+    });
     let note: Vec<String> = [
         stale_note,
         unavailable_note,
         excluded_note,
         hidden_note,
         query_note,
+        truncated_note,
     ]
     .into_iter()
     .flatten()
@@ -272,7 +281,7 @@ pub fn search(paths: &Paths, limits: &Limits, opts: &SearchOptions) -> Result<Js
     let returned = hits.len();
     let absence_is_proof = hits
         .is_empty()
-        .then_some(exhaustive && !hidden.any() && query_is_proof);
+        .then_some(exhaustive && !hidden.any() && query_is_proof && t.sessions == 0);
     Ok(json!({
         "query": opts.query,
         "mode": opts.mode.name(),
@@ -284,7 +293,11 @@ pub fn search(paths: &Paths, limits: &Limits, opts: &SearchOptions) -> Result<Js
         "exhaustive": exhaustive,
         "absence_is_proof": absence_is_proof,
         "note": (!note.is_empty()).then(|| note.join("; ")),
-        "coverage": { "refresh": refresh, "text_excluded": text_excluded },
+        "coverage": {
+            "refresh": refresh,
+            "text_excluded": text_excluded,
+            "truncated": raw.truncated,
+        },
     }))
 }
 

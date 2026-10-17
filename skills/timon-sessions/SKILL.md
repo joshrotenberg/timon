@@ -36,7 +36,7 @@ unambiguous prefixes everywhere.
 ```lua
 local r = sessions.search{ query = "flaky parser", since = "30d" }
 if #r.hits == 0 then
-  return r.absence_is_proof and "never discussed" or r.note
+  return r.absence_is_proof and "no indexed text in scope has these words" or r.note
 end
 local hit = r.hits[1]
 local at = hit.matches[1].index
@@ -58,7 +58,9 @@ return r.returned, r.exhaustive
 
 The current session and sessions written in the last 10 minutes are left out unless
 `exclude = false` and `active = true`. No hits proves nothing unless `absence_is_proof` is
-true; `note` says what was not covered.
+true; `note` says what was not covered. A record is indexed up to 4,000 characters (600 for
+tool calls and results), so a search that finds nothing in a session with a longer one is not
+proof, and `coverage.truncated` counts them.
 
 ## Read a whole transcript
 
