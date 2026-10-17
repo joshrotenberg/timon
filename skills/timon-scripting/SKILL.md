@@ -40,7 +40,8 @@ return opts.port, opts.verbose, opts.mode, rest[1]  -- 9000, true, fast, notes.t
 ```
 
 In a script, `cli.parse(arg, options)`. An unknown flag or a bad value raises `usage` with
-did-you-mean, which exits 2; `cli.help(options)` is the text for a `--help`.
+did-you-mean, which exits 2; `cli.help(options)` is the text for a `--help`. Names use `_`,
+and the flag uses `-`: declare `max_depth`, pass `--max-depth` (or `--max_depth`).
 
 ## Named scripts and layers
 

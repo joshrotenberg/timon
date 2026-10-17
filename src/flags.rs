@@ -200,6 +200,12 @@ impl Spec {
             };
             let name = key.to_string_lossy();
             if !valid_name(&name) {
+                let snake = name.replace('-', "_");
+                if snake != name.as_str() && valid_name(&snake) {
+                    return Err(format!(
+                        "\"{name}\" is not an option name: declare it as {snake}, and the flag is --{name}"
+                    ));
+                }
                 return Err(format!(
                     "\"{name}\" is not an option name: use lowercase letters, digits and _"
                 ));
@@ -709,6 +715,9 @@ mod tests {
         assert_eq!(p.values["tags"], serde_json::json!([]));
         assert!(!p.values.contains_key("port"));
         assert_eq!(p.rest, ["-3"]);
+        // dry_run is --dry-run, and the skills say --dry_run is accepted too.
+        let p = s.parse(&words(&["--dry_run"])).unwrap();
+        assert_eq!(p.values["dry_run"], true);
         assert!(s.parse(&words(&["--port", "x", "--help"])).is_err());
         assert!(s.parse(&words(&["--help", "--port", "x"])).unwrap().help);
     }
@@ -755,6 +764,10 @@ mod tests {
         for (source, expected) in [
             (r#"{ args = "string" }"#, "\"args\" is reserved"),
             (r#"{ Base = "string" }"#, "is not an option name"),
+            (
+                r#"{ ["out-file"] = "string?" }"#,
+                "declare it as out_file, and the flag is --out-file",
+            ),
             (
                 r#"{ cfg = "table<string, string>" }"#,
                 "cannot be given on the command line",

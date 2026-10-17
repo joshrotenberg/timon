@@ -348,7 +348,8 @@ timon --yes drop-db                  # answers confirm
 - **Options** are declared in the #29 type syntax, alone or as `{ type, default, short, doc }`,
   and parsed by one engine (`src/flags.rs`) that also serves `cli.parse` in scripts. Flags
   follow babashka.cli: `--key value`, `--key=value`, `--flag`, `--no-flag`, a repeated flag for
-  a list, a short name, `--`. `timon NAME --help` is generated from the declaration, and
+  a list, a short name, `--`. An option named `max_depth` is the flag `--max-depth`, and
+  `--max_depth` is accepted too. `timon NAME --help` is generated from the declaration, and
   `timon tasks --json` includes it. Scripts keep `arg` and parse it with `cli.parse` when they
   want flags, as bb scripts use babashka.cli.
 - **Scripts are tasks.** Every script in `scripts/` is a task whose description is its leading
