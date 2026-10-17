@@ -266,6 +266,34 @@ fn eval_io_flags_take_a_file_and_fennel_sees_input() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("io: cannot read missing.lua"));
 }
 
+/// #115: a reader that stops early ends timon quietly, without a panic on the broken pipe.
+#[test]
+fn a_reader_that_stops_early_ends_timon_quietly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_timon"))
+        .args([
+            "eval",
+            "-o",
+            "local t = {} for i = 1, 200000 do t[i] = i end return t",
+        ])
+        .current_dir(tmp.path())
+        .env("TIMON_HOME", tmp.path().join("timon"))
+        .env("HOME", tmp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    out.read_line(&mut line).unwrap();
+    assert_eq!(line, "1\n");
+    drop(out);
+    let o = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{:?}: {stderr}", o.status);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
 #[test]
 fn a_stream_answers_each_line_before_the_input_ends() {
     let tmp = tempfile::tempdir().unwrap();

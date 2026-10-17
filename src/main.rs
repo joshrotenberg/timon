@@ -11,6 +11,36 @@ use timon::layers::{self, Layers};
 use timon::modules::agent::Progress;
 use timon::{Error, Failure, Runtime};
 
+// stdout for the CLI. These shadow std's macros in this file: when the reader stops early
+// (`timon tasks --json | head`), timon ends quietly instead of panicking on the broken pipe
+// (#115). Nothing is running by the time the CLI prints, so exiting here leaves nothing behind.
+macro_rules! println {
+    () => {
+        out(format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        out(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
+macro_rules! print {
+    ($($arg:tt)*) => {
+        out(format_args!($($arg)*))
+    };
+}
+
+fn out(args: std::fmt::Arguments) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    if let Err(e) = stdout.write_fmt(args).and_then(|()| stdout.flush()) {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(0);
+        }
+        eprintln!("timon: cannot write to stdout: {e}");
+        std::process::exit(1);
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "timon",
