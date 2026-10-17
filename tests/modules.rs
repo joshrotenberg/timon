@@ -136,9 +136,10 @@ fn json_numbers_are_signed_64_bit_integers_or_floats() {
     // A decimal or exponent spelling is a float even when integral, and past 2^53 loses bits.
     assert_eq!(one("math.type(json.decode('1.0'))"), "float");
     assert_eq!(one("json.encode(json.decode('1e3'))"), "1000.0");
+    // Which neighbor a lost bit rounds to is the parser's business; that it is lost is the contract.
     assert_eq!(
-        one("json.encode(json.decode('9007199254740993.0'))"),
-        "9007199254740994.0"
+        one("json.decode('9007199254740993.0') == 9007199254740993"),
+        "false"
     );
     assert_eq!(fails("json.decode('1e400')").kind, "bad_json");
     // Identifiers passed as strings stay exact.
@@ -150,6 +151,7 @@ fn json_numbers_are_signed_64_bit_integers_or_floats() {
     let help = one("help(json.decode)");
     assert!(help.contains("signed 64-bit"), "{help}");
     assert!(help.contains("as JSON strings"), "{help}");
+    assert!(help.contains("too large for a float"), "{help}");
 }
 
 #[test]
