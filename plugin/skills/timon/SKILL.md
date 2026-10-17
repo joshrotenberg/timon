@@ -25,6 +25,10 @@ timon serve                        # the tasks as MCP tools over stdio, for host
 timon eval --fnl '(+ 1 2)'         # Fennel
 ```
 
+Look before you write. Before writing code for a job, run `timon tasks`, and `timon agents`
+before delegating: the project or you may already have a task, script or role that does it.
+Run one that fits, or extend it, instead of writing the job again in `timon eval`.
+
 In a shell of your own, where pipes are allowed, timon also reads stdin:
 
 ```sh
@@ -193,8 +197,9 @@ In a session with a person, finish the job, then offer. Name what you would keep
   no tasks at all, and timon is as useful to them.
 - With no person to ask, as in an `agent.run` inside a script or a workflow stage, write no
   definitions. List the candidates in the answer or its notes, and the caller decides.
-- Look first: `timon tasks --all`, `timon agents`, `timon defs`. Offer to reuse or extend what
-  is there rather than add a near duplicate.
+- Before you offer, run `timon tasks --all`, `timon agents` and `timon defs` and compare. Offer
+  to reuse or extend what is there rather than a near duplicate, and say in the offer which of
+  them you checked.
 - Keep what belongs to this job (the directory, the issue, the file) at the call site, as an
   option or in the prompt.
 - Project knowledge goes in the project's `.timon/`; one person's habits in `~/.config/timon/`.
