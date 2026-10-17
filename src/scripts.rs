@@ -52,11 +52,11 @@ pub struct ScriptRun {
     done: Cell<bool>,
 }
 
-fn io(action: &str, path: &Path, e: std::io::Error) -> Error {
-    Error::new("io", format!("cannot {action} {}: {e}", path.display()))
+fn denied(state: &Path, action: &str, path: &Path, e: std::io::Error) -> Error {
+    crate::dirs::write_error(crate::dirs::Root::State, state, action, path, e)
 }
 
-fn write_private(path: &Path, text: &str, append: bool) -> Result<(), Error> {
+fn write_private(state: &Path, path: &Path, text: &str, append: bool) -> Result<(), Error> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true);
@@ -70,9 +70,11 @@ fn write_private(path: &Path, text: &str, append: bool) -> Result<(), Error> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path).map_err(|e| io("write", path, e))?;
+    let mut file = options
+        .open(path)
+        .map_err(|e| denied(state, "write", path, e))?;
     file.write_all(text.as_bytes())
-        .map_err(|e| io("write", path, e))
+        .map_err(|e| denied(state, "write", path, e))
 }
 
 fn read_json(path: &Path) -> Option<Json> {
@@ -101,7 +103,7 @@ impl ScriptRun {
     /// script run (an id or an unambiguous prefix) become the cache.
     pub fn begin(state: &Path, mut request: Json, resume: Option<&str>) -> Result<Self, Error> {
         let dir = state.join("scripts");
-        create_private_dir(&dir).map_err(|e| io("create", &dir, e))?;
+        create_private_dir(&dir).map_err(|e| denied(state, "create", &dir, e))?;
         reconcile(&dir);
         let runs_dir = state.join("runs");
         let mut cache = HashMap::new();
@@ -129,13 +131,14 @@ impl ScriptRun {
             done: Cell::new(false),
         };
         let own = run.dir.join(&run.id);
-        create_private_dir(&own).map_err(|e| io("create", &own, e))?;
+        create_private_dir(&own).map_err(|e| denied(state, "create", &own, e))?;
         write_private(
+            state,
             &own.join("request.json"),
             &pretty(&run.request.borrow()),
             false,
         )?;
-        write_private(&own.join("runs.jsonl"), "", false)?;
+        write_private(state, &own.join("runs.jsonl"), "", false)?;
         run.write_result("running", None)?;
         Ok(run)
     }
@@ -144,6 +147,7 @@ impl ScriptRun {
     pub fn describe(&self, metadata: Json) -> Result<(), Error> {
         self.request.borrow_mut()["metadata"] = metadata;
         write_private(
+            self.state(),
             &self.dir.join(&self.id).join("request.json"),
             &pretty(&self.request.borrow()),
             false,
@@ -169,6 +173,11 @@ impl ScriptRun {
         &self.runs_dir
     }
 
+    /// The state directory the script run is under.
+    fn state(&self) -> &Path {
+        self.dir.parent().unwrap_or(&self.dir)
+    }
+
     /// Records an agent run of this script: its line in `runs.jsonl`, and the totals.
     pub fn add(&self, run: &Json) {
         {
@@ -185,7 +194,7 @@ impl ScriptRun {
                 .push(run["id"].as_str().unwrap_or_default().to_owned());
         }
         let path = self.dir.join(&self.id).join("runs.jsonl");
-        if let Err(err) = write_private(&path, &format!("{run}\n"), true) {
+        if let Err(err) = write_private(self.state(), &path, &format!("{run}\n"), true) {
             eprintln!("timon: the script run's runs were not recorded: {err}");
         }
     }
@@ -220,6 +229,7 @@ impl ScriptRun {
         }
         redact_value(&mut result);
         write_private(
+            self.state(),
             &self.dir.join(&self.id).join("result.json"),
             &pretty(&result),
             false,
@@ -236,7 +246,12 @@ impl ScriptRun {
             "ms": result["ms"],
             "resumed_from": request["resumed_from"],
         });
-        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)
+        write_private(
+            self.state(),
+            &self.dir.join("index.jsonl"),
+            &format!("{line}\n"),
+            true,
+        )
     }
 
     /// Settles the script run as `ok`, `failed` or `cancelled`.
@@ -284,6 +299,7 @@ fn latest(dir: &Path) -> Vec<Json> {
 
 /// Settles script runs left `running` by a timon process that no longer exists.
 fn reconcile(dir: &Path) {
+    let state = dir.parent().unwrap_or(dir);
     for entry in latest(dir) {
         if entry["status"] != "running" {
             continue;
@@ -298,10 +314,10 @@ fn reconcile(dir: &Path) {
         let path = dir.join(id).join("result.json");
         let mut result = read_json(&path).unwrap_or_else(|| json!({ "id": id }));
         result["status"] = json!("interrupted");
-        let _ = write_private(&path, &pretty(&result), false);
+        let _ = write_private(state, &path, &pretty(&result), false);
         let mut line = entry.clone();
         line["status"] = json!("interrupted");
-        let _ = write_private(&dir.join("index.jsonl"), &format!("{line}\n"), true);
+        let _ = write_private(state, &dir.join("index.jsonl"), &format!("{line}\n"), true);
     }
 }
 

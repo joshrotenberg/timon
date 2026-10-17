@@ -6,6 +6,7 @@ use std::process::Command;
 
 use serde_json::{Value as Json, json};
 
+use crate::dirs::{Root, write_error};
 use crate::error::Error;
 
 /// A worktree made for one run.
@@ -63,7 +64,7 @@ impl Worktree {
         let base = git(&repo, &["rev-parse", "HEAD"])?;
         let parent = state.join("worktrees");
         crate::layers::create_private_dir(&parent)
-            .map_err(|e| Error::new("io", format!("cannot create {}: {e}", parent.display())))?;
+            .map_err(|e| write_error(Root::State, state, "create", &parent, e))?;
         let path = parent.join(id);
         let branch = format!("timon/{id}");
         git(

@@ -92,7 +92,11 @@ fn io(action: &str, path: &Path, e: std::io::Error) -> Error {
     Error::new("io", format!("cannot {action} {}: {e}", path.display()))
 }
 
-fn write_private(path: &Path, text: &str, append: bool) -> Result<(), Error> {
+fn denied(state: &Path, action: &str, path: &Path, e: std::io::Error) -> Error {
+    crate::dirs::write_error(crate::dirs::Root::State, state, action, path, e)
+}
+
+fn write_private(state: &Path, path: &Path, text: &str, append: bool) -> Result<(), Error> {
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true);
     if append {
@@ -105,9 +109,11 @@ fn write_private(path: &Path, text: &str, append: bool) -> Result<(), Error> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path).map_err(|e| io("write", path, e))?;
+    let mut file = options
+        .open(path)
+        .map_err(|e| denied(state, "write", path, e))?;
     file.write_all(text.as_bytes())
-        .map_err(|e| io("write", path, e))
+        .map_err(|e| denied(state, "write", path, e))
 }
 
 fn snippet(prompt: &str) -> String {
@@ -131,6 +137,11 @@ impl Store {
         &self.dir
     }
 
+    /// The state directory the records are under.
+    fn state(&self) -> &Path {
+        self.dir.parent().unwrap_or(&self.dir)
+    }
+
     /// Records that a run is starting: its request, a `running` result, and an index line with
     /// this process's pid, so a crash leaves evidence that [`Store::reconcile`] can settle.
     /// Returns the index line, for [`Store::spawned`].
@@ -144,13 +155,14 @@ impl Store {
     ) -> Result<Json, Error> {
         self.reconcile()?;
         let run_dir = self.dir.join(id);
-        create_private_dir(&run_dir).map_err(|e| io("create", &run_dir, e))?;
+        create_private_dir(&run_dir).map_err(|e| denied(self.state(), "create", &run_dir, e))?;
         let mut request_json = request.to_json();
         if let Some(agent) = agent {
             request_json["agent"] = json!(agent);
         }
         redact_value(&mut request_json);
         write_private(
+            self.state(),
             &run_dir.join("request.json"),
             &serde_json::to_string_pretty(&request_json).unwrap_or_default(),
             false,
@@ -167,6 +179,7 @@ impl Store {
         });
         redact_value(&mut running);
         write_private(
+            self.state(),
             &run_dir.join("result.json"),
             &serde_json::to_string_pretty(&running).unwrap_or_default(),
             false,
@@ -187,7 +200,12 @@ impl Store {
             "prompt": snippet(&request.prompt),
         });
         redact_value(&mut line);
-        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+        write_private(
+            self.state(),
+            &self.dir.join("index.jsonl"),
+            &format!("{line}\n"),
+            true,
+        )?;
         Ok(line)
     }
 
@@ -197,7 +215,12 @@ impl Store {
         let mut line = line.clone();
         line["provider_pid"] = json!(pid);
         line["provider_pgid"] = json!(pgid);
-        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+        write_private(
+            self.state(),
+            &self.dir.join("index.jsonl"),
+            &format!("{line}\n"),
+            true,
+        )?;
         let id = line["id"].as_str().unwrap_or_default();
         let path = self.dir.join(id).join("result.json");
         if let Some(mut result) = std::fs::read_to_string(&path)
@@ -207,6 +230,7 @@ impl Store {
             result["provider_pid"] = json!(pid);
             result["provider_pgid"] = json!(pgid);
             write_private(
+                self.state(),
                 &path,
                 &serde_json::to_string_pretty(&result).unwrap_or_default(),
                 false,
@@ -263,6 +287,7 @@ impl Store {
                 },
             });
             write_private(
+                self.state(),
                 &result_path,
                 &serde_json::to_string_pretty(&result).unwrap_or_default(),
                 false,
@@ -275,7 +300,12 @@ impl Store {
                 Stop::Unverified => line["provider_may_be_running"] = json!(true),
                 Stop::Gone | Stop::Unknown => {}
             }
-            write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)?;
+            write_private(
+                self.state(),
+                &self.dir.join("index.jsonl"),
+                &format!("{line}\n"),
+                true,
+            )?;
             settled += 1;
         }
         Ok(settled)
@@ -317,7 +347,7 @@ impl Store {
         agent: Option<&str>,
     ) -> Result<(), Error> {
         let run_dir = self.dir.join(&record.id);
-        create_private_dir(&run_dir).map_err(|e| io("create", &run_dir, e))?;
+        create_private_dir(&run_dir).map_err(|e| denied(self.state(), "create", &run_dir, e))?;
         let mut request_json = request.to_json();
         if let Some(agent) = agent {
             request_json["agent"] = json!(agent);
@@ -326,11 +356,13 @@ impl Store {
         let mut result_json = record.to_json();
         redact_value(&mut result_json);
         write_private(
+            self.state(),
             &run_dir.join("request.json"),
             &serde_json::to_string_pretty(&request_json).unwrap_or_default(),
             false,
         )?;
         write_private(
+            self.state(),
             &run_dir.join("result.json"),
             &serde_json::to_string_pretty(&result_json).unwrap_or_default(),
             false,
@@ -355,7 +387,12 @@ impl Store {
             "prompt": snippet(&request.prompt),
         });
         redact_value(&mut line);
-        write_private(&self.dir.join("index.jsonl"), &format!("{line}\n"), true)
+        write_private(
+            self.state(),
+            &self.dir.join("index.jsonl"),
+            &format!("{line}\n"),
+            true,
+        )
     }
 
     /// Index entries, newest first, started at or after `since`, at most `limit`; each run's

@@ -23,6 +23,7 @@ use super::transcript::{
     CodexMode, PROJECTION_VERSION, Projection, ProjectionState, RecordKind, TRUNCATED,
 };
 use super::{Backend, Limits, Paths};
+use crate::dirs::{Root, write_hint};
 
 // Issue #122: version 4 counts the records each session has only in part.
 const SCHEMA_VERSION: i64 = 4;
@@ -70,7 +71,8 @@ impl From<IndexError> for crate::error::Error {
             IndexError::Query(m) => crate::error::Error::new("bad_query", m.clone()),
             IndexError::Sql(_) => crate::error::Error::new("index", e.to_string())
                 .with_hint("timon sessions index --rebuild starts the index over"),
-            IndexError::Dir { .. } => crate::error::Error::new("io", e.to_string()),
+            IndexError::Dir { path, source } => crate::error::Error::new("io", e.to_string())
+                .with_hint_opt(write_hint(Root::Cache, std::path::Path::new(path), source)),
         }
     }
 }

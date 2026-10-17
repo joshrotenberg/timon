@@ -311,6 +311,11 @@ fn the_token_comes_from_the_environment_then_gh() {
         &[("TIMON_GITHUB_API", api), ("PATH", bin.to_str().unwrap())],
     );
     assert!(e.contains("not_authenticated: no GitHub token"), "{e}");
+    assert!(
+        e.contains("inside a sandbox gh auth token may not reach its credentials")
+            && e.contains("GH_TOKEN works there"),
+        "{e}"
+    );
     let fake = bin.join("gh");
     std::fs::write(&fake, "#!/bin/sh\necho from-gh\n").unwrap();
     #[cfg(unix)]
