@@ -186,10 +186,10 @@ review = {
 
 ## From a sequence to a workflow
 
-Keep a workflow once you run the same sequence of agent work and checks on a second input. Bug
-reports, audited by hand: reproduce one with a failing test, check the test fails and shows
-that bug, report. Kept as a script, the steps and the success criteria are fixed and the report
-is the input:
+Offer a workflow once you run the same sequence of agent work and checks on a second input.
+Bug reports, audited by hand: reproduce one with a failing test, check the test fails and shows
+that bug, report. The offer is a script in the project's `.timon/scripts/`; kept after the
+person agrees, the steps and the success criteria are fixed and the report is the input:
 
 ```lua fragment
 -- .timon/scripts/audit.lua

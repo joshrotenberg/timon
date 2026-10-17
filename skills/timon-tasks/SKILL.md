@@ -182,8 +182,9 @@ end
 return broken  -- ["intro.md -> api.md"]
 ```
 
-It runs before every release, so it is worth a task. `timon tasks --all` shows none that
-checks links, so add one. The directory is this job's input: an option with today's default.
+It runs before every release, so it is worth offering as a task. `timon tasks --all` shows
+none that checks links, so the offer is a `links` task in the project's `.timon/tasks.lua`, with
+the directory, this job's input, as an option with today's default. The person says yes:
 
 ```lua fragment
 -- .timon/tasks.lua, beside the tasks already there
@@ -211,8 +212,9 @@ timon links                # docs/: the same broken link the one-off found, exit
 timon links --dir guides   # a later use, on another directory
 ```
 
-Had a `links` task checked only `docs/`, the change would be the `dir` option on it, not a
-second task. A question asked once, such as how many lines a file has, stays a `timon eval`.
+Had a `links` task checked only `docs/`, the offer would be the `dir` option on it, not a
+second task. Had the person said no, the check stays a `timon eval` and is not offered again
+that session. A question asked once, such as how many lines a file has, is never offered.
 
 ## Over MCP
 

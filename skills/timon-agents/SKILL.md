@@ -191,8 +191,8 @@ another) < the call. `timon agents` lists them.
 
 ### From delegation to a role
 
-Keep a role once you delegate the same bounded job again with the same instructions. A release
-needs each changed doc checked against the code it describes, delegated like this:
+Offer a role once you delegate the same bounded job again with the same instructions. A
+release needs each changed doc checked against the code it describes, delegated like this:
 
 ```lua
 local r = agent.run{
@@ -203,8 +203,9 @@ local r = agent.run{
 return r.status, r.answer.verdict
 ```
 
-When the next doc needs the same check, `timon agents` shows no such role, so the stable part
-becomes one. The doc to check stays in the prompt:
+When the next doc needs the same check, `timon agents` shows no such role, so offer the stable
+part as one in the project's `.timon/agents/`. Once the person agrees, write it; the doc to check
+stays in the prompt:
 
 ```lua fragment
 -- .timon/agents/docs-checker.lua
@@ -220,7 +221,7 @@ local setup = agent.run{ agent = "docs-checker", prompt = "Check docs/setup.md" 
 local deploy = agent.run{ agent = "docs-checker", prompt = "Check guides/deploy.md" }
 ```
 
-If a `reviewer` already exists, `extends = "reviewer"` with only the new `system` beats a copy.
+If a `reviewer` already exists, offer `extends = "reviewer"` with only the new `system`, not a copy.
 Give a role the access its job needs and no more; `limits` and trust stay the person's.
 
 ## Budgets

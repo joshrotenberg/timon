@@ -19,10 +19,12 @@ and options as everything else. The skills that teach timon are bundled in the b
 ships as a plugin for Claude Code and Codex, so an agent runs timon's tasks the way a person
 does.
 
-As an agent works, useful commands, recurring specialist roles and repeatable collaborations can
-become tested project definitions that later sessions discover and reuse: a task, an agent
-definition or a script over `flow`, in a layer, through the same surfaces as everything else.
-No new format or engine is needed for this, and keeping a definition changes no trust or access.
+As an agent works, it can offer to keep useful commands, recurring specialist roles and
+repeatable collaborations as tested definitions that later sessions discover and reuse: a task,
+an agent definition or a script over `flow`, in a layer, through the same surfaces as everything
+else. A definition is kept when the person agrees, and declining is a normal answer; an agent
+with no person to ask lists candidates for its caller instead. No new format or engine is
+needed for this, and keeping a definition changes no trust or access.
 
 ## Why this exists
 
