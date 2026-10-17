@@ -1298,6 +1298,8 @@ impl Live {
                 cmd.args(["--resume", id]);
             }
         }
+        // The host's model: haiku unless TIMON_LIVE_MODEL names another.
+        let model = std::env::var("TIMON_LIVE_MODEL").unwrap_or_else(|_| "haiku".to_owned());
         let mut child = cmd
             .args([
                 "--setting-sources",
@@ -1306,7 +1308,7 @@ impl Live {
                 "--mcp-config",
                 mcp,
                 "--model",
-                "haiku",
+                &model,
                 "--output-format",
                 "stream-json",
                 "--verbose",
@@ -2271,6 +2273,9 @@ fn offers(text: &str, what: &[&str]) -> bool {
         "should i",
         "shall i",
         "could ",
+        "i can ",
+        "you'd like",
+        "let me know",
     ]
     .iter()
     .any(|w| lower.contains(w))
