@@ -104,9 +104,10 @@ timon: undefined_global: undefined global "prnt"
 
 ## Working on timon
 
-The repository has its own project layer in `.timon/`: a reviewer and a naming agent with its
-contract, the gates and release tasks, scripts (em-dash, naming-audit, parity, recent) and a
-timon-dev skill. Read it, then trust it once:
+The repository has its own project layer in `.timon/`: a reviewer, a naming agent and a fixer
+agent with their contracts, the gates and release tasks, scripts (em-dash, fix-issues,
+naming-audit, parity, recent) and a timon-dev skill. `timon fix-issues 117,118 119` runs the
+fixer on each group of issues in its own worktree, then the gates and the reviewer on its branch. Read it, then trust it once:
 
 ```sh
 timon trust && timon tasks
