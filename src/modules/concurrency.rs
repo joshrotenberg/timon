@@ -185,6 +185,8 @@ enum TaskState {
 struct TaskInner {
     state: RefCell<TaskState>,
     join: RefCell<Option<JoinHandle<()>>>,
+    /// The runtime's change signal, notified when the task finishes or is cancelled.
+    changed: Rc<Notify>,
 }
 
 impl TaskInner {
@@ -192,12 +194,18 @@ impl TaskInner {
         !matches!(*self.state.borrow(), TaskState::Running)
     }
 
+    /// Marks the task cancelled and aborts its future. An aborted future never reaches its own
+    /// notification, so this wakes whoever is already awaiting the task.
     fn cancel(&self) {
-        if !self.finished() {
+        let running = !self.finished();
+        if running {
             *self.state.borrow_mut() = TaskState::Cancelled;
         }
         if let Some(join) = self.join.borrow().as_ref() {
             join.abort();
+        }
+        if running {
+            self.changed.notify_waiters();
         }
     }
 
@@ -405,11 +413,12 @@ fn spawn_task(
     .collect();
     let future = run.call_async::<MultiValue>(call);
 
+    let notify = changed(lua);
     let task = Rc::new(TaskInner {
         state: RefCell::new(TaskState::Running),
         join: RefCell::new(None),
+        changed: notify.clone(),
     });
-    let notify = changed(lua);
     let (this, owner, lua_handle) = (task.clone(), scope.clone(), lua.clone());
     let registration = Registration {
         lua: lua.weak(),
