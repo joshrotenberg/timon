@@ -305,6 +305,39 @@ fn timon_commands_win_and_timon_task_reaches_a_task_they_hide() {
 }
 
 #[test]
+fn timon_tasks_lists_the_scripts_and_there_is_no_scripts_command() {
+    let s = Sandbox::new();
+    s.write(
+        s.user().join("scripts/greet.lua"),
+        "-- Say hello\nreturn 'hi'",
+    );
+    let o = s.timon(&["scripts"]);
+    assert_eq!(o.status.code(), Some(2), "{}", out(&o));
+    assert!(
+        err(&o).contains("unknown command or task \"scripts\""),
+        "{}",
+        err(&o)
+    );
+    let all = s.json(&["tasks", "--all", "--json"]);
+    let names: Vec<&str> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"tasks"), "{names:?}");
+    assert!(!names.contains(&"scripts"), "{names:?}");
+    let greet = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "greet")
+        .unwrap();
+    assert_eq!(greet["kind"], "script");
+    assert_eq!(greet["description"], "Say hello");
+}
+
+#[test]
 fn aliases_groups_private_confirm_and_platforms() {
     let s = Sandbox::new();
     let elsewhere = if cfg!(target_os = "linux") {

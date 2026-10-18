@@ -143,11 +143,6 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         words: Vec<String>,
     },
-    /// List the scripts in reach
-    Scripts {
-        #[arg(long)]
-        json: bool,
-    },
     /// Trust a project's .timon directory so its scripts, lib and settings load
     Trust {
         /// The project root; defaults to the nearest one with a .timon directory
@@ -485,7 +480,6 @@ async fn run(cli: Cli) -> ExitCode {
         dry_run: cli.dry_run,
     };
     match cli.command {
-        Command::Scripts { json } => return scripts(&layers, json),
         Command::Trust { dir, revoke } => return trust(&layers, dir, revoke),
         Command::Defs { json } => return defs(&layers, json),
         Command::Skill(command) => return skill(&layers, command),
@@ -622,8 +616,7 @@ async fn run(cli: Cli) -> ExitCode {
         Command::Script(argv) => external(&rt, &layers, argv, how).await,
         Command::Agent(AgentCommand::Run { .. }) => agent_run(&rt, command).await,
         Command::Mcp(command) => mcp(&rt, command).await,
-        Command::Scripts { .. }
-        | Command::Tasks { .. }
+        Command::Tasks { .. }
         | Command::Completions { .. }
         | Command::Complete { .. }
         | Command::Serve
@@ -954,36 +947,6 @@ fn tasks(rt: &Runtime, layers: &Layers, all: bool, json: bool) -> ExitCode {
     }
     if let Some(note) = catalog.untrusted_note() {
         eprintln!("{note}");
-    }
-    ExitCode::SUCCESS
-}
-
-fn scripts(layers: &Layers, json: bool) -> ExitCode {
-    let scripts = layers.scripts();
-    if json {
-        let list: Vec<serde_json::Value> = scripts
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "layer": s.layer.name(),
-                    "path": s.path,
-                    "description": s.description,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::Value::Array(list));
-        return ExitCode::SUCCESS;
-    }
-    let width = scripts.iter().map(|s| s.name.len()).max().unwrap_or(0);
-    for s in &scripts {
-        println!("{:width$}  {:7}  {}", s.name, s.layer.name(), s.description);
-    }
-    if let Some(project) = layers.project.as_ref().filter(|p| !p.trusted) {
-        eprintln!(
-            "timon: {} is not trusted, so its scripts are not listed",
-            project.root.display()
-        );
     }
     ExitCode::SUCCESS
 }

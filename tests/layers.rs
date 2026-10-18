@@ -71,8 +71,8 @@ fn run_finds_user_scripts_and_passes_arguments() {
     let o = s.timon(s.root(), &["run", "greet", "josh"]);
     assert!(o.status.success(), "{}", err(&o));
     assert_eq!(out(&o), "hello josh\n");
-    let o = s.timon(s.root(), &["scripts"]);
-    assert_eq!(out(&o), "greet  user     Say hello\n");
+    let o = s.timon(s.root(), &["tasks"]);
+    assert_eq!(out(&o), "greet  user  Say hello\n");
 }
 
 #[test]
@@ -101,10 +101,12 @@ fn a_project_layer_needs_trust_and_then_shadows_the_user_layer() {
     assert_eq!(out(&s.timon(&cwd, &["run", "which"])), "project\n");
     assert_eq!(out(&s.timon(&cwd, &["run", "only"])), "only\n");
 
-    let o = s.timon(&cwd, &["scripts", "--json"]);
+    let o = s.timon(&cwd, &["tasks", "--json"]);
     let list: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     assert_eq!(list[0]["name"], "only");
+    assert_eq!(list[1]["name"], "which");
     assert_eq!(list[1]["layer"], "project");
+    assert_eq!(list[1]["kind"], "script");
 
     s.timon(&cwd, &["trust", "--revoke"]);
     assert_eq!(out(&s.timon(&cwd, &["run", "which"])), "user\n");
