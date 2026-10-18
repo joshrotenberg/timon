@@ -58,7 +58,8 @@ review the hooks first.
 
 In a sandbox that allows writes only to the project, such as Codex's `workspace-write`, timon
 needs write access to its state directory (`~/.local/state/timon`: the trust store, run records,
-script runs and worktrees) and its cache (`~/.cache/timon`: the session index and summaries).
+script runs, worktrees and the Codex home of its Codex runs) and its cache (`~/.cache/timon`:
+the session index and summaries).
 Add them to Codex's writable roots in `~/.codex/config.toml`, with absolute paths:
 
 ```toml
@@ -89,7 +90,7 @@ timon hook < event.json                    # a Claude Code or Codex hook: the br
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
-timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions
+timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions, timon's runs too
 timon sessions search "flaky parser" --since 30d                      # every session's text
 ```
 

@@ -60,13 +60,26 @@ pub(super) async fn run(
             .map_err(|e| io("write the schema", e))?;
     }
 
+    let home = match &request.state {
+        Some(state) => crate::dirs::codex_home(state),
+        // No state directory, so no run record to resume from: a home that goes with the
+        // run, and the session in it, is enough.
+        None => scratch.path().join("codex-home"),
+    };
+    let user = crate::dirs::user_codex_home(std::env::home_dir().as_deref());
+    login_only(&home, user.as_deref()).map_err(|e| io("prepare CODEX_HOME", e))?;
+
     let mut builder = Codex::builder()
         .env("TIMON_CHILD", "1")
+        .env("CODEX_HOME", home.display().to_string())
         // Linux only: the kernel stops the provider if timon dies. Elsewhere the run record
         // names the process, and the next timon command stops it.
         .die_with_parent(true)
         .termination_grace(Duration::from_millis(250))
         .output_limit(16 * 1024 * 1024);
+    if let Some(user) = &user {
+        builder = builder.env(crate::dirs::USER_CODEX_HOME, user.display().to_string());
+    }
     if let Some(binary) = binary {
         builder = builder.binary(binary);
     }
@@ -145,6 +158,10 @@ pub(super) async fn run(
             command.execute_json_cancellable(&client, never).await
         }
     };
+    // Codex may have refreshed the token while it ran.
+    if let Err(e) = login_only(&home, user.as_deref()) {
+        eprintln!("timon: the codex login was not synced back: {e}");
+    }
     let collect = |events: &mut Vec<Json>, all: &mut dyn Iterator<Item = JsonLineEvent>| {
         if request.events {
             for e in all {
@@ -207,6 +224,89 @@ pub(super) async fn run(
         session: result.thread_id.clone().or(result.session_id.clone()),
         usage,
     })
+}
+
+/// Makes `home` a `CODEX_HOME` that holds the login from `user`, the person's own Codex home,
+/// and nothing else they wrote: no `AGENTS.md`, config, skills or plugins.
+/// `--ignore-user-config` leaves out the config but not the instructions. Codex keeps its
+/// sessions here too, so every run, a resume included, uses the same directory.
+fn login_only(home: &Path, user: Option<&Path>) -> std::io::Result<()> {
+    crate::layers::create_private_dir(home)?;
+    let Some(user) = user else {
+        return Ok(());
+    };
+    // A timon started inside a Codex run that did not say whose home it was: the run's home
+    // is already set up.
+    if same_dir(user, home) {
+        return Ok(());
+    }
+    sync_auth(&user.join("auth.json"), &home.join("auth.json"))
+}
+
+/// Links timon's `auth.json` to the user's, so a token Codex refreshes in place is the user's
+/// too. When Codex replaced the link with a file of its own, a newer one is copied back to the
+/// user's first: a refreshed token is never dropped. With no login of the user's, a file of
+/// timon's stays, and a link goes.
+#[cfg(unix)]
+fn sync_auth(user: &Path, ours: &Path) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    match std::fs::symlink_metadata(ours) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if user.exists() && std::fs::read_link(ours)? == user {
+                return Ok(());
+            }
+            std::fs::remove_file(ours)?;
+        }
+        Ok(_) => {
+            if !user.exists() {
+                return Ok(());
+            }
+            if modified(ours) > modified(user) && std::fs::read(ours)? != std::fs::read(user)? {
+                std::fs::copy(ours, user)?;
+            }
+            std::fs::remove_file(ours)?;
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if !user.exists() {
+        return Ok(());
+    }
+    match std::os::unix::fs::symlink(user, ours) {
+        // A concurrent run linked it first.
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
+}
+
+/// Keeps timon's copy of `auth.json` in step with the user's: copied in when it is missing or
+/// the user's is newer, copied back when Codex refreshed it.
+#[cfg(not(unix))]
+fn sync_auth(user: &Path, ours: &Path) -> std::io::Result<()> {
+    let Some(theirs) = modified(user) else {
+        return Ok(());
+    };
+    let mine = modified(ours);
+    if mine.is_some() && std::fs::read(user)? == std::fs::read(ours)? {
+        return Ok(());
+    }
+    match mine {
+        Some(mine) if mine > theirs => std::fs::copy(ours, user),
+        _ => std::fs::copy(user, ours),
+    }
+    .map(|_| ())
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 fn turn_failed(event: &JsonLineEvent) -> Error {

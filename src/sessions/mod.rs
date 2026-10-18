@@ -72,12 +72,16 @@ pub struct Roots {
     pub codex: PathBuf,
     /// `<codex home>/archived_sessions`.
     pub codex_archived: PathBuf,
+    /// `<state>/codex/sessions`: the sessions of the Codex runs timon starts, which run with
+    /// timon's own Codex home (#172).
+    pub timon_codex: Option<PathBuf>,
 }
 
 impl Roots {
     /// From the CLIs' own variables, `CLAUDE_CONFIG_DIR` (default `~/.claude`) and
-    /// `CODEX_HOME` (default `~/.codex`).
-    pub fn from_env(home: Option<&Path>) -> Result<Self, Error> {
+    /// `CODEX_HOME` (default `~/.codex`, and `TIMON_USER_CODEX_HOME` first inside a Codex run
+    /// timon started), plus the sessions of timon's Codex runs under `state`.
+    pub fn from_env(home: Option<&Path>, state: Option<&Path>) -> Result<Self, Error> {
         let var = |name: &str| {
             std::env::var_os(name)
                 .filter(|v| !v.is_empty())
@@ -91,14 +95,18 @@ impl Roots {
             Some(dir) => dir,
             None => home_dir(".claude")?,
         };
-        let codex = match var("CODEX_HOME") {
+        let codex = match crate::dirs::user_codex_home(home) {
             Some(dir) => dir,
             None => home_dir(".codex")?,
         };
+        let timon_codex = state
+            .map(|s| crate::dirs::codex_home(s).join("sessions"))
+            .filter(|t| *t != codex.join("sessions"));
         Ok(Self {
             claude: claude.join("projects"),
             codex: codex.join("sessions"),
             codex_archived: codex.join("archived_sessions"),
+            timon_codex,
         })
     }
 }
@@ -156,6 +164,7 @@ pub struct Paths {
     pub claude_archive: PathBuf,
     pub codex_archive: PathBuf,
     pub codex_archived: PathBuf,
+    pub timon_codex_archive: Option<PathBuf>,
 }
 
 impl Paths {
@@ -165,6 +174,7 @@ impl Paths {
             claude_archive: roots.claude.clone(),
             codex_archive: roots.codex.clone(),
             codex_archived: roots.codex_archived.clone(),
+            timon_codex_archive: roots.timon_codex.clone(),
         }
     }
 
@@ -173,7 +183,20 @@ impl Paths {
             claude: self.claude_archive.clone(),
             codex: self.codex_archive.clone(),
             codex_archived: self.codex_archived.clone(),
+            timon_codex: self.timon_codex_archive.clone(),
         }
+    }
+
+    /// Every archive directory, timon's Codex sessions included when there are any.
+    pub fn archive_roots(&self) -> Vec<&PathBuf> {
+        [
+            &self.claude_archive,
+            &self.codex_archive,
+            &self.codex_archived,
+        ]
+        .into_iter()
+        .chain(&self.timon_codex_archive)
+        .collect()
     }
 }
 

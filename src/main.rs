@@ -1257,10 +1257,16 @@ fn without_nulls(v: &serde_json::Value) -> serde_json::Value {
 }
 
 fn sessions_index(layers: &Layers, rebuild: bool) -> ExitCode {
-    let result = timon::sessions::Roots::from_env(layers.dirs.home.as_deref()).and_then(|roots| {
-        let paths = timon::sessions::Paths::new(&layers.dirs.cache, &roots);
-        timon::sessions::search::reindex(&paths, &timon::sessions::Limits::default(), rebuild)
-    });
+    let result =
+        timon::sessions::Roots::from_env(layers.dirs.home.as_deref(), Some(&layers.dirs.state))
+            .and_then(|roots| {
+                let paths = timon::sessions::Paths::new(&layers.dirs.cache, &roots);
+                timon::sessions::search::reindex(
+                    &paths,
+                    &timon::sessions::Limits::default(),
+                    rebuild,
+                )
+            });
     match result {
         Ok(report) => {
             println!("{report}");

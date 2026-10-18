@@ -46,7 +46,9 @@ impl Sandbox {
             .env("HOME", self.root())
             .env("TIMON_CLAUDE_BIN", fixtures.join("fake-claude"))
             .env("TIMON_CODEX_BIN", fixtures.join("fake-codex"))
-            .env("FAKE_LOG_DIR", self.logs());
+            .env("FAKE_LOG_DIR", self.logs())
+            .env_remove("CODEX_HOME")
+            .env_remove("TIMON_USER_CODEX_HOME");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -655,6 +657,205 @@ fn codex_resume_uses_the_sandbox_config_key() {
     assert!(
         has_pair(&args, "-c", "sandbox_mode=\"workspace-write\""),
         "{args:?}"
+    );
+}
+
+#[test]
+fn codex_runs_get_their_own_codex_home_with_only_the_login() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    s.write(
+        user.join("AGENTS.md"),
+        "Before any task, run gh issue list.\n",
+    );
+    s.write(user.join("auth.json"), "{\"token\":\"t\"}");
+    let user = user.to_str().unwrap();
+    s.json(
+        "local first = agent.run{ provider = 'codex', prompt = 'x' }
+         return agent.continue(first, 'y')",
+        &[("CODEX_HOME", user)],
+    );
+    assert!(s.args("codex", 1).contains(&"resume".to_owned()));
+    let homes: Vec<PathBuf> = (0..2)
+        .map(|n| PathBuf::from(s.call("codex", n)["codex_home"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        homes[0], homes[1],
+        "a resume must see the sessions it started"
+    );
+    let home = &homes[0];
+    assert!(home.starts_with(s.root().join("timon/state")), "{home:?}");
+    assert!(!home.join("AGENTS.md").exists(), "{home:?}");
+    assert_eq!(
+        std::fs::read_to_string(home.join("auth.json")).unwrap(),
+        "{\"token\":\"t\"}"
+    );
+}
+
+#[test]
+fn a_timon_inside_a_codex_run_keeps_the_login() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    s.write(user.join("auth.json"), "{\"token\":\"t\"}");
+    let ours = s.root().join("timon/state/codex");
+    let (user, ours_str) = (user.to_str().unwrap(), ours.to_str().unwrap());
+    let run = "return agent.run{ provider = 'codex', prompt = 'x' }";
+    s.json(run, &[("CODEX_HOME", user)]);
+    assert_eq!(s.call("codex", 0)["user_codex_home"], user);
+    // What a timon started in that run sees, then the same without the variable.
+    s.json(
+        run,
+        &[("CODEX_HOME", ours_str), ("TIMON_USER_CODEX_HOME", user)],
+    );
+    assert_eq!(s.call("codex", 1)["user_codex_home"], user);
+    s.json(run, &[("CODEX_HOME", ours_str)]);
+    assert_eq!(s.call("codex", 2)["codex_home"], ours_str);
+    assert_eq!(
+        std::fs::read_to_string(ours.join("auth.json")).unwrap(),
+        "{\"token\":\"t\"}"
+    );
+}
+
+/// Runs one Codex turn with `env` and returns timon's Codex home.
+fn codex_home_after_a_run(s: &Sandbox, env: &[(&str, &str)]) -> PathBuf {
+    let r = s.json("return agent.run{ provider = 'codex', prompt = 'x' }", env);
+    assert_eq!(r["status"], "ok", "{r}");
+    s.root().join("timon/state/codex")
+}
+
+#[test]
+fn a_codex_run_without_a_login_starts_with_no_auth_link() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    std::fs::create_dir_all(&user).unwrap();
+    let ours = codex_home_after_a_run(&s, &[("CODEX_HOME", user.to_str().unwrap())]);
+    assert!(std::fs::symlink_metadata(ours.join("auth.json")).is_err());
+}
+
+#[test]
+fn the_login_link_follows_the_users_codex_home() {
+    let s = Sandbox::new();
+    let (a, b) = (s.root().join("codex-a"), s.root().join("codex-b"));
+    s.write(a.join("auth.json"), "a");
+    s.write(b.join("auth.json"), "b");
+    codex_home_after_a_run(&s, &[("CODEX_HOME", a.to_str().unwrap())]);
+    let ours = codex_home_after_a_run(&s, &[("CODEX_HOME", b.to_str().unwrap())]);
+    assert_eq!(
+        std::fs::read_to_string(ours.join("auth.json")).unwrap(),
+        "b"
+    );
+}
+
+#[test]
+fn without_codex_home_the_login_comes_from_dot_codex() {
+    let s = Sandbox::new();
+    let auth = s.root().join(".codex/auth.json");
+    s.write(auth.clone(), "home");
+    let ours = codex_home_after_a_run(&s, &[]);
+    assert_eq!(
+        s.call("codex", 0)["user_codex_home"],
+        auth.parent().unwrap().to_str().unwrap()
+    );
+    #[cfg(unix)]
+    {
+        let link = ours.join("auth.json");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_link(&link).unwrap(), auth);
+    }
+    #[cfg(not(unix))]
+    assert_eq!(
+        std::fs::read_to_string(ours.join("auth.json")).unwrap(),
+        "home"
+    );
+}
+
+/// Sets `path`'s modification time an hour back.
+fn age(path: &Path) {
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(hour_ago)
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_token_codex_refreshed_is_copied_back_before_relinking() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    s.write(user.join("auth.json"), "old");
+    let user_str = user.to_str().unwrap();
+    let ours = codex_home_after_a_run(&s, &[("CODEX_HOME", user_str)]);
+    // Codex replaced the link with a file holding a newer token.
+    std::fs::remove_file(ours.join("auth.json")).unwrap();
+    s.write(ours.join("auth.json"), "refreshed");
+    age(&user.join("auth.json"));
+    codex_home_after_a_run(&s, &[("CODEX_HOME", user_str)]);
+    assert_eq!(
+        std::fs::read_to_string(user.join("auth.json")).unwrap(),
+        "refreshed"
+    );
+    assert!(
+        std::fs::symlink_metadata(ours.join("auth.json"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    // An older file of timon's gives way to the user's login, which is left alone.
+    std::fs::remove_file(ours.join("auth.json")).unwrap();
+    s.write(ours.join("auth.json"), "stale");
+    age(&ours.join("auth.json"));
+    codex_home_after_a_run(&s, &[("CODEX_HOME", user_str)]);
+    assert_eq!(
+        std::fs::read_to_string(user.join("auth.json")).unwrap(),
+        "refreshed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(ours.join("auth.json")).unwrap(),
+        "refreshed"
+    );
+}
+
+#[test]
+fn a_codex_session_from_before_the_isolation_says_how_to_resume_it() {
+    let s = Sandbox::new();
+    let id = "eeeeeeee-5555-4555-8555-555555555555";
+    s.write(
+        s.root().join("timon/state/runs/index.jsonl"),
+        &format!(
+            "{}\n",
+            serde_json::json!({ "id": "r_1", "status": "ok", "session": id })
+        ),
+    );
+    s.write(
+        s.root()
+            .join(".codex/sessions/2026/10/07")
+            .join(format!("rollout-2026-10-07T12-00-00-{id}.jsonl")),
+        "{}\n",
+    );
+    let o = s.timon(
+        &format!("agent.run{{ provider = 'codex', prompt = 'y', resume = '{id}' }}"),
+        &[],
+    );
+    assert!(!o.status.success());
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("session_not_found"), "{stderr}");
+    assert!(
+        stderr.contains("predates timon's Codex isolation"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&format!("codex resume {id}")), "{stderr}");
+    assert!(
+        std::fs::read_dir(s.logs()).unwrap().next().is_none(),
+        "codex ran"
     );
 }
 

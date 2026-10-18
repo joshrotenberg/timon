@@ -120,6 +120,9 @@ pub struct Request {
     pub worktree: bool,
     /// The name of the output contract, when `output` named one.
     pub contract: Option<String>,
+    /// timon's state directory, which holds the `CODEX_HOME` of Codex runs; never sent to the
+    /// provider.
+    pub state: Option<PathBuf>,
 }
 
 impl Request {
@@ -202,6 +205,7 @@ impl Request {
             idempotent: false,
             worktree: false,
             contract: None,
+            state: None,
         }
     }
 }

@@ -6,7 +6,8 @@ FAKE_TEXT: the final message (default: "echo: " + the prompt)
 FAKE_STRUCTURED: written as the final message instead, as codex does with a schema
 FAKE_AUTO_ANSWER: with --output-schema and no FAKE_STRUCTURED, answer with the smallest valid value
 FAKE_SESSION: the thread id (default: codex-thread-1)
-FAKE_DELAY, FAKE_PID_FILE, FAKE_LOG_DIR: as for fake-claude (files codex-N.json)
+FAKE_DELAY, FAKE_PID_FILE, FAKE_LOG_DIR: as for fake-claude (files codex-N.json, with CODEX_HOME
+  and TIMON_USER_CODEX_HOME)
 FAKE_REPLAY: a recorded exec --json file to print instead (see recorded/README.md)
 """
 import json, os, sys, time
@@ -33,7 +34,9 @@ if "--output-schema" in args:
 if log:
     n = len([f for f in os.listdir(log) if f.startswith("codex-")])
     with open(os.path.join(log, f"codex-{n}.json"), "w") as f:
-        json.dump({"args": args, "prompt": prompt, "cwd": os.getcwd(), "schema": schema}, f)
+        json.dump({"args": args, "prompt": prompt, "cwd": os.getcwd(), "schema": schema,
+                   "codex_home": os.environ.get("CODEX_HOME"),
+                   "user_codex_home": os.environ.get("TIMON_USER_CODEX_HOME")}, f)
 if os.environ.get("FAKE_PID_FILE"):
     with open(os.environ["FAKE_PID_FILE"], "w") as f:
         f.write(str(os.getpid()))
