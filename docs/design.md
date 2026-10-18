@@ -1,6 +1,6 @@
 # timon design
 
-Status: phases 0 to 9 and host hooks are built. What is not built says Not yet, with its issue.
+Status: paused since 2026-10-17; see [handoff.md](handoff.md). Phases 0 to 9 and host hooks are built. What is not built says Not yet, with its issue.
 `README.md` is canonical for what exists; this document is canonical for direction.
 
 timon (Venetian for rudder) is babashka for Lua and Fennel, with native agent tools: a task

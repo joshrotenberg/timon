@@ -12,6 +12,10 @@ kept when the person agrees; timon is as useful to someone who keeps none.
 
 Design: [docs/design.md](docs/design.md).
 
+**Paused since 2026-10-17.** Work on these ideas continues in babagent, an agent layer on babashka.
+This repository stays as a reference design; [docs/handoff.md](docs/handoff.md) says where it stands and how
+to pick it back up.
+
 ## Status
 
 | Phase | Scope | State |
