@@ -99,14 +99,21 @@ fn the_project_layer_loads_agents_tasks_scripts_and_skills() {
             .all(|(_, d)| !d.is_empty() && !d.starts_with("(cannot load")),
         "{agents:?}"
     );
-    let scripts = p.names(&["scripts", "--json"]);
-    assert_eq!(
-        scripts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-        ["em-dash", "fix-issues", "naming-audit", "parity", "recent"]
-    );
     let tasks = p.timon(&["tasks", "--json"], &[]);
     assert!(tasks.status.success(), "{}", err(&tasks));
     let tasks: serde_json::Value = serde_json::from_slice(&tasks.stdout).unwrap();
+    let mut scripts: Vec<&str> = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["layer"] == "project" && t["kind"] == "script")
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    scripts.sort();
+    assert_eq!(
+        scripts,
+        ["em-dash", "fix-issues", "naming-audit", "parity", "recent"]
+    );
     let check = tasks
         .as_array()
         .unwrap()

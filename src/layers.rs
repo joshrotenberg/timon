@@ -137,7 +137,7 @@ impl Layers {
         Err(
             match crate::suggest::closest(name, names.iter().map(String::as_str)) {
                 Some(close) => err.with_hint(format!("did you mean \"{close}\"?")),
-                None => err.with_hint("timon scripts lists them"),
+                None => err.with_hint("timon tasks lists them"),
             },
         )
     }

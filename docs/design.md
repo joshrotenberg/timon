@@ -789,7 +789,7 @@ return {
   `schema`, and no I/O. Each must return a table, which is validated; an error names the file and
   the field. Settings in `init.lua` merge key by key, project over user over built in.
 - **Scripts are programs.** A script runs with every module available. Its description for
-  `timon tasks` and `timon scripts` is its leading `--` comment, read without running it. A script may return
+  `timon tasks` and `timon defs` is its leading `--` comment, read without running it. A script may return
   `{ description, phases, budget, run }`. Typed `params` are not built yet, so a script reads
   its words from `arg` (or parses them with `cli.parse`).
 - **Trust.** Project files load only after `timon trust` records the directory (in
