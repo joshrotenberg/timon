@@ -1,5 +1,6 @@
 -- This repository's tasks. The scripts in scripts/ are tasks too; timon tasks lists them all.
 local release = require("release")
+local book = require("book")
 release.release.depends = { "check" }
 
 return {
@@ -41,6 +42,19 @@ return {
     description = "Format and lint, without the tests",
     depends = { "format", "lint" },
     run = function() return "format and lint pass" end,
+  },
+  book = {
+    description = "The doc site: an mdbook from the README, the skills, help() and the commands, in target/book",
+    options = {
+      out = { type = "string", default = "target/book", doc = "where to write book.toml, src/ and html/, under the repository unless absolute" },
+      build = { type = "boolean", default = true, doc = "run mdbook build; --no-build writes only the sources" },
+      bin = { type = "string", default = "timon", doc = "the timon whose commands the reference describes" },
+      root = { type = "string?", doc = "the repository to read (default: the one around the working directory)" },
+    },
+    run = function(opts)
+      opts.root = opts.root or git.root()
+      return book.build(opts)
+    end,
   },
   update = {
     description = "Install timon and update its plugin in Claude Code and Codex",

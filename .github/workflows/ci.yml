@@ -62,3 +62,43 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - name: Build docs
         run: cargo doc --no-deps
+
+  book:
+    name: Book
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      # timon book is this repository's own task, so the checkout is trusted in a throwaway
+      # state directory first. The commands reference describes the timon just built.
+      - name: Build the book
+        env:
+          TIMON_HOME: ${{ runner.temp }}/timon
+        run: |
+          cargo build --quiet
+          target/debug/timon trust
+          target/debug/timon book --bin target/debug/timon
+      - name: Upload the site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: target/book/html
+
+  pages:
+    name: Deploy the book
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: book
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5
