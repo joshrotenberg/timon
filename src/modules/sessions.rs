@@ -110,7 +110,8 @@ pub(crate) fn roots(lua: &Lua) -> Result<Roots, Error> {
         Some(home) => Some(PathBuf::from(home)),
         None => std::env::home_dir(),
     };
-    Roots::from_env(home.as_deref())
+    let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
+    Roots::from_env(home.as_deref(), state.as_deref().map(std::path::Path::new))
 }
 
 /// Session ids of runs timon started, from its run records.

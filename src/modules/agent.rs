@@ -528,6 +528,39 @@ fn check_started(lua: &Lua, session: &str, provider: agent::Provider) -> Result<
     .with_hint(hint))
 }
 
+/// A Codex session timon started before its runs had their own Codex home (#172) is in the
+/// person's, where a run cannot reach it.
+fn check_codex_home(lua: &Lua, session: &str) -> Result<(), Error> {
+    let Some(state) = lua.named_registry_value::<Option<String>>(STATE_DIR)? else {
+        return Ok(());
+    };
+    let has = |root: &std::path::Path, archived: bool| {
+        crate::sessions::archive::scan_codex(root, archived)
+            .iter()
+            .any(|e| e.session_id == session)
+    };
+    let ours = crate::dirs::codex_home(std::path::Path::new(&state));
+    if has(&ours.join("sessions"), false) || has(&ours.join("archived_sessions"), true) {
+        return Ok(());
+    }
+    let Ok(roots) = crate::modules::sessions::roots(lua) else {
+        return Ok(());
+    };
+    if !has(&roots.codex, false) && !has(&roots.codex_archived, true) {
+        return Ok(());
+    }
+    Err(Error::new(
+        "session_not_found",
+        format!(
+            "codex session \"{session}\" predates timon's Codex isolation, so it is not in the \
+             Codex home timon's runs use"
+        ),
+    )
+    .with_hint(format!(
+        "resume it with Codex directly: codex resume {session}"
+    )))
+}
+
 /// Runs one agent turn for the task on `thread`, charging that task's budgets.
 async fn run(lua: Lua, spec: Table, thread: Option<mlua::Thread>) -> mlua::Result<Table> {
     Ok(run_with(lua, spec, thread).await?.0)
@@ -547,6 +580,9 @@ async fn run_with(
     agent::check(&request)?;
     if let Some(session) = &request.resume {
         check_started(&lua, session, request.provider)?;
+        if request.provider == Provider::Codex {
+            check_codex_home(&lua, session)?;
+        }
     }
     // In a script run, the run gets a key, and a resumed script reuses a matching earlier run.
     let script = lua.app_data_ref::<Rc<ScriptRun>>().map(|s| s.clone());

@@ -812,18 +812,15 @@ impl Index {
             .iter()
             .map(|e| key(e.backend, &e.session_id))
             .collect();
-        let roots: Vec<(&std::path::Path, bool, Option<String>)> = [
-            &paths.claude_archive,
-            &paths.codex_archive,
-            &paths.codex_archived,
-        ]
-        .into_iter()
-        .map(|r| match std::fs::read_dir(r) {
-            Ok(_) => (r.as_path(), true, None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (r.as_path(), false, None),
-            Err(e) => (r.as_path(), false, Some(e.to_string())),
-        })
-        .collect();
+        let roots: Vec<(&std::path::Path, bool, Option<String>)> = paths
+            .archive_roots()
+            .into_iter()
+            .map(|r| match std::fs::read_dir(r) {
+                Ok(_) => (r.as_path(), true, None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (r.as_path(), false, None),
+                Err(e) => (r.as_path(), false, Some(e.to_string())),
+            })
+            .collect();
         let blocking_roots: Vec<String> = roots
             .iter()
             .filter_map(|(root, _, error)| {

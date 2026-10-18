@@ -158,14 +158,11 @@ pub fn search(paths: &Paths, limits: &Limits, opts: &SearchOptions) -> Result<Js
     };
     let vis = Visibility {
         archive_roots: Some(
-            [
-                &paths.claude_archive,
-                &paths.codex_archive,
-                &paths.codex_archived,
-            ]
-            .into_iter()
-            .map(|root| root.display().to_string())
-            .collect(),
+            paths
+                .archive_roots()
+                .into_iter()
+                .map(|root| root.display().to_string())
+                .collect(),
         ),
         since_ns: opts.since.map(ns),
         until_ns: opts.until.map(ns),

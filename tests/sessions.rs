@@ -69,6 +69,7 @@ impl Archive {
         for var in [
             "CLAUDE_CONFIG_DIR",
             "CODEX_HOME",
+            "TIMON_USER_CODEX_HOME",
             "CLAUDE_CODE_SESSION_ID",
             "CODEX_THREAD_ID",
             "CODEX_SESSION_ID",
@@ -390,6 +391,46 @@ fn sessions_timon_started_count_as_automated() {
         .collect();
     assert_eq!(ids, [ID_B]);
     assert_eq!(r["hidden"]["automated"], 2);
+}
+
+#[test]
+fn sessions_of_timons_codex_runs_are_listed_and_searched() {
+    let a = fixture();
+    let id = "dddddddd-4444-4444-8444-444444444444";
+    let path = a
+        .dir
+        .path()
+        .join("timon/state/codex/sessions/2026/10/07")
+        .join(format!("rollout-2026-10-07T12-00-00-{id}.jsonl"));
+    a.write(
+        &path,
+        &[
+            codex_meta(id, "/work/run", serde_json::json!("exec")),
+            codex_user("count the wombats"),
+        ],
+        Duration::from_secs(30 * 60),
+        false,
+    );
+    let r = a.json("sessions.list{}", &[]);
+    assert_eq!(r["hidden"]["automated"], 2, "{r}");
+    let r = a.json("sessions.list{ backend = 'codex', automated = true }", &[]);
+    assert!(
+        r["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == id),
+        "{r}"
+    );
+    let r = a.json("sessions.search{ query = 'wombats' }", &[]);
+    assert_eq!(r["hidden"]["automated"], 1, "{r}");
+    let r = a.json(
+        "sessions.search{ query = 'wombats', automated = true }",
+        &[],
+    );
+    assert_eq!(hit_ids(&r), [id]);
+    let r = a.json(&format!("sessions.show('{id}')"), &[]);
+    assert_eq!(r["project"], "/work/run", "{r}");
 }
 
 // Transcripts (#41)

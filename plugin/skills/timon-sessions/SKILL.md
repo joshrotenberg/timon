@@ -13,7 +13,9 @@ Read files with `fs.read` in Lua instead of piping them in, and skip `$?`: a fai
 `timon: kind: message` and exits nonzero.
 
 `sessions` reads the local Claude Code and Codex archives (`~/.claude/projects`,
-`~/.codex/sessions`; `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move them). It never writes to them.
+`~/.codex/sessions`; `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move them), and the sessions of
+timon's own Codex runs, kept in `codex/sessions` under timon's state directory. It never writes
+to them.
 Search here before answering from memory about earlier work.
 
 ## Find sessions

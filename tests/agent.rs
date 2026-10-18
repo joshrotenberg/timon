@@ -825,6 +825,41 @@ fn a_token_codex_refreshed_is_copied_back_before_relinking() {
 }
 
 #[test]
+fn a_codex_session_from_before_the_isolation_says_how_to_resume_it() {
+    let s = Sandbox::new();
+    let id = "eeeeeeee-5555-4555-8555-555555555555";
+    s.write(
+        s.root().join("timon/state/runs/index.jsonl"),
+        &format!(
+            "{}\n",
+            serde_json::json!({ "id": "r_1", "status": "ok", "session": id })
+        ),
+    );
+    s.write(
+        s.root()
+            .join(".codex/sessions/2026/10/07")
+            .join(format!("rollout-2026-10-07T12-00-00-{id}.jsonl")),
+        "{}\n",
+    );
+    let o = s.timon(
+        &format!("agent.run{{ provider = 'codex', prompt = 'y', resume = '{id}' }}"),
+        &[],
+    );
+    assert!(!o.status.success());
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("session_not_found"), "{stderr}");
+    assert!(
+        stderr.contains("predates timon's Codex isolation"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&format!("codex resume {id}")), "{stderr}");
+    assert!(
+        std::fs::read_dir(s.logs()).unwrap().next().is_none(),
+        "codex ran"
+    );
+}
+
+#[test]
 fn codex_failures_are_classified() {
     let s = Sandbox::new();
     let r = s.json(

@@ -89,7 +89,7 @@ timon hook < event.json                    # a Claude Code or Codex hook: the br
 timon eval 'sh("cargo test")'              # run a program; a failure exits with its code
 timon skill show timon                     # the bundled skills
 timon eval 'agent.ask{ prompt = "Is 17 prime?", output = "yes_no" }'   # a Claude run, validated
-timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions
+timon eval 'sessions.list{ project = "timon", since = "2d" }'          # past Claude and Codex sessions, timon's runs too
 timon sessions search "flaky parser" --since 30d                      # every session's text
 ```
 

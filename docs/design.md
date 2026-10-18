@@ -448,8 +448,10 @@ machine:
   state directory. That directory holds a link to the person's `auth.json` (from their
   `CODEX_HOME`, default `~/.codex`) and what Codex writes itself, so the global AGENTS.md,
   config, skills and rules stay out (#172). Codex keeps its sessions there, where every run and
-  `resume` look; the session archive under `~/.codex` does not list them. A project AGENTS.md in
-  the run's working directory is still read.
+  `resume` look, and `sessions` reads them as an extra Codex archive. A session timon started
+  before this (#172) is in the person's own Codex home: resuming it raises `session_not_found`
+  with a hint to run `codex resume ID` directly. A project AGENTS.md in the run's working
+  directory is still read.
 
 The result is a run record. It never raises for an outcome:
 
@@ -614,7 +616,9 @@ timon runs --since 1d
 ## sessions
 
 Reads every Claude Code and Codex session on the machine, the history trovador serves today,
-reimplemented in timon. It only reads: it never writes to the CLIs' files.
+reimplemented in timon. It only reads: it never writes to the CLIs' files. Besides the CLIs' own
+archives it reads `codex/sessions` in the state directory, where timon's Codex runs keep theirs
+(#172); they are `exec` sessions, so they count as automated.
 
 ```lua
 sessions.list{ backend = "claude", dir = ".", since = "7d", limit = 20 }

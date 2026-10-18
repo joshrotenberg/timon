@@ -220,7 +220,8 @@ fn entry(
     }))
 }
 
-/// Every session in both archives, newest first, one file per session.
+/// Every session in both archives, and in timon's Codex home, newest first, one file per
+/// session.
 ///
 /// A Claude session moved between projects can leave its old file behind. The newest file
 /// is the live one. Choosing it here, once, means listing, lookup, search, and the index
@@ -245,13 +246,16 @@ pub(crate) fn scan_all_with_failures(roots: &Roots) -> (Vec<ArchiveEntry>, Vec<S
         true,
         &mut failures,
     ));
+    if let Some(timon) = &roots.timon_codex {
+        all.extend(scan_root(timon, Backend::Codex, false, &mut failures));
+    }
     // archived_sessions is optional, but only an accessible active root tells a
     // never-created archive from unavailable Codex storage.
     let active_unavailable = failures.iter().any(|f| f.path == roots.codex);
     failures.retain(|f| {
-        active_unavailable
-            || f.path != roots.codex_archived
-            || f.kind != std::io::ErrorKind::NotFound
+        let optional =
+            f.path == roots.codex_archived || roots.timon_codex.as_ref() == Some(&f.path);
+        active_unavailable || !optional || f.kind != std::io::ErrorKind::NotFound
     });
     all.sort_by(|a, b| b.mtime.cmp(&a.mtime).then(a.session_id.cmp(&b.session_id)));
     let mut seen = std::collections::HashSet::new();
