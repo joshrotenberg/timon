@@ -61,10 +61,11 @@ pub(super) async fn run(
     }
 
     let home = match &request.state {
-        Some(state) => state.join("codex"),
+        Some(state) => crate::dirs::codex_home(state),
         None => scratch.path().join("codex-home"),
     };
-    login_only(&home).map_err(|e| io("prepare CODEX_HOME", e))?;
+    let user = crate::dirs::user_codex_home(std::env::home_dir().as_deref());
+    login_only(&home, user.as_deref()).map_err(|e| io("prepare CODEX_HOME", e))?;
 
     let mut builder = Codex::builder()
         .env("TIMON_CHILD", "1")
@@ -74,6 +75,9 @@ pub(super) async fn run(
         .die_with_parent(true)
         .termination_grace(Duration::from_millis(250))
         .output_limit(16 * 1024 * 1024);
+    if let Some(user) = &user {
+        builder = builder.env(crate::dirs::USER_CODEX_HOME, user.display().to_string());
+    }
     if let Some(binary) = binary {
         builder = builder.binary(binary);
     }
@@ -216,19 +220,20 @@ pub(super) async fn run(
     })
 }
 
-/// Makes `home` a `CODEX_HOME` that holds the user's login and nothing else they wrote: no
-/// `AGENTS.md`, config, skills or plugins. `--ignore-user-config` leaves out the config but
-/// not the instructions. Codex keeps its sessions here too, so every run, a resume included,
-/// uses the same directory.
-fn login_only(home: &Path) -> std::io::Result<()> {
+/// Makes `home` a `CODEX_HOME` that holds the login from `user`, the person's own Codex home,
+/// and nothing else they wrote: no `AGENTS.md`, config, skills or plugins.
+/// `--ignore-user-config` leaves out the config but not the instructions. Codex keeps its
+/// sessions here too, so every run, a resume included, uses the same directory.
+fn login_only(home: &Path, user: Option<&Path>) -> std::io::Result<()> {
     crate::layers::create_private_dir(home)?;
-    let Some(user) = std::env::var_os("CODEX_HOME")
-        .filter(|v| !v.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".codex")))
-    else {
+    let Some(user) = user else {
         return Ok(());
     };
+    // A timon started inside a Codex run that did not say whose home it was: the run's home
+    // is already set up.
+    if same_dir(user, home) {
+        return Ok(());
+    }
     let auth = user.join("auth.json");
     let link = home.join("auth.json");
     if std::fs::read_link(&link).is_ok_and(|to| to == auth) {
@@ -251,6 +256,14 @@ fn login_only(home: &Path) -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         other => other,
     }
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 fn turn_failed(event: &JsonLineEvent) -> Error {

@@ -83,6 +83,28 @@ impl Dirs {
     }
 }
 
+/// Set in every Codex run timon starts to the person's own Codex home, so a timon started
+/// inside the run finds it instead of the run's `CODEX_HOME`, which is timon's (#172).
+pub const USER_CODEX_HOME: &str = "TIMON_USER_CODEX_HOME";
+
+/// The `CODEX_HOME` of the Codex runs timon starts, under its state directory.
+pub fn codex_home(state: &Path) -> PathBuf {
+    state.join("codex")
+}
+
+/// The person's own Codex home: `TIMON_USER_CODEX_HOME`, then `CODEX_HOME`, then
+/// `.codex` under `home`.
+pub fn user_codex_home(home: Option<&Path>) -> Option<PathBuf> {
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    var(USER_CODEX_HOME)
+        .or_else(|| var("CODEX_HOME"))
+        .or_else(|| home.map(|h| h.join(".codex")))
+}
+
 /// One of the directories timon writes to, for the hint on a write it is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Root {

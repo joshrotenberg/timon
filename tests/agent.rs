@@ -46,7 +46,9 @@ impl Sandbox {
             .env("HOME", self.root())
             .env("TIMON_CLAUDE_BIN", fixtures.join("fake-claude"))
             .env("TIMON_CODEX_BIN", fixtures.join("fake-codex"))
-            .env("FAKE_LOG_DIR", self.logs());
+            .env("FAKE_LOG_DIR", self.logs())
+            .env_remove("CODEX_HOME")
+            .env_remove("TIMON_USER_CODEX_HOME");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -686,6 +688,30 @@ fn codex_runs_get_their_own_codex_home_with_only_the_login() {
     assert!(!home.join("AGENTS.md").exists(), "{home:?}");
     assert_eq!(
         std::fs::read_to_string(home.join("auth.json")).unwrap(),
+        "{\"token\":\"t\"}"
+    );
+}
+
+#[test]
+fn a_timon_inside_a_codex_run_keeps_the_login() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    s.write(user.join("auth.json"), "{\"token\":\"t\"}");
+    let ours = s.root().join("timon/state/codex");
+    let (user, ours_str) = (user.to_str().unwrap(), ours.to_str().unwrap());
+    let run = "return agent.run{ provider = 'codex', prompt = 'x' }";
+    s.json(run, &[("CODEX_HOME", user)]);
+    assert_eq!(s.call("codex", 0)["user_codex_home"], user);
+    // What a timon started in that run sees, then the same without the variable.
+    s.json(
+        run,
+        &[("CODEX_HOME", ours_str), ("TIMON_USER_CODEX_HOME", user)],
+    );
+    assert_eq!(s.call("codex", 1)["user_codex_home"], user);
+    s.json(run, &[("CODEX_HOME", ours_str)]);
+    assert_eq!(s.call("codex", 2)["codex_home"], ours_str);
+    assert_eq!(
+        std::fs::read_to_string(ours.join("auth.json")).unwrap(),
         "{\"token\":\"t\"}"
     );
 }
