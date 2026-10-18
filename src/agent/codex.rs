@@ -62,6 +62,8 @@ pub(super) async fn run(
 
     let home = match &request.state {
         Some(state) => crate::dirs::codex_home(state),
+        // No state directory, so no run record to resume from: a home that goes with the
+        // run, and the session in it, is enough.
         None => scratch.path().join("codex-home"),
     };
     let user = crate::dirs::user_codex_home(std::env::home_dir().as_deref());
@@ -156,6 +158,10 @@ pub(super) async fn run(
             command.execute_json_cancellable(&client, never).await
         }
     };
+    // Codex may have refreshed the token while it ran.
+    if let Err(e) = login_only(&home, user.as_deref()) {
+        eprintln!("timon: the codex login was not synced back: {e}");
+    }
     let collect = |events: &mut Vec<Json>, all: &mut dyn Iterator<Item = JsonLineEvent>| {
         if request.events {
             for e in all {
@@ -234,28 +240,65 @@ fn login_only(home: &Path, user: Option<&Path>) -> std::io::Result<()> {
     if same_dir(user, home) {
         return Ok(());
     }
-    let auth = user.join("auth.json");
-    let link = home.join("auth.json");
-    if std::fs::read_link(&link).is_ok_and(|to| to == auth) {
+    sync_auth(&user.join("auth.json"), &home.join("auth.json"))
+}
+
+/// Links timon's `auth.json` to the user's, so a token Codex refreshes in place is the user's
+/// too. When Codex replaced the link with a file of its own, a newer one is copied back to the
+/// user's first: a refreshed token is never dropped. With no login of the user's, a file of
+/// timon's stays, and a link goes.
+#[cfg(unix)]
+fn sync_auth(user: &Path, ours: &Path) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    match std::fs::symlink_metadata(ours) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if user.exists() && std::fs::read_link(ours)? == user {
+                return Ok(());
+            }
+            std::fs::remove_file(ours)?;
+        }
+        Ok(_) => {
+            if !user.exists() {
+                return Ok(());
+            }
+            if modified(ours) > modified(user) && std::fs::read(ours)? != std::fs::read(user)? {
+                std::fs::copy(ours, user)?;
+            }
+            std::fs::remove_file(ours)?;
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if !user.exists() {
         return Ok(());
     }
-    match std::fs::remove_file(&link) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    if !auth.exists() {
-        return Ok(());
-    }
-    // A link, so a token Codex refreshes is the user's too.
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(&auth, &link);
-    #[cfg(not(unix))]
-    let linked = std::fs::copy(&auth, &link).map(|_| ());
-    match linked {
+    match std::os::unix::fs::symlink(user, ours) {
         // A concurrent run linked it first.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
         other => other,
     }
+}
+
+/// Keeps timon's copy of `auth.json` in step with the user's: copied in when it is missing or
+/// the user's is newer, copied back when Codex refreshed it.
+#[cfg(not(unix))]
+fn sync_auth(user: &Path, ours: &Path) -> std::io::Result<()> {
+    let Some(theirs) = modified(user) else {
+        return Ok(());
+    };
+    let mine = modified(ours);
+    if mine.is_some() && std::fs::read(user)? == std::fs::read(ours)? {
+        return Ok(());
+    }
+    match mine {
+        Some(mine) if mine > theirs => std::fs::copy(ours, user),
+        _ => std::fs::copy(user, ours),
+    }
+    .map(|_| ())
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
