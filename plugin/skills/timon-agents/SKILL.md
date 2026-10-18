@@ -169,6 +169,12 @@ is cut at 2,000 characters.
 `full` needs `limits = { allow_full = true }` in `init.lua`. `tools` replaces Claude's list;
 `tools = {}` allows none. `ephemeral = true` leaves no session behind to resume or list.
 
+A run uses the person's login and nothing else of their setup. Claude runs in safe mode: no
+CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands or agents. Codex runs with
+`CODEX_HOME` set to `codex/` in timon's state directory, which holds only a link to the
+person's `auth.json`: no global AGENTS.md, config, skills or plugins. A project AGENTS.md in
+`cwd` still reaches Codex. Put what a run needs in `prompt` or `system`.
+
 ## Named agents
 
 ```lua

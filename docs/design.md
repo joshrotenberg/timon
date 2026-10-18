@@ -438,6 +438,19 @@ local r = agent.run{
 | `write` | `acceptEdits` with edit tools | `--sandbox workspace-write` |
 | `full` | `bypassPermissions` | `--sandbox danger-full-access` |
 
+A run gets the person's login and nothing else of their setup, so it behaves the same on every
+machine:
+
+- Claude runs with `--safe-mode`, an empty `--strict-mcp-config` and slash commands off: no
+  CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands, agents or output styles.
+  Sessions stay in Claude's own archive.
+- Codex runs with `--ignore-user-config`, plugins off, and `CODEX_HOME` set to `codex/` in the
+  state directory. That directory holds a link to the person's `auth.json` (from their
+  `CODEX_HOME`, default `~/.codex`) and what Codex writes itself, so the global AGENTS.md,
+  config, skills and rules stay out (#172). Codex keeps its sessions there, where every run and
+  `resume` look; the session archive under `~/.codex` does not list them. A project AGENTS.md in
+  the run's working directory is still read.
+
 The result is a run record. It never raises for an outcome:
 
 ```lua
@@ -825,7 +838,8 @@ rusqlite with FTS5 for text search.
 ├── runs/<id>/               request.json, result.json per agent run
 ├── scripts/index.jsonl      one line per script run
 ├── scripts/<id>/            request.json, result.json, runs.jsonl per script run
-└── worktrees/<id>/          worktrees for `worktree = true` runs
+├── worktrees/<id>/          worktrees for `worktree = true` runs
+└── codex/                   CODEX_HOME for Codex runs: a link to auth.json, and their sessions
 ~/.cache/timon/              $XDG_CACHE_HOME/timon
 ├── index.db                 the session index; safe to delete, rebuilt on the next search
 └── summaries/               one JSON file per summarized session

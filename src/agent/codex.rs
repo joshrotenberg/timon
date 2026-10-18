@@ -60,8 +60,15 @@ pub(super) async fn run(
             .map_err(|e| io("write the schema", e))?;
     }
 
+    let home = match &request.state {
+        Some(state) => state.join("codex"),
+        None => scratch.path().join("codex-home"),
+    };
+    login_only(&home).map_err(|e| io("prepare CODEX_HOME", e))?;
+
     let mut builder = Codex::builder()
         .env("TIMON_CHILD", "1")
+        .env("CODEX_HOME", home.display().to_string())
         // Linux only: the kernel stops the provider if timon dies. Elsewhere the run record
         // names the process, and the next timon command stops it.
         .die_with_parent(true)
@@ -207,6 +214,43 @@ pub(super) async fn run(
         session: result.thread_id.clone().or(result.session_id.clone()),
         usage,
     })
+}
+
+/// Makes `home` a `CODEX_HOME` that holds the user's login and nothing else they wrote: no
+/// `AGENTS.md`, config, skills or plugins. `--ignore-user-config` leaves out the config but
+/// not the instructions. Codex keeps its sessions here too, so every run, a resume included,
+/// uses the same directory.
+fn login_only(home: &Path) -> std::io::Result<()> {
+    crate::layers::create_private_dir(home)?;
+    let Some(user) = std::env::var_os("CODEX_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".codex")))
+    else {
+        return Ok(());
+    };
+    let auth = user.join("auth.json");
+    let link = home.join("auth.json");
+    if std::fs::read_link(&link).is_ok_and(|to| to == auth) {
+        return Ok(());
+    }
+    match std::fs::remove_file(&link) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    if !auth.exists() {
+        return Ok(());
+    }
+    // A link, so a token Codex refreshes is the user's too.
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&auth, &link);
+    #[cfg(not(unix))]
+    let linked = std::fs::copy(&auth, &link).map(|_| ());
+    match linked {
+        // A concurrent run linked it first.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
 }
 
 fn turn_failed(event: &JsonLineEvent) -> Error {

@@ -576,6 +576,7 @@ async fn run_with(
     let hold = budget.admit(claude, request.budget.usd).await?;
     let id = agent::new_id();
     let state = lua.named_registry_value::<Option<String>>(STATE_DIR)?;
+    request.state = state.clone().map(PathBuf::from);
     if claude && let Some(usd) = hold.usd() {
         request.budget.usd = Some(usd);
     }

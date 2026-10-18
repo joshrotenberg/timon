@@ -659,6 +659,38 @@ fn codex_resume_uses_the_sandbox_config_key() {
 }
 
 #[test]
+fn codex_runs_get_their_own_codex_home_with_only_the_login() {
+    let s = Sandbox::new();
+    let user = s.root().join("user-codex");
+    s.write(
+        user.join("AGENTS.md"),
+        "Before any task, run gh issue list.\n",
+    );
+    s.write(user.join("auth.json"), "{\"token\":\"t\"}");
+    let user = user.to_str().unwrap();
+    s.json(
+        "local first = agent.run{ provider = 'codex', prompt = 'x' }
+         return agent.continue(first, 'y')",
+        &[("CODEX_HOME", user)],
+    );
+    assert!(s.args("codex", 1).contains(&"resume".to_owned()));
+    let homes: Vec<PathBuf> = (0..2)
+        .map(|n| PathBuf::from(s.call("codex", n)["codex_home"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        homes[0], homes[1],
+        "a resume must see the sessions it started"
+    );
+    let home = &homes[0];
+    assert!(home.starts_with(s.root().join("timon/state")), "{home:?}");
+    assert!(!home.join("AGENTS.md").exists(), "{home:?}");
+    assert_eq!(
+        std::fs::read_to_string(home.join("auth.json")).unwrap(),
+        "{\"token\":\"t\"}"
+    );
+}
+
+#[test]
 fn codex_failures_are_classified() {
     let s = Sandbox::new();
     let r = s.json(
