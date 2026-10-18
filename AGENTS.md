@@ -2,6 +2,8 @@
 
 `CLAUDE.md` is a symlink to this file.
 
+timon is paused since 2026-10-17. Read `docs/handoff.md` before starting work here.
+
 timon is a task runner in one self-contained Rust binary: tasks and scripts in Lua 5.4 and
 Fennel over a toolbox, with agent and session APIs built in. Everything is a task; timon's own
 commands are built-in tasks. `docs/design.md` is canonical for direction; `README.md` is canonical for what exists.
