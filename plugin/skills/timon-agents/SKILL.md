@@ -173,7 +173,9 @@ A run uses the person's login and nothing else of their setup. Claude runs in sa
 CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands or agents. Codex runs with
 `CODEX_HOME` set to `codex/` in timon's state directory, which holds only a link to the
 person's `auth.json`: no global AGENTS.md, config, skills or plugins. A project AGENTS.md in
-`cwd` still reaches Codex. Put what a run needs in `prompt` or `system`.
+`cwd` still reaches Codex. Put what a run needs in `prompt` or `system`. A Codex login kept in
+the OS keyring is keyed to the Codex home and does not carry over: use a file-based login
+(`auth.json`) for timon's Codex runs.
 
 ## Named agents
 

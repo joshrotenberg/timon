@@ -445,13 +445,22 @@ machine:
   CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands, agents or output styles.
   Sessions stay in Claude's own archive.
 - Codex runs with `--ignore-user-config`, plugins off, and `CODEX_HOME` set to `codex/` in the
-  state directory. That directory holds a link to the person's `auth.json` (from their
-  `CODEX_HOME`, default `~/.codex`) and what Codex writes itself, so the global AGENTS.md,
-  config, skills and rules stay out (#172). Codex keeps its sessions there, where every run and
-  `resume` look, and `sessions` reads them as an extra Codex archive. A session timon started
-  before this (#172) is in the person's own Codex home: resuming it raises `session_not_found`
-  with a hint to run `codex resume ID` directly. A project AGENTS.md in the run's working
-  directory is still read.
+  state directory. That directory holds the person's `auth.json` and what Codex writes itself,
+  so the global AGENTS.md, config, skills and rules stay out (#172). The login comes from
+  `TIMON_USER_CODEX_HOME`, then `CODEX_HOME`, then `~/.codex`; every Codex run gets
+  `TIMON_USER_CODEX_HOME`, so a timon started inside one finds the person's home, not timon's.
+  On unix `auth.json` is a link; elsewhere it is a copy kept in step. A newer file of timon's,
+  a token Codex refreshed, is copied back to the person's, never dropped. A login kept in the
+  OS keyring is keyed to the Codex home, so it does not carry over: timon's Codex runs need a
+  file-based login.
+- Codex keeps its sessions in that directory, where every run and `resume` look, and `sessions`
+  reads them as an extra Codex archive. A session timon started before this (#172) is in the
+  person's own Codex home: resuming it raises `session_not_found` with a hint to run
+  `codex resume ID` directly. Without a state directory, a run's Codex home is temporary, so its
+  session cannot be resumed.
+- A project AGENTS.md in a Codex run's working directory is still read.
+
+A run can not yet opt into the person's own instructions, a global CLAUDE.md or AGENTS.md.
 
 The result is a run record. It never raises for an outcome:
 
@@ -819,7 +828,7 @@ return {
 timon resolves its directories as in Storage: config `$XDG_CONFIG_HOME/timon`, state
 `$XDG_STATE_HOME/timon`, cache `$XDG_CACHE_HOME/timon`, or `config`, `state` and `cache` under
 `TIMON_HOME`. It only reads config. It writes state (the trust store, run records, script runs,
-worktrees) and cache (the session index, summaries), so a host sandbox that allows writes only
+worktrees, the Codex home of its Codex runs) and cache (the session index, summaries), so a host sandbox that allows writes only
 to the project must allow those two. For Codex's `workspace-write`, add their absolute paths to
 `sandbox_workspace_write.writable_roots` in `~/.codex/config.toml`; otherwise set `TIMON_HOME`
 or the XDG variables to a writable directory.

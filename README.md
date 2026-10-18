@@ -58,7 +58,8 @@ review the hooks first.
 
 In a sandbox that allows writes only to the project, such as Codex's `workspace-write`, timon
 needs write access to its state directory (`~/.local/state/timon`: the trust store, run records,
-script runs and worktrees) and its cache (`~/.cache/timon`: the session index and summaries).
+script runs, worktrees and the Codex home of its Codex runs) and its cache (`~/.cache/timon`:
+the session index and summaries).
 Add them to Codex's writable roots in `~/.codex/config.toml`, with absolute paths:
 
 ```toml
